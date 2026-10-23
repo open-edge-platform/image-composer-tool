@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -355,6 +356,7 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 	// one form for the URL, the cache lookups and the integrity metadata alike.
 	metadataHref = strings.TrimLeft(metadataHref, "/")
 	fullURL := strings.TrimRight(baseURL, "/") + "/" + metadataHref
+	metadataID := rpmMetadataID(baseURL, metadataHref)
 	log.Infof("Fetching and parsing repository metadata from %s", redactURLForLog(fullURL))
 
 	// Keep metadata cache under persistent cache-dir so rebuilds can run offline.
@@ -397,88 +399,47 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 		}
 	}
 
-	// A stale/missing parsed cache may still have raw metadata cached from an
-	// earlier run (saved below via saveOriginalXML): reparse that offline instead
-	// of forcing a network fetch, so a parsed-cache version bump alone does not
-	// break an otherwise warm offline rebuild. Only fetch over the network when no
-	// usable raw metadata is cached.
-	var compressedData []byte
-	var err error
-	migratingLegacyRaw := false
-	fromCache := false
-	if xmlCacheDir != "" {
-		raw, rawErr := findLatestCachedRawMetadata(xmlCacheDir, metadataHref, fullURL)
-		if rawErr != nil && os.IsNotExist(rawErr) && staleMetadataURLMatches {
-			// Nothing under the current (fullURL-keyed) name, but a binary built
-			// before that key existed may have cached it under the legacy
-			// baseURL-only name. Trust it only because staleMetadataURLMatches
-			// already confirmed this fullURL is what was actually fetched.
-			if legacyRaw, legacyErr := findLatestCachedRawMetadata(xmlCacheDir, metadataHref, baseURL); legacyErr == nil {
-				raw, rawErr = legacyRaw, nil
-				migratingLegacyRaw = true
-			}
-		}
-		if rawErr == nil {
-			if verifyErr := verifyRPMPrimaryBytes(raw, primary); verifyErr != nil {
-				log.Warnf("Cached raw RPM metadata for %s failed verification (%v); fetching over the network",
-					redactURLForLog(fullURL), verifyErr)
-			} else {
-				log.Infof("Reparsing cached raw RPM metadata for %s (parsed cache stale or missing)", redactURLForLog(fullURL))
-				compressedData = raw
-				fromCache = true
-			}
-		} else if !os.IsNotExist(rawErr) {
-			log.Warnf("Failed to check for cached raw RPM metadata: %v", rawErr)
-		}
+	compressedData, cachePath, loadedFromCache, err := loadOrFetchRPMRawMetadata(
+		xmlCacheDir,
+		baseURL,
+		metadataHref,
+		metadataID,
+		primary,
+		fullURL,
+		staleMetadataURLMatches,
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	// A cache-sourced file that fails to decompress/parse (e.g. truncated by an
-	// interrupted earlier write) must not abort an otherwise-online build: treat
-	// it as a cache miss and fall through to a real fetch below, rather than
-	// trusting it as authoritative just because it was found.
-	var infos []ospackage.PackageInfo
-	var rawXML []byte
-	if fromCache {
-		infos, rawXML, err = decodeAndParsePrimaryXML(compressedData, metadataHref, baseURL)
-		if err != nil {
-			log.Warnf("Cached raw RPM metadata for %s failed to parse (%v); treating it as a cache miss and "+
-				"fetching over the network", fullURL, err)
-			compressedData, fromCache, migratingLegacyRaw = nil, false, false
+	infos, xmlData, err := decodeAndParsePrimaryXML(compressedData, metadataHref, baseURL)
+	if err != nil && loadedFromCache {
+		log.Warnf("Cached RPM metadata %s is invalid: %v", cachePath, err)
+		decodeErr := err
+		// A damaged payload does not mean every cached copy is. Without a checksum
+		// or size to catch it earlier, an older timestamped copy may still be intact,
+		// so use it before going to the network.
+		var copyPath string
+		var copyErr error
+		infos, xmlData, copyPath, copyErr = decodeTimestampedRawMetadata(xmlCacheDir, baseURL, metadataHref, metadataID, primary, fullURL, staleMetadataURLMatches, cachePath)
+		if copyErr == nil {
+			cachePath, err = copyPath, nil
+		} else {
+			log.Warnf("No other usable cached copy of the RPM metadata; refreshing from repository")
+			compressedData, cachePath, loadedFromCache, err = fetchRPMRawMetadata(xmlCacheDir, baseURL, metadataHref, metadataID, primary, fullURL, cachePath, decodeErr)
+			if err != nil {
+				return nil, err
+			}
+			infos, xmlData, err = decodeAndParsePrimaryXML(compressedData, metadataHref, baseURL)
 		}
 	}
-
-	if !fromCache {
-		client := network.NewSecureHTTPClient()
-		compressedData, err = fetchURLWithRetry(runctx.Context(), client, fullURL, "repository metadata")
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch compressed metadata: %w", err)
-		}
-		if err := verifyRPMPrimaryBytes(compressedData, primary); err != nil {
-			return nil, fmt.Errorf("verify downloaded RPM primary metadata for repository %s: %w", redactURLForLog(baseURL), err)
-		}
-
-		// Save the original compressed file
-		if xmlCacheDir != "" {
-			metadataID := rpmMetadataID(baseURL, metadataHref)
-			if saveErr := saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary, compressedData); saveErr != nil {
-				log.Warnf("Failed to save RPM primary metadata cache for %s; offline cache incomplete: %v", redactURLForLog(baseURL), saveErr)
-			}
-			saveOriginalXML(xmlCacheDir, metadataHref, fullURL, compressedData)
-		}
-
-		infos, rawXML, err = decodeAndParsePrimaryXML(compressedData, metadataHref, baseURL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse fetched repository metadata: %w", err)
-		}
-	} else if migratingLegacyRaw && xmlCacheDir != "" {
-		// Migrate the legacy-keyed raw file to the current key so future lookups
-		// no longer need the legacy fallback.
-		saveOriginalXML(xmlCacheDir, metadataHref, fullURL, compressedData)
+	if err != nil {
+		return nil, err
 	}
 
 	// Save the uncompressed XML file
 	if xmlCacheDir != "" {
-		saveUncompressedXML(xmlCacheDir, metadataHref, fullURL, rawXML)
+		saveUncompressedXML(xmlCacheDir, metadataHref, fullURL, xmlData)
 
 		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
 		if saveErr := saveRPMParsedMetadataCache(parsedCacheFile, fullURL, infos); saveErr != nil {
@@ -486,7 +447,186 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 		}
 	}
 
+	if loadedFromCache {
+		log.Debugf("Parsed RPM metadata from cache %s", cachePath)
+	}
+
 	return filterRPMPackages(infos, packageFilter), nil
+}
+
+func loadOrFetchRPMRawMetadata(
+	xmlCacheDir, baseURL, metadataHref, metadataID string,
+	primary rpmPrimaryReference,
+	fullURL string,
+	allowLegacyRaw bool,
+) ([]byte, string, bool, error) {
+	log := logger.Logger()
+	cachePath := ""
+	var cacheErr error
+
+	if xmlCacheDir != "" {
+		var compressedData []byte
+		compressedData, cachePath, cacheErr = loadRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary)
+		if cacheErr == nil {
+			log.Infof("Using cached RPM primary metadata for %s", redactURLForLog(fullURL))
+			return compressedData, cachePath, true, nil
+		}
+		if !os.IsNotExist(cacheErr) {
+			log.Warnf("Failed to load cached RPM primary metadata %s: %v", cachePath, cacheErr)
+		}
+
+		legacyData, legacyPath, legacyErr := loadTimestampedRawMetadata(xmlCacheDir, baseURL, metadataHref, metadataID, primary, fullURL, allowLegacyRaw)
+		if legacyErr == nil {
+			return legacyData, legacyPath, true, nil
+		}
+		if !os.IsNotExist(legacyErr) {
+			// Name the unusable file and the reason in the error a failed refresh
+			// returns.
+			cachePath, cacheErr = legacyPath, legacyErr
+		}
+	}
+
+	compressedData, cachePath, _, err := fetchRPMRawMetadata(xmlCacheDir, baseURL, metadataHref, metadataID, primary, fullURL, cachePath, cacheErr)
+	return compressedData, cachePath, false, err
+}
+
+// decodeTimestampedRawMetadata returns the packages parsed from the newest
+// timestamped raw copy that both verifies against primary and decodes, passing
+// over each copy that fails to decode for the next older one. skipPath names a
+// copy already known to be unusable. The error is that of the last attempt; one
+// satisfying os.IsNotExist means no copy was left to try.
+func decodeTimestampedRawMetadata(
+	xmlCacheDir, baseURL, metadataHref, metadataID string,
+	primary rpmPrimaryReference,
+	fullURL string,
+	allowLegacyRaw bool,
+	skipPath string,
+) ([]ospackage.PackageInfo, []byte, string, error) {
+	log := logger.Logger()
+	skip := []string{skipPath}
+	for {
+		data, path, err := loadTimestampedRawMetadata(xmlCacheDir, baseURL, metadataHref, metadataID, primary, fullURL, allowLegacyRaw, skip...)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		infos, xmlData, err := decodeAndParsePrimaryXML(data, metadataHref, baseURL)
+		if err == nil {
+			return infos, xmlData, path, nil
+		}
+		log.Warnf("Cached RPM metadata %s is invalid: %v", path, err)
+		skip = append(skip, path)
+	}
+}
+
+// loadTimestampedRawMetadata returns the newest timestamped raw copy of the
+// primary metadata saved for fullURL that verifies against primary, or, when
+// allowLegacyRaw is set and none was saved for fullURL, for baseURL alone as
+// earlier builds keyed it. A copy that fails verification is passed over for the
+// next older one. The copy used is recorded in the raw metadata cache. skipPath
+// names copies already known to be unusable. If no copy is usable, the returned
+// path and error are those of the newest copy, so the caller can name it; an
+// error satisfying os.IsNotExist means there was nothing to use.
+func loadTimestampedRawMetadata(
+	xmlCacheDir, baseURL, metadataHref, metadataID string,
+	primary rpmPrimaryReference,
+	fullURL string,
+	allowLegacyRaw bool,
+	skipPaths ...string,
+) ([]byte, string, error) {
+	log := logger.Logger()
+
+	paths, err := listCachedRawMetadata(xmlCacheDir, metadataHref, fullURL, skipPaths...)
+	migrateLegacyRaw := false
+	if err != nil && os.IsNotExist(err) && allowLegacyRaw {
+		paths, err = listCachedRawMetadata(xmlCacheDir, metadataHref, baseURL, skipPaths...)
+		migrateLegacyRaw = err == nil
+	}
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Warnf("Failed to check legacy RPM primary metadata cache for %s: %v", redactURLForLog(fullURL), err)
+		}
+		return nil, "", err
+	}
+
+	var data []byte
+	path := ""
+	var firstErr error
+	for _, candidate := range paths {
+		candidateData, candidateErr := readVerifiedRawMetadata(candidate, primary)
+		if candidateErr == nil {
+			data, path = candidateData, candidate
+			break
+		}
+		log.Warnf("Failed to use legacy RPM primary metadata %s for %s: %v", candidate, redactURLForLog(fullURL), candidateErr)
+		if firstErr == nil {
+			path, firstErr = candidate, candidateErr
+		}
+	}
+	if data == nil {
+		return nil, path, firstErr
+	}
+
+	if saveErr := saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary, data); saveErr != nil {
+		log.Warnf("Failed to migrate legacy RPM primary metadata cache for %s: %v", redactURLForLog(fullURL), saveErr)
+	}
+	if migrateLegacyRaw {
+		saveOriginalXML(xmlCacheDir, metadataHref, fullURL, data)
+	}
+	log.Infof("Using legacy cached RPM primary metadata for %s", redactURLForLog(fullURL))
+	return data, path, nil
+}
+
+// readVerifiedRawMetadata reads a timestamped raw copy and verifies it against
+// primary.
+func readVerifiedRawMetadata(path string, primary rpmPrimaryReference) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if verifyErr := verifyRPMPrimaryBytes(data, primary); verifyErr != nil {
+		return nil, fmt.Errorf("verify legacy RPM primary metadata: %w", verifyErr)
+	}
+	return data, nil
+}
+
+func fetchRPMRawMetadata(
+	xmlCacheDir, baseURL, metadataHref, metadataID string,
+	primary rpmPrimaryReference,
+	fullURL, cachePath string,
+	cacheErr error,
+) ([]byte, string, bool, error) {
+	log := logger.Logger()
+	client := network.NewSecureHTTPClient()
+	compressedData, err := fetchURLWithRetry(runctx.Context(), client, fullURL, "repository metadata")
+	if err != nil {
+		if cacheErr != nil && !os.IsNotExist(cacheErr) {
+			artifact := "an invalid cache artifact"
+			if cachePath != "" {
+				artifact += " " + cachePath
+			}
+			return nil, cachePath, false, fmt.Errorf(
+				"failed to fetch compressed metadata for repository %s after %s: %w (cache error: %v)",
+				redactURLForLog(baseURL),
+				artifact,
+				err,
+				cacheErr,
+			)
+		}
+		return nil, cachePath, false, fmt.Errorf("failed to fetch compressed metadata for repository %s: %w", redactURLForLog(baseURL), err)
+	}
+	if err := verifyRPMPrimaryBytes(compressedData, primary); err != nil {
+		return nil, cachePath, false, fmt.Errorf("verify downloaded RPM primary metadata for repository %s: %w", redactURLForLog(baseURL), err)
+	}
+
+	if xmlCacheDir != "" {
+		if saveErr := saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary, compressedData); saveErr != nil {
+			log.Warnf("Failed to save RPM primary metadata cache for %s; offline cache incomplete: %v", redactURLForLog(baseURL), saveErr)
+		}
+		saveOriginalXML(xmlCacheDir, metadataHref, fullURL, compressedData)
+		cachePath = rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref, primary, compressedData)
+	}
+
+	return compressedData, cachePath, false, nil
 }
 
 // decodeAndParsePrimaryXML decompresses compressedData (gzip or zstd, chosen by
@@ -1147,8 +1287,22 @@ func rpmMetadataDirName(baseURL string) string {
 // metadata saved by a binary built before the fullURL key existed, but only
 // once independently confirmed safe (see the staleMetadataURLMatches check in
 // ParseRepositoryMetadata) — that legacy key alone can't tell two hrefs of the
-// same repo apart. Returns an os.ErrNotExist-wrapped error when none is cached.
-func findLatestCachedRawMetadata(xmlCacheDir, metadataHref, hashKey string) ([]byte, error) {
+// same repo apart. skipPath names a file already known to be unusable, so the
+// newest of the others is returned instead. Returns an os.ErrNotExist-wrapped
+// error when none is cached.
+func findLatestCachedRawMetadata(xmlCacheDir, metadataHref, hashKey, skipPath string) ([]byte, string, error) {
+	paths, err := listCachedRawMetadata(xmlCacheDir, metadataHref, hashKey, skipPath)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(paths[0])
+	return data, paths[0], err
+}
+
+// listCachedRawMetadata returns the paths findLatestCachedRawMetadata selects
+// from, newest first, without skipPaths. It returns an os.ErrNotExist-wrapped
+// error when there are none.
+func listCachedRawMetadata(xmlCacheDir, metadataHref, hashKey string, skipPaths ...string) ([]string, error) {
 	urlHash := sha256.Sum256([]byte(hashKey))
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
 	ext := filepath.Ext(metadataHref)
@@ -1158,13 +1312,19 @@ func findLatestCachedRawMetadata(xmlCacheDir, metadataHref, hashKey string) ([]b
 	if err != nil {
 		return nil, err
 	}
-	if len(matches) == 0 {
-		return nil, os.ErrNotExist
-	}
 	// Filenames embed a lexically-sortable timestamp ("2006-01-02_15-04-05"), so
 	// the last sorted match is the most recently cached raw file.
 	sort.Strings(matches)
-	return os.ReadFile(matches[len(matches)-1])
+	paths := make([]string, 0, len(matches))
+	for i := len(matches) - 1; i >= 0; i-- {
+		if !slices.Contains(skipPaths, matches[i]) {
+			paths = append(paths, matches[i])
+		}
+	}
+	if len(paths) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return paths, nil
 }
 
 // pruneOldCachedFiles removes every previously cached file matching
