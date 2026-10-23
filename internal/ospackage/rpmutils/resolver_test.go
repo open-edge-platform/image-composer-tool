@@ -2550,11 +2550,12 @@ func TestDownloadPackagesCompleteVerifiesCachedRPMsOnCacheHit(t *testing.T) {
 		UserRepo = origUserRepo
 	})
 
+	publicKey := newTestGPGPublicKey(t, "repo")
 	var rpmRequests int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/key.asc":
-			_, _ = w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nnot a key\n-----END PGP PUBLIC KEY BLOCK-----\n"))
+			_, _ = w.Write([]byte(publicKey))
 		case strings.HasSuffix(r.URL.Path, ".rpm"):
 			atomic.AddInt32(&rpmRequests, 1)
 			w.WriteHeader(http.StatusInternalServerError)

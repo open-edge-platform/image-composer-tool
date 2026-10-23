@@ -2,8 +2,10 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,8 +16,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/filelock"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
@@ -531,9 +535,9 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 			}
 		} else {
 			// For URLs, prefer persistent cache and download only on cache miss
-			keyData, err = getCachedOrDownloadGPGKey(repo.PKey)
+			keyData, err = GetCachedOrDownloadGPGKey(repo.PKey)
 			if err != nil {
-				return fmt.Errorf("failed to download GPG key from %s: %w", repo.PKey, err)
+				return fmt.Errorf("failed to download GPG key from %s: %w", RedactKeyURL(repo.PKey), err)
 			}
 		}
 
@@ -571,8 +575,8 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 	return nil
 }
 
-// gpgKeyCacheFilePath returns the persistent cache path for a repository GPG key URL.
-func gpgKeyCacheFilePath(keyURL string) (string, error) {
+// gpgKeyCacheDir returns the persistent GPG key cache directory, creating it if needed.
+func gpgKeyCacheDir() (string, error) {
 	cacheDir, err := CacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve cache directory: %w", err)
@@ -582,6 +586,15 @@ func gpgKeyCacheFilePath(keyURL string) (string, error) {
 	if err := os.MkdirAll(gpgCacheDir, 0755); err != nil {
 		return "", fmt.Errorf("create GPG cache directory %s: %w", gpgCacheDir, err)
 	}
+	return gpgCacheDir, nil
+}
+
+// GPGKeyCacheFilePath returns the persistent cache path for a repository GPG key URL.
+func GPGKeyCacheFilePath(keyURL string) (string, error) {
+	gpgCacheDir, err := gpgKeyCacheDir()
+	if err != nil {
+		return "", err
+	}
 
 	hash := sha256.Sum256([]byte(keyURL))
 	hashHex := hex.EncodeToString(hash[:])
@@ -589,11 +602,44 @@ func gpgKeyCacheFilePath(keyURL string) (string, error) {
 	return filepath.Join(gpgCacheDir, fmt.Sprintf("%s.gpg", hashHex)), nil
 }
 
-// getCachedOrDownloadGPGKey loads a key from persistent cache, downloading only on cache miss.
-func getCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
+// LockGPGKeyCache takes an exclusive advisory lock on the whole GPG key cache,
+// shared by every build using the same cache directory, and returns the function
+// that releases it. Whoever writes a cache entry holds it, and a writer that
+// decides what to write from the other entries also holds it while it reads
+// them. Waiting for the lock ends when ctx is done, with an error wrapping
+// ctx.Err(). The lock is not reentrant: a caller holding it must use StoreGPGKey
+// and ReadCachedGPGKey, which do not take it, and not GetCachedOrDownloadGPGKey.
+func LockGPGKeyCache(ctx context.Context) (unlock func(), err error) {
+	gpgCacheDir, err := gpgKeyCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	unlock, err = filelock.Lock(ctx, filepath.Join(gpgCacheDir, ".lock"))
+	if err != nil {
+		return nil, fmt.Errorf("GPG key cache: %w", err)
+	}
+	return unlock, nil
+}
+
+// ReadCachedGPGKey returns the valid key cached for keyURL, without downloading
+// and without taking the cache lock.
+func ReadCachedGPGKey(keyURL string) ([]byte, bool) {
+	cacheFilePath, err := GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		return nil, false
+	}
+	data, err := os.ReadFile(cacheFilePath)
+	if err != nil || validateGPGKeyData(data) != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// GetCachedOrDownloadGPGKey loads a key from persistent cache, downloading only on cache miss.
+func GetCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
 	log := logger.Logger()
 
-	cacheFilePath, err := gpgKeyCacheFilePath(keyURL)
+	cacheFilePath, err := GPGKeyCacheFilePath(keyURL)
 	if err == nil {
 		if cachedData, readErr := os.ReadFile(cacheFilePath); readErr == nil {
 			// A cache entry written before this validation existed (or
@@ -603,19 +649,18 @@ func getCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
 			// every later build. Treat an invalid entry as a cache miss.
 			if validateErr := validateGPGKeyData(cachedData); validateErr != nil {
 				log.Warnf("Cached GPG key for %s at %s failed validation, re-downloading: %v",
-					keyURL, cacheFilePath, validateErr)
+					RedactKeyURL(keyURL), cacheFilePath, validateErr)
 			} else {
-				log.Infof("Using cached GPG key (%d bytes) for %s", len(cachedData), keyURL)
+				log.Infof("Using cached GPG key (%d bytes) for %s", len(cachedData), RedactKeyURL(keyURL))
 				return cachedData, nil
 			}
 		}
 	} else {
 		// Cache path failures should not block build; fall back to direct download.
-		log.Warnf("Failed to initialize GPG key cache for %s: %v", keyURL, err)
+		log.Warnf("Failed to initialize GPG key cache for %s: %v", RedactKeyURL(keyURL), err)
 	}
 
-	log.Infof("Downloading GPG key from %s", keyURL)
-	keyData, err := downloadGPGKey(keyURL)
+	keyData, err := DownloadGPGKey(keyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -624,13 +669,171 @@ func getCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
 		return keyData, nil
 	}
 
-	if writeErr := os.WriteFile(cacheFilePath, keyData, 0644); writeErr != nil {
-		log.Warnf("Failed to persist GPG key cache for %s at %s: %v", keyURL, cacheFilePath, writeErr)
+	return persistDownloadedGPGKey(runctx.Context(), keyURL, cacheFilePath, keyData)
+}
+
+// persistDownloadedGPGKey caches a key downloaded on a cache miss and returns the
+// key to use. Another build may have cached a key for keyURL while this one was
+// downloading, possibly a newer one published after a rotation; it is kept and
+// returned rather than overwritten. A build cancelled while waiting for the cache
+// lock gets the cancellation back; any other failure to cache leaves the
+// downloaded key in use.
+func persistDownloadedGPGKey(ctx context.Context, keyURL, cacheFilePath string, keyData []byte) ([]byte, error) {
+	log := logger.Logger()
+
+	unlock, err := LockGPGKeyCache(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		log.Warnf("Not caching the GPG key for %s: %v", RedactKeyURL(keyURL), err)
+		return keyData, nil
+	}
+	defer unlock()
+
+	if current, ok := ReadCachedGPGKey(keyURL); ok {
+		return current, nil
+	}
+	if writeErr := writeGPGKeyCache(cacheFilePath, keyData); writeErr != nil {
+		log.Warnf("Failed to persist GPG key cache for %s at %s: %v", RedactKeyURL(keyURL), cacheFilePath, writeErr)
 		return keyData, nil
 	}
 
 	log.Infof("Cached GPG key at %s", cacheFilePath)
 	return keyData, nil
+}
+
+// DownloadGPGKey downloads and validates a key without reading or writing the
+// persistent cache. Callers that find a cached key no longer verifies what the
+// repository signs, for example after the repository rotated its signing key at
+// the same URL, use it to fetch the current key and publish it with
+// StoreGPGKey once it has proved to work.
+func DownloadGPGKey(keyURL string) ([]byte, error) {
+	log := logger.Logger()
+
+	log.Infof("Downloading GPG key from %s", RedactKeyURL(keyURL))
+	return downloadGPGKey(keyURL)
+}
+
+// StoreGPGKey replaces the persistent cache entry for keyURL. The previous entry
+// is left untouched if the new one cannot be written completely. The caller must
+// hold the lock taken by LockGPGKeyCache.
+func StoreGPGKey(keyURL string, keyData []byte) error {
+	cacheFilePath, err := GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		return err
+	}
+	if err := writeGPGKeyCache(cacheFilePath, keyData); err != nil {
+		return err
+	}
+	logger.Logger().Infof("Cached GPG key at %s", cacheFilePath)
+	return nil
+}
+
+// writeGPGKeyCache writes keyData to path through a temporary file in the same
+// directory, renamed over path once it is complete and synced, so an interrupted
+// or failed write cannot truncate an existing cache entry.
+func writeGPGKeyCache(path string, keyData []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return fmt.Errorf("create temporary GPG key cache file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(keyData); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary GPG key cache file: %w", err)
+	}
+	if err := tmp.Chmod(0644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temporary GPG key cache file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temporary GPG key cache file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary GPG key cache file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("publish GPG key cache file: %w", err)
+	}
+	committed = true
+
+	// Sync the directory so the rename itself survives a crash.
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open GPG key cache directory to sync rename: %w", err)
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync GPG key cache directory: %w", err)
+	}
+	return nil
+}
+
+// redactedKeyURL stands in for a key URL that cannot be redacted reliably.
+const redactedKeyURL = "<redacted-url>"
+
+// RedactKeyURL drops the userinfo, query string and fragment from a key URL, which
+// can carry credentials or tokens, before it is logged or put in an error. An
+// input that does not parse, or is an opaque URL such as "https:user:pw@host/key"
+// whose userinfo cannot be told apart from its path, is replaced as a whole.
+func RedactKeyURL(keyURL string) string {
+	u, err := url.Parse(keyURL)
+	if err != nil || u.Opaque != "" {
+		return redactedKeyURL
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	return u.String()
+}
+
+// urlInText matches a URL in free text: any scheme followed by "//", or the
+// opaque form of a web URL ("https:user:pw@host/key"). A bare "host:port" in a
+// connection error is not matched.
+var urlInText = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>]+|(?i:https?|ftps?):[^\s"'<>]+`)
+
+// quotedTarget matches the complete quoted target that net/http and net/url put
+// in a diagnostic: `Location header "..."` and `parse "..."`. The target can be a
+// relative reference with no scheme, and strconv quoting escapes any quote inside
+// it, so the whole quoted string is matched rather than a URL-shaped prefix.
+var quotedTarget = regexp.MustCompile(`((?:Location header|parse) )"(?:[^"\\]|\\.)*"`)
+
+// redactURLsInText replaces the quoted target of a diagnostic whole, then redacts
+// every remaining URL-like token in text with RedactKeyURL.
+func redactURLsInText(text string) string {
+	text = quotedTarget.ReplaceAllString(text, `${1}"`+redactedKeyURL+`"`)
+	return urlInText.ReplaceAllStringFunc(text, RedactKeyURL)
+}
+
+// redactedError carries a message with its URLs redacted, and the original error
+// for errors.Is and errors.As.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// redactedCause returns err without the request URL that a *url.Error repeats and
+// with every other URL in its text redacted: the cause can quote a URL of its own,
+// for example the Location of a redirect it could not parse.
+func redactedCause(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return &redactedError{msg: redactURLsInText(err.Error()), err: err}
 }
 
 // downloadGPGKey downloads a GPG key from the given URL
@@ -641,17 +844,17 @@ func downloadGPGKey(keyURL string) ([]byte, error) {
 
 	resp, err := client.Get(keyURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch GPG key from %s: %w", keyURL, err)
+		return nil, fmt.Errorf("failed to fetch GPG key from %s: %w", RedactKeyURL(keyURL), redactedCause(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to download GPG key from %s: HTTP status %d", keyURL, resp.StatusCode)
+		return nil, fmt.Errorf("failed to download GPG key from %s: HTTP status %d", RedactKeyURL(keyURL), resp.StatusCode)
 	}
 
 	keyData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read GPG key data from %s: %w", keyURL, err)
+		return nil, fmt.Errorf("failed to read GPG key data from %s: %w", RedactKeyURL(keyURL), redactedCause(err))
 	}
 
 	// Reject anything that isn't an actual OpenPGP key here, before the
@@ -659,10 +862,10 @@ func downloadGPGKey(keyURL string) ([]byte, error) {
 	// response (truncated body, HTML error page) once cached would
 	// otherwise silently poison every later build using this key URL.
 	if err := validateGPGKeyData(keyData); err != nil {
-		return nil, fmt.Errorf("downloaded GPG key from %s is invalid: %w", keyURL, err)
+		return nil, fmt.Errorf("downloaded GPG key from %s is invalid: %w", RedactKeyURL(keyURL), err)
 	}
 
-	log.Infof("Successfully downloaded GPG key (%d bytes) from %s", len(keyData), keyURL)
+	log.Infof("Successfully downloaded GPG key (%d bytes) from %s", len(keyData), RedactKeyURL(keyURL))
 
 	return keyData, nil
 }

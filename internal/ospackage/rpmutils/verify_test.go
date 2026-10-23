@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 func TestResult(t *testing.T) {
@@ -769,5 +771,42 @@ func TestVerifyAllWorkerCount(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCreateTempGPGKeyFiles_ReusesCachedKeyOffline reproduces the offline
+// rebuild failure where the RPM signature verification path fetched GPG keys
+// from public URLs every time. Once the first online build has populated the
+// persistent GPG cache, a subsequent offline build must materialize the temp
+// key files purely from disk with zero HTTP requests.
+func TestCreateTempGPGKeyFiles_ReusesCachedKeyOffline(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	keyURL := "https://offline.invalid.example/RPM-GPG-KEY"
+	want := []byte(testGPGPublicKey)
+
+	cachePath, err := config.GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
+	}
+	if err := os.WriteFile(cachePath, want, 0644); err != nil {
+		t.Fatalf("failed to seed cached key: %v", err)
+	}
+
+	paths, cleanup, err := createTempGPGKeyFiles([]string{keyURL})
+	if err != nil {
+		t.Fatalf("createTempGPGKeyFiles should hit the offline cache, got error: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	if len(paths) != 1 {
+		t.Fatalf("expected 1 temp key file, got %d", len(paths))
+	}
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("failed to read materialized temp key: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("temp key content mismatch: got %q want %q", string(got), string(want))
 	}
 }

@@ -53,9 +53,10 @@ func TestRepoRawKeysMergesPKeyAndPKeys(t *testing.T) {
 // verification -- even though [trusted=yes] appears somewhere in the overall
 // configuration.
 func TestValidateOriginsScopesTrustedYesPerRepo(t *testing.T) {
+	setRPMMetadataTestCache(t) // isolates the persistent GPG key cache
 	keyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("dummy-gpg-key-content"))
+		_, _ = w.Write([]byte(testGPGPublicKey))
 	}))
 	defer keyServer.Close()
 
@@ -95,6 +96,7 @@ func TestValidateOriginsScopesTrustedYesPerRepo(t *testing.T) {
 // source repo can't be determined is never silently exempted -- it must
 // still be checked against the union of all configured keys.
 func TestValidateOriginsUnknownOriginFallsBackToUnionCheck(t *testing.T) {
+	setRPMMetadataTestCache(t) // isolates the persistent GPG key cache
 	destDir := t.TempDir()
 	unknownRPM := "unknown-origin-1.0-1.x86_64.rpm"
 	if err := os.WriteFile(filepath.Join(destDir, unknownRPM), []byte("rpm bytes"), 0644); err != nil {

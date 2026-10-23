@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -362,6 +363,18 @@ func convertBinaryGPGToAscii(binaryData []byte) ([]byte, error) {
 } // createTempGPGKeyFiles downloads multiple GPG keys from URLs and creates temporary files.
 // Returns the file paths and a cleanup function. The caller is responsible for calling cleanup.
 func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func(), err error) {
+	return createTempGPGKeyFilesUsing(gpgKeyURLs, config.GetCachedOrDownloadGPGKey)
+}
+
+// isPlaceholderGPGKeyURL reports whether a configured key value names no key to
+// fetch: it is empty, an unfilled template placeholder, or the trusted opt-out.
+func isPlaceholderGPGKeyURL(gpgKeyURL string) bool {
+	return gpgKeyURL == "<PUBLIC_KEY_URL>" || gpgKeyURL == "" || gpgKeyURL == "[trusted=yes]"
+}
+
+// createTempGPGKeyFilesUsing is createTempGPGKeyFiles with the key source
+// chosen by the caller, so verification can retry with freshly downloaded keys.
+func createTempGPGKeyFilesUsing(gpgKeyURLs []string, fetchKey func(string) ([]byte, error)) (keyPaths []string, cleanup func(), err error) {
 	log := logger.Logger()
 
 	if len(gpgKeyURLs) == 0 {
@@ -371,12 +384,10 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 	var tempFiles []*os.File
 	var filePaths []string
 
-	client := network.NewSecureHTTPClient()
-
 	// Download and create temp files for each GPG key
 	for i, gpgKeyURL := range gpgKeyURLs {
 
-		if gpgKeyURL == "<PUBLIC_KEY_URL>" || gpgKeyURL == "" || gpgKeyURL == "[trusted=yes]" {
+		if isPlaceholderGPGKeyURL(gpgKeyURL) {
 			log.Warnf("GPG key URL %d is empty or marked as trusted, skipping", i+1)
 			continue
 		}
@@ -384,30 +395,18 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 		// Check if the GPG key URL is a binary file (ends with .gpg or .bin)
 		isBinary := strings.HasSuffix(strings.ToLower(gpgKeyURL), ".gpg") || strings.HasSuffix(strings.ToLower(gpgKeyURL), ".bin")
 
-		resp, err := client.Get(gpgKeyURL)
+		keyBytes, err := fetchKey(gpgKeyURL)
 		if err != nil {
-			// Cleanup any files created so far
 			for _, f := range tempFiles {
 				f.Close()
 				os.Remove(f.Name())
 			}
-			return nil, nil, fmt.Errorf("fetch GPG key %s: %w", gpgKeyURL, err)
-		}
-
-		keyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			// Cleanup any files created so far
-			for _, f := range tempFiles {
-				f.Close()
-				os.Remove(f.Name())
-			}
-			return nil, nil, fmt.Errorf("read GPG key body from %s: %w", gpgKeyURL, err)
+			return nil, nil, fmt.Errorf("fetch GPG key %s: %w", config.RedactKeyURL(gpgKeyURL), err)
 		}
 
 		// If it's a binary GPG key, we need to handle it differently
 		if isBinary {
-			log.Infof("GPG key %s is binary format, checking if conversion is needed", gpgKeyURL)
+			log.Infof("GPG key %s is binary format, checking if conversion is needed", config.RedactKeyURL(gpgKeyURL))
 
 			// Check if the downloaded data is actually binary
 			if isBinaryGPGKey(keyBytes) {
@@ -424,7 +423,7 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 			}
 		}
 
-		log.Infof("fetched GPG key %d (%d bytes) from %s", i+1, len(keyBytes), gpgKeyURL)
+		log.Infof("fetched GPG key %d (%d bytes) from %s", i+1, len(keyBytes), config.RedactKeyURL(gpgKeyURL))
 
 		// Create temp file with unique pattern
 		tmp, err := os.CreateTemp("", fmt.Sprintf("rpm-gpg-%d-*.asc", i))
@@ -549,33 +548,341 @@ func validateUnionPaths(rpmPaths []string) error {
 		return nil
 	}
 
-	// Create temporary GPG key files
-	gpgKeyPaths, cleanup, err := createTempGPGKeyFiles(gpgKeyURLs)
-	if err != nil {
-		return fmt.Errorf("failed to create temp GPG key files: %w", err)
-	}
-	defer cleanup()
-
-	log.Infof("created %d temporary GPG key files for verification", len(gpgKeyPaths))
-
 	if len(rpmPaths) == 0 {
+		// Still resolve the keys, so an unreachable or invalid key is reported.
+		_, cleanup, err := createTempGPGKeyFiles(gpgKeyURLs)
+		if err != nil {
+			return fmt.Errorf("failed to create temp GPG key files: %w", err)
+		}
+		cleanup()
 		log.Warn("no RPMs found to verify")
 		return nil
 	}
 
-	start := time.Now()
-	results := VerifyAll(rpmPaths, gpgKeyPaths, 4)
-	log.Infof("RPM verification took %s", time.Since(start))
+	if err := verifyRPMsRefreshingKeys(rpmPaths, gpgKeyURLs); err != nil {
+		return err
+	}
+	log.Info("all RPMs verified successfully")
 
-	// Check results
+	return nil
+}
+
+// verifyAllRPMs is the signature check, replaceable in tests; a test that replaces
+// it must not run in parallel.
+var verifyAllRPMs = VerifyAll
+
+// keyRefresh records how one set of RPMs was verified against its key URLs: the
+// cached keys it used, the RPMs that passed with them, and the keys downloaded to
+// verify the RPMs that did not. The downloaded keys are published to the cache by
+// publishKeyRefreshes, once every set has been verified.
+type keyRefresh struct {
+	keyURLs   []string
+	cached    map[string][]byte
+	refreshed map[string][]byte
+	failed    []string
+	passed    []string
+}
+
+// verifyRPMsRefreshingKeys verifies rpmPaths against the keys at keyURLs and
+// publishes any refreshed key to the cache.
+func verifyRPMsRefreshingKeys(rpmPaths, keyURLs []string) error {
+	refresh, err := verifyRPMsWithKeyRefresh(rpmPaths, keyURLs)
+	if err != nil {
+		return err
+	}
+	return publishKeyRefreshes([]*keyRefresh{refresh})
+}
+
+// verifyRPMsWithKeyRefresh verifies rpmPaths against the keys at keyURLs,
+// reading keys from the persistent cache so a cache hit needs no network. If a
+// cached key no longer verifies what the repository signs, which happens when
+// the repository rotates its signing key at the same URL, the keys are
+// downloaded again and the RPMs that failed are verified once more.
+//
+// Only the RPMs that failed are retried: the others verified with the cached
+// keys, so a key that rotated at another URL cannot make them fail. The retry
+// uses each freshly downloaded key and, for a key that cannot be downloaded, the
+// cached key the first attempt used, so one unreachable URL does not stop the
+// others from being refreshed. If nothing was refreshed, for example offline,
+// the original verification error is returned.
+//
+// The cache is not written here. The returned keyRefresh holds the refreshed
+// keys for publishKeyRefreshes, which can see every set of RPMs that shares them.
+func verifyRPMsWithKeyRefresh(rpmPaths, keyURLs []string) (*keyRefresh, error) {
+	log := logger.Logger()
+
+	cached, err := snapshotCachedKeys(keyURLs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the cached GPG keys: %w", err)
+	}
+	results, setupErr := verifyRPMsWithKeys(rpmPaths, keyURLs, func(keyURL string) ([]byte, error) {
+		if keyData, ok := cached[keyURL]; ok {
+			return keyData, nil
+		}
+		// Not cached: download outside the cache lock, which is not reentrant.
+		keyData, err := config.GetCachedOrDownloadGPGKey(keyURL)
+		if err == nil {
+			cached[keyURL] = keyData
+		}
+		return keyData, err
+	})
+	if setupErr != nil {
+		return nil, fmt.Errorf("failed to create temp GPG key files: %w", setupErr)
+	}
+	failed, passed := splitVerifyResults(results)
+	refresh := &keyRefresh{keyURLs: keyURLs, cached: cached, failed: failed, passed: passed}
+	if len(failed) == 0 {
+		return refresh, nil
+	}
+	verifyErr := verifyFailure(results)
+
+	log.Warnf("RPM verification failed with cached GPG keys (%v); refreshing the keys and retrying once", verifyErr)
+	candidate := make(map[string][]byte, len(cached))
+	refresh.refreshed = make(map[string][]byte)
+	for _, keyURL := range keyURLs {
+		if _, fetched := candidate[keyURL]; fetched || isPlaceholderGPGKeyURL(keyURL) {
+			continue
+		}
+		keyData, err := config.DownloadGPGKey(keyURL)
+		if err != nil {
+			log.Warnf("Could not refresh GPG key %s, keeping the cached key: %v", config.RedactKeyURL(keyURL), err)
+			candidate[keyURL] = cached[keyURL]
+			continue
+		}
+		candidate[keyURL] = keyData
+		if !bytes.Equal(keyData, cached[keyURL]) {
+			refresh.refreshed[keyURL] = keyData
+		}
+	}
+	if len(refresh.refreshed) == 0 {
+		return nil, verifyErr
+	}
+
+	retryResults, setupErr := verifyRPMsWithKeys(failed, keyURLs, keysFrom(candidate))
+	if setupErr != nil {
+		log.Warnf("Could not use the refreshed GPG keys: %v", setupErr)
+		return nil, verifyErr
+	}
+	if retryErr := verifyFailure(retryResults); retryErr != nil {
+		return nil, retryErr
+	}
+	return refresh, nil
+}
+
+// afterCachedKeyRead runs after each key is read by snapshotCachedKeys. Tests use
+// it to interleave another build's publication.
+var afterCachedKeyRead = func(keyURL string) {}
+
+// snapshotCachedKeys returns the valid cached key of every key URL that has one.
+// The keys are read under the cache lock, so they are the state of the cache at
+// one moment: publishKeyRefreshes replaces several keys under the same lock, and
+// reading them one by one without it could pair a key from before a publication
+// with one from after, a set that omits the key an RPM is signed with. A build
+// cancelled while waiting for the lock gets the cancellation back; if the lock
+// fails for another reason the keys are read without it.
+func snapshotCachedKeys(keyURLs []string) (map[string][]byte, error) {
+	log := logger.Logger()
+
+	ctx := runctx.Context()
+	if unlock, err := config.LockGPGKeyCache(ctx); err == nil {
+		defer unlock()
+	} else if ctx.Err() != nil {
+		return nil, err
+	} else {
+		log.Warnf("Reading the cached GPG keys without the cache lock: %v", err)
+	}
+
+	snapshot := make(map[string][]byte, len(keyURLs))
+	for _, keyURL := range keyURLs {
+		if isPlaceholderGPGKeyURL(keyURL) {
+			continue
+		}
+		if keyData, ok := config.ReadCachedGPGKey(keyURL); ok {
+			log.Infof("Using cached GPG key (%d bytes) for %s", len(keyData), config.RedactKeyURL(keyURL))
+			snapshot[keyURL] = keyData
+		}
+		afterCachedKeyRead(keyURL)
+	}
+	return snapshot, nil
+}
+
+// publishKeyRefreshes writes the refreshed keys of refreshes to the cache, each
+// only if it is both useful and safe to replace the cached key: it verifies at
+// least one of the RPMs that failed with the cached keys, and every RPM that
+// passed with the cached keys, in any of the sets that use the same key URL,
+// still verifies with it in place of the cached key. Otherwise the cached key
+// stays, since it may still verify RPMs that are already cached.
+//
+// Keys are checked in URL order against the cache as earlier publications have
+// left it, so the result does not depend on the order the sets were verified in,
+// and two keys that each look safe alone cannot together remove a key an RPM
+// still needs. Publishing stops at the first write error: the write may have
+// replaced the entry before failing, which leaves the state of the cache unknown.
+//
+// Other builds share the cache, and the keys a set was verified with may have been
+// replaced since. The check and the writes therefore run under the cache lock,
+// against the keys cached at that moment, so that two builds that each look safe
+// alone cannot together remove a key an RPM still needs.
+//
+// A build cancelled while waiting for the lock gets the cancellation back. If the
+// lock fails for another reason the keys are simply not cached.
+func publishKeyRefreshes(refreshes []*keyRefresh) error {
+	log := logger.Logger()
+
+	refreshedKeys := make(map[string][]byte)
+	for _, r := range refreshes {
+		for keyURL, keyData := range r.refreshed {
+			refreshedKeys[keyURL] = keyData
+		}
+	}
+	if len(refreshedKeys) == 0 {
+		return nil
+	}
+
+	ctx := runctx.Context()
+	unlock, err := config.LockGPGKeyCache(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		log.Warnf("Not caching the refreshed GPG keys: %v", err)
+		return nil
+	}
+	defer unlock()
+
+	working := currentCachedKeys(refreshes)
+	for _, keyURL := range slices.Sorted(maps.Keys(refreshedKeys)) {
+		keyData := refreshedKeys[keyURL]
+		if bytes.Equal(working[keyURL], keyData) {
+			continue
+		}
+		if !refreshedKeyIsSafeToCache(keyURL, keyData, working, refreshes) {
+			log.Infof("Keeping the cached GPG key for %s: the refreshed key is not needed or would stop verifying cached RPMs", config.RedactKeyURL(keyURL))
+			continue
+		}
+		if err := config.StoreGPGKey(keyURL, keyData); err != nil {
+			log.Warnf("Failed to cache the refreshed GPG key %s, not caching the remaining refreshed keys: %v", config.RedactKeyURL(keyURL), err)
+			return nil
+		}
+		working[keyURL] = keyData
+	}
+	return nil
+}
+
+// currentCachedKeys returns the key now cached for every key URL of refreshes. A
+// URL with no valid cache entry is absent from the result: the key its set was
+// verified with may only have been held in memory, because writing it to the
+// cache failed, so it is not a key a later build can still use. The caller holds
+// the cache lock.
+func currentCachedKeys(refreshes []*keyRefresh) map[string][]byte {
+	working := make(map[string][]byte)
+	read := make(map[string]bool)
+	for _, r := range refreshes {
+		for keyURL := range r.cached {
+			if read[keyURL] {
+				continue
+			}
+			read[keyURL] = true
+			if current, ok := config.ReadCachedGPGKey(keyURL); ok {
+				working[keyURL] = current
+			}
+		}
+	}
+	return working
+}
+
+// refreshedKeyIsSafeToCache reports whether keyData may replace the key cached for
+// keyURL, given the keys now cached: it verifies at least one RPM that failed with
+// the cached key, and the RPMs that passed in every set using keyURL still verify
+// when it takes the cached key's place.
+func refreshedKeyIsSafeToCache(keyURL string, keyData []byte, working map[string][]byte, refreshes []*keyRefresh) bool {
+	useful := false
+	for _, r := range refreshes {
+		if _, ok := r.refreshed[keyURL]; !ok {
+			continue
+		}
+		alone, _ := verifyRPMsWithKeys(r.failed, []string{keyURL}, keysFrom(map[string][]byte{keyURL: keyData}))
+		if _, verifiedByKey := splitVerifyResults(alone); len(verifiedByKey) > 0 {
+			useful = true
+			break
+		}
+	}
+	if !useful {
+		return false
+	}
+
+	replaced := make(map[string][]byte, len(working))
+	for k, v := range working {
+		replaced[k] = v
+	}
+	replaced[keyURL] = keyData
+	for _, r := range refreshes {
+		if len(r.passed) == 0 || !slices.Contains(r.keyURLs, keyURL) {
+			continue
+		}
+		results, setupErr := verifyRPMsWithKeys(r.passed, cachedKeyURLs(r.keyURLs, replaced), keysFrom(replaced))
+		if setupErr != nil || verifyFailure(results) != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// cachedKeyURLs returns the key URLs that have a key in keys.
+func cachedKeyURLs(keyURLs []string, keys map[string][]byte) []string {
+	var cached []string
+	for _, keyURL := range keyURLs {
+		if _, ok := keys[keyURL]; ok {
+			cached = append(cached, keyURL)
+		}
+	}
+	return cached
+}
+
+func keysFrom(keys map[string][]byte) func(string) ([]byte, error) {
+	return func(keyURL string) ([]byte, error) { return keys[keyURL], nil }
+}
+
+// splitVerifyResults returns the paths that failed verification and those that
+// passed.
+func splitVerifyResults(results []Result) (failed, passed []string) {
+	for _, r := range results {
+		if r.OK {
+			passed = append(passed, r.Path)
+		} else {
+			failed = append(failed, r.Path)
+		}
+	}
+	return failed, passed
+}
+
+// verifyFailure describes the first RPM in results that failed verification, or
+// returns nil if all passed.
+func verifyFailure(results []Result) error {
 	for _, r := range results {
 		if !r.OK {
 			return fmt.Errorf("RPM %s failed verification: %v", r.Path, r.Error)
 		}
 	}
-	log.Info("all RPMs verified successfully")
-
 	return nil
+}
+
+// verifyRPMsWithKeys returns the verification result of every RPM, or a setup
+// error when the keys cannot be obtained.
+func verifyRPMsWithKeys(rpmPaths, keyURLs []string, fetchKey func(string) ([]byte, error)) (results []Result, setupErr error) {
+	log := logger.Logger()
+
+	gpgKeyPaths, cleanup, err := createTempGPGKeyFilesUsing(keyURLs, fetchKey)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	log.Infof("created %d temporary GPG key files for verification", len(gpgKeyPaths))
+
+	start := time.Now()
+	results = verifyAllRPMs(rpmPaths, gpgKeyPaths, 4)
+	log.Infof("RPM verification took %s", time.Since(start))
+	return results, nil
 }
 
 // ValidateOrigins is like Validate, but scopes verification — and any
@@ -672,9 +979,14 @@ func groupRPMsByOrigin(
 // verifyGroups verifies each non-empty group's RPMs against that group's keys,
 // skipping any group whose repository opted out via "[trusted=yes]". It returns
 // the first verification failure encountered, or nil if every group passes.
+// Groups are verified in index order, and keys refreshed along the way are
+// published together once every group has passed, so repositories that share a
+// key URL cannot replace each other's cached key.
 func verifyGroups(groups map[int]*verifyGroup) error {
 	log := logger.Logger()
-	for _, g := range groups {
+	var refreshes []*keyRefresh
+	for _, idx := range slices.Sorted(maps.Keys(groups)) {
+		g := groups[idx]
 		if len(g.files) == 0 {
 			continue
 		}
@@ -687,21 +999,14 @@ func verifyGroups(groups map[int]*verifyGroup) error {
 			return fmt.Errorf("no GPG keys configured for verification")
 		}
 
-		gpgKeyPaths, cleanup, err := createTempGPGKeyFiles(g.keys)
+		refresh, err := verifyRPMsWithKeyRefresh(g.files, g.keys)
 		if err != nil {
-			return fmt.Errorf("failed to create temp GPG key files: %w", err)
+			return err
 		}
-
-		start := time.Now()
-		results := VerifyAll(g.files, gpgKeyPaths, 4)
-		log.Infof("RPM verification took %s", time.Since(start))
-		cleanup()
-
-		for _, r := range results {
-			if !r.OK {
-				return fmt.Errorf("RPM %s failed verification: %v", r.Path, r.Error)
-			}
-		}
+		refreshes = append(refreshes, refresh)
+	}
+	if err := publishKeyRefreshes(refreshes); err != nil {
+		return err
 	}
 	log.Info("all RPMs verified successfully")
 	return nil

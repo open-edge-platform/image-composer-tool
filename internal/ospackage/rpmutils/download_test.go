@@ -14,7 +14,16 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
 )
 
+// useTempGPGKeyCache gives the test its own GPG key cache: Validate persists the
+// keys it fetches under the configured cache directory, so a shared one could
+// satisfy a request an earlier test made to a reused httptest address.
+func useTempGPGKeyCache(t *testing.T) {
+	t.Helper()
+	rpmutils.UseTempCacheDir(t)
+}
+
 func TestValidateSupportsMultipleRepoGPGKeys(t *testing.T) {
+	useTempGPGKeyCache(t)
 	originalRepoCfg := rpmutils.RepoCfg
 	originalUserRepo := rpmutils.UserRepo
 	defer func() {
@@ -25,7 +34,7 @@ func TestValidateSupportsMultipleRepoGPGKeys(t *testing.T) {
 	hits := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits[r.URL.Path]++
-		_, _ = w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----\n"))
+		_, _ = w.Write([]byte(rpmutils.TestGPGPublicKey))
 	}))
 	defer server.Close()
 
@@ -451,7 +460,7 @@ func TestValidate(t *testing.T) {
 			setupRepo: func() *httptest.Server {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "text/plain")
-					_, _ = w.Write([]byte("dummy-gpg-key-content"))
+					_, _ = w.Write([]byte(rpmutils.TestGPGPublicKey))
 				}))
 				return server
 			},
@@ -478,7 +487,7 @@ func TestValidate(t *testing.T) {
 			setupRepo: func() *httptest.Server {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "text/plain")
-					_, _ = w.Write([]byte("dummy-gpg-key-content"))
+					_, _ = w.Write([]byte(rpmutils.TestGPGPublicKey))
 				}))
 				return server
 			},
@@ -492,6 +501,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			useTempGPGKeyCache(t)
 			server := tc.setupRepo()
 			if server != nil {
 				defer server.Close()
@@ -559,6 +569,7 @@ func TestValidate(t *testing.T) {
 // downloaded into destDir must not be exempted from signature verification merely
 // because its filename matches an RPM found in a configured local repository path.
 func TestValidateDoesNotSkipCollidingLocalRepoFilenames(t *testing.T) {
+	useTempGPGKeyCache(t)
 	originalRepoCfg := rpmutils.RepoCfg
 	originalUserRepo := rpmutils.UserRepo
 	defer func() {
@@ -568,7 +579,7 @@ func TestValidateDoesNotSkipCollidingLocalRepoFilenames(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("dummy-gpg-key-content"))
+		_, _ = w.Write([]byte(rpmutils.TestGPGPublicKey))
 	}))
 	defer server.Close()
 
@@ -1397,6 +1408,7 @@ mQENBFciSdkBCADNxMYPr1/...test...key...content...
 	// Test indirectly through the GPG key handling in Validate function
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			useTempGPGKeyCache(t)
 			// Create a test server that serves the test data
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.expectBinary {

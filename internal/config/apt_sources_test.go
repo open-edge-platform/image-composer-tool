@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Test helper to resolve relative paths
@@ -383,6 +386,39 @@ func TestDownloadAndAddGPGKeys_PlaceholderURL(t *testing.T) {
 	// Verify no additional files were added (no GPG key downloaded)
 	if len(template.SystemConfig.AdditionalFiles) != 0 {
 		t.Errorf("Expected no additional files for placeholder URL, got %d", len(template.SystemConfig.AdditionalFiles))
+	}
+}
+
+// TestDownloadAndAddGPGKeys_RedactsKeyURLInError verifies a failed key download
+// does not put the credentials or query string of the key URL in the error.
+func TestDownloadAndAddGPGKeys_RedactsKeyURLInError(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	keyURL := strings.Replace(server.URL, "http://", "http://alice:secret-password@", 1) + "/key.gpg?token=secret-token"
+	template := &ImageTemplate{
+		Target:       TargetInfo{OS: "ubuntu"},
+		SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{}},
+	}
+
+	err := template.downloadAndAddGPGKeys([]PackageRepository{
+		{ID: "private-repo", Codename: "noble", URL: "https://example.com/repo", PKey: keyURL},
+	})
+	if err == nil {
+		t.Fatal("downloadAndAddGPGKeys should fail when the key download fails")
+	}
+	for _, secret := range []string{"alice", "secret-password", "secret-token"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error %q still contains %q", err.Error(), secret)
+		}
 	}
 }
 
@@ -937,14 +973,14 @@ func TestGPGKeyCacheFilePath_StableForSameURL(t *testing.T) {
 
 	keyURL := "https://example.com/keys/repo-key.gpg"
 
-	path1, err := gpgKeyCacheFilePath(keyURL)
+	path1, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
 	}
 
-	path2, err := gpgKeyCacheFilePath(keyURL)
+	path2, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed on second call: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed on second call: %v", err)
 	}
 
 	if path1 != path2 {
@@ -957,7 +993,7 @@ func TestGPGKeyCacheFilePath_StableForSameURL(t *testing.T) {
 }
 
 // testGPGPublicKey is a throwaway OpenPGP public key used only to exercise
-// code paths that now validate GPG key data (getCachedOrDownloadGPGKey,
+// code paths that now validate GPG key data (GetCachedOrDownloadGPGKey,
 // downloadGPGKey): plain placeholder bytes no longer pass validation, so
 // tests that need "some valid-looking key data" use this instead.
 const testGPGPublicKey = `-----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -990,22 +1026,135 @@ func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
 	keyURL := "https://invalid.example.test/non-routable-key.gpg"
 	want := []byte(testGPGPublicKey)
 
-	cachePath, err := gpgKeyCacheFilePath(keyURL)
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
 	}
 
 	if err := os.WriteFile(cachePath, want, 0644); err != nil {
 		t.Fatalf("failed to seed cached key: %v", err)
 	}
 
-	got, err := getCachedOrDownloadGPGKey(keyURL)
+	got, err := GetCachedOrDownloadGPGKey(keyURL)
 	if err != nil {
-		t.Fatalf("getCachedOrDownloadGPGKey should use cache hit, got error: %v", err)
+		t.Fatalf("GetCachedOrDownloadGPGKey should use cache hit, got error: %v", err)
 	}
 
 	if string(got) != string(want) {
 		t.Errorf("cache hit returned wrong key data: got %q want %q", string(got), string(want))
+	}
+}
+
+// A key cached by another build while this one was downloading, for example a
+// newer key published after a rotation, must not be overwritten by the download.
+func TestPersistDownloadedGPGKey_KeepsKeyCachedMeanwhile(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	keyURL := "https://invalid.example.test/key.gpg"
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
+	}
+	cached := []byte(testGPGPublicKey)
+	if err := os.WriteFile(cachePath, cached, 0644); err != nil {
+		t.Fatalf("failed to seed cached key: %v", err)
+	}
+
+	got, err := persistDownloadedGPGKey(context.Background(), keyURL, cachePath, []byte("downloaded earlier"))
+	if err != nil {
+		t.Fatalf("persistDownloadedGPGKey() error = %v", err)
+	}
+	if string(got) != string(cached) {
+		t.Errorf("persistDownloadedGPGKey() = %q, want the key cached meanwhile", got)
+	}
+	onDisk, err := os.ReadFile(cachePath)
+	if err != nil || string(onDisk) != string(cached) {
+		t.Errorf("the cache entry was overwritten: %q, %v", onDisk, err)
+	}
+}
+
+func TestLockGPGKeyCache_IsExclusive(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	unlock, err := LockGPGKeyCache(context.Background())
+	if err != nil {
+		t.Fatalf("LockGPGKeyCache() error = %v", err)
+	}
+
+	acquired := make(chan struct{})
+	go func() {
+		second, err := LockGPGKeyCache(context.Background())
+		if err == nil {
+			second()
+		}
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("a second LockGPGKeyCache() returned while the lock was held")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("LockGPGKeyCache() did not return after the lock was released")
+	}
+}
+
+// A build cancelled while another holds the cache lock must stop waiting and
+// report the cancellation, and must not cache the key without the lock.
+func TestLockGPGKeyCache_StopsWaitingWhenCancelled(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	unlock, err := LockGPGKeyCache(context.Background())
+	if err != nil {
+		t.Fatalf("LockGPGKeyCache() error = %v", err)
+	}
+	defer unlock()
+
+	keyURL := "https://invalid.example.test/key.gpg"
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 2)
+	go func() {
+		_, err := LockGPGKeyCache(ctx)
+		done <- err
+	}()
+	go func() {
+		_, err := persistDownloadedGPGKey(ctx, keyURL, cachePath, []byte(testGPGPublicKey))
+		done <- err
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("error = %v, want one wrapping the cancellation", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("did not return after the context was cancelled")
+		}
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Errorf("the key was cached without the lock (err=%v)", err)
 	}
 }
 
@@ -1040,9 +1189,9 @@ func TestGetCachedOrDownloadGPGKey_InvalidCacheIsRefetched(t *testing.T) {
 
 	keyURL := server.URL + "/non-routable-key.gpg"
 
-	cachePath, err := gpgKeyCacheFilePath(keyURL)
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
 	}
 	if err := os.WriteFile(cachePath, []byte("<html>not a key</html>"), 0644); err != nil {
 		t.Fatalf("failed to seed cached key: %v", err)
@@ -1050,7 +1199,7 @@ func TestGetCachedOrDownloadGPGKey_InvalidCacheIsRefetched(t *testing.T) {
 
 	// The invalid cache entry must be rejected, forcing a real re-download
 	// rather than silently returning the bad cached bytes.
-	got, err := getCachedOrDownloadGPGKey(keyURL)
+	got, err := GetCachedOrDownloadGPGKey(keyURL)
 	if err != nil {
 		t.Fatalf("expected the invalid cache entry to be rejected and re-downloaded, got error: %v", err)
 	}
@@ -1215,5 +1364,131 @@ func TestGenerateAptSourcesAppliesAptPolicyForDebian(t *testing.T) {
 	}
 	if !sources || !vendorPin {
 		t.Errorf("Debian must get sources (%v) and a no-upgrade pin for the unlisted repository (%v)", sources, vendorPin)
+	}
+}
+
+func TestStoreGPGKey_ReplacesEntryAndLeavesNoTemporaryFiles(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() { Global().CacheDir = oldCacheDir })
+
+	keyURL := "https://example.test/keys/rotated.asc"
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("old key"), 0644); err != nil {
+		t.Fatalf("failed to seed cached key: %v", err)
+	}
+
+	if err := StoreGPGKey(keyURL, []byte("new key")); err != nil {
+		t.Fatalf("StoreGPGKey failed: %v", err)
+	}
+
+	if got, _ := os.ReadFile(cachePath); string(got) != "new key" {
+		t.Fatalf("cache entry = %q, want the new key", got)
+	}
+	if info, err := os.Stat(cachePath); err != nil || info.Mode().Perm() != 0644 {
+		t.Fatalf("cache entry mode = %v (err=%v), want 0644", info.Mode().Perm(), err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(cachePath))
+	if err != nil {
+		t.Fatalf("read cache dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("cache dir holds %d entries, want only the key", len(entries))
+	}
+}
+
+// A failed write must leave the previous entry intact: it is what an offline
+// build will use.
+func TestStoreGPGKey_FailedWriteKeepsPreviousEntry(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced for root")
+	}
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() { Global().CacheDir = oldCacheDir })
+
+	keyURL := "https://example.test/keys/rotated.asc"
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("old key"), 0644); err != nil {
+		t.Fatalf("failed to seed cached key: %v", err)
+	}
+	// A read-only directory refuses the temporary file, as a full disk would.
+	if err := os.Chmod(filepath.Dir(cachePath), 0555); err != nil {
+		t.Fatalf("chmod cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(cachePath), 0755) })
+
+	if err := StoreGPGKey(keyURL, []byte("new key")); err == nil {
+		t.Fatalf("StoreGPGKey should fail when the entry cannot be written")
+	}
+	if got, _ := os.ReadFile(cachePath); string(got) != "old key" {
+		t.Fatalf("cache entry = %q, want the previous key kept", got)
+	}
+}
+
+func TestRedactKeyURL(t *testing.T) {
+	tests := map[string]string{
+		"https://alice:secret@example.invalid/key.asc?token=abc#frag": "https://example.invalid/key.asc",
+		"https://example.invalid/key.asc":                             "https://example.invalid/key.asc",
+		"/etc/pki/rpm-gpg/RPM-GPG-KEY":                                "/etc/pki/rpm-gpg/RPM-GPG-KEY",
+		"%zz://alice:secret@example.invalid/key.asc":                  "<redacted-url>",
+		"https:///key.asc?token=abc":                                  "https:///key.asc",
+		"https://alice:secret@/key.asc?token=abc#frag":                "https:///key.asc",
+		"https:alice:secret@example.invalid/key.asc?token=abc":        "<redacted-url>",
+		"file:///etc/pki/rpm-gpg/RPM-GPG-KEY?token=abc":               "file:///etc/pki/rpm-gpg/RPM-GPG-KEY",
+		"/etc/pki/rpm-gpg/RPM-GPG-KEY?token=abc#frag":                 "/etc/pki/rpm-gpg/RPM-GPG-KEY",
+		"keys/RPM-GPG-KEY?":                                           "keys/RPM-GPG-KEY",
+	}
+	for in, want := range tests {
+		if got := RedactKeyURL(in); got != want {
+			t.Errorf("RedactKeyURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDownloadGPGKeyErrorsDoNotLeakCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	addr := server.Listener.Addr().String()
+	statusURL := "http://alice:secret@" + addr + "/key.asc?token=abc"
+	defer server.Close()
+
+	redirectTo := func(location string) string {
+		redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", location)
+			w.WriteHeader(http.StatusFound)
+		}))
+		t.Cleanup(redirectServer.Close)
+		return "http://alice:secret@" + redirectServer.Listener.Addr().String() + "/key.asc?token=abc"
+	}
+
+	for name, keyURL := range map[string]string{
+		"bad status":         statusURL,
+		"connection refused": "http://alice:secret@127.0.0.1:1/key.asc?token=abc",
+		"hostless":           "https:///key.asc?token=abc",
+		"opaque":             "https:alice:secret@example.invalid/key.asc?token=abc",
+		"malformed redirect": redirectTo("https://bob:password@mirror.invalid/%zz?token=secret"),
+		"relative redirect":  redirectTo("/mirror/%zz?token=secret"),
+		"scheme-relative":    redirectTo("//bob:password@mirror.invalid/%zz?token=secret"),
+		"escaped quote":      redirectTo(`https://bob:pa"ss@mirror.invalid/%zz?token=secret`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := DownloadGPGKey(keyURL)
+			if err == nil {
+				t.Fatalf("DownloadGPGKey() error = nil, want a failure")
+			}
+			for _, secret := range []string{"alice", "secret", "token=abc", "bob", "password", "ss@mirror", "token=secret"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("error %q still contains %q", err.Error(), secret)
+				}
+			}
+		})
 	}
 }
