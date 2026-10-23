@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
@@ -623,6 +625,15 @@ func pruneSupersededRawPayloads(xmlCacheDir, metadataHref, keepPath string) {
 	}
 }
 
+func rpmMetadataCacheDir(baseURL string) (string, error) {
+	cacheRoot, err := config.CacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving cache directory: %w", err)
+	}
+
+	return filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(baseURL)), nil
+}
+
 func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
 	log := logger.Logger()
 	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
@@ -1032,4 +1043,90 @@ func migrateLegacyRPMMetadataDir(baseURL, cacheDir string) {
 		log.Warnf("Failed to migrate legacy RPM metadata cache file for %s: %v", redactURLForLog(baseURL), copyErr)
 	}
 	_ = os.Remove(legacyDir) // only succeeds once empty
+}
+
+// generateRPMMetadataDir creates a dynamic directory name for RPM metadata storage
+// as <repoId>_<arch>_<hash>_rpm, where <hash> is the first 8 hex digits of the
+// SHA-256 of the repository URL with any trailing slashes removed.
+func generateRPMMetadataDir(baseURL string) string {
+	// A trailing slash must not select a different cache directory: the
+	// repomd.xml lookup strips it, so fetch and parse have to agree.
+	return rpmMetadataDirName(strings.TrimRight(baseURL, "/"))
+}
+
+// rpmMetadataDirName derives the directory name from baseURL exactly as given.
+func rpmMetadataDirName(baseURL string) string {
+	urlHash := sha256.Sum256([]byte(baseURL))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+
+	repoId := "rpm"
+	if u, err := url.Parse(baseURL); err == nil {
+		pathParts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		for _, part := range pathParts {
+			if part != "" && !strings.Contains(part, ".") {
+				repoId = part
+				break
+			}
+		}
+	}
+
+	arch := "x86_64"
+	if strings.Contains(baseURL, "aarch64") {
+		arch = "aarch64"
+	} else if strings.Contains(baseURL, "i386") {
+		arch = "i386"
+	} else if strings.Contains(baseURL, "armhf") {
+		arch = "armhf"
+	}
+
+	return fmt.Sprintf("%s_%s_%s_rpm", repoId, arch, urlHashStr)
+}
+
+// findLatestCachedRawMetadata locates the most recently saved raw (compressed)
+// primary XML matching metadataHref and hashKey, keyed the same way
+// saveOriginalXML names its files. The caller normally passes fullURL as
+// hashKey (matching saveOriginalXML, so a repomd href change can't match raw
+// content cached under a different path that happens to share the same
+// basename); it may also pass the legacy baseURL-only key to look up raw
+// metadata saved by a binary built before the fullURL key existed, but only
+// once independently confirmed safe (see the staleMetadataURLMatches check in
+// ParseRepositoryMetadata) -- that legacy key alone can't tell two hrefs of the
+// same repo apart. skipPath names a file already known to be unusable, so the
+// newest of the others is returned instead. Returns os.ErrNotExist itself when
+// none is cached.
+func findLatestCachedRawMetadata(xmlCacheDir, metadataHref, hashKey, skipPath string) ([]byte, string, error) {
+	paths, err := listCachedRawMetadata(xmlCacheDir, metadataHref, hashKey, skipPath)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(paths[0])
+	return data, paths[0], err
+}
+
+// listCachedRawMetadata returns the paths findLatestCachedRawMetadata selects
+// from, newest first, without skipPaths. It returns an os.ErrNotExist-wrapped
+// error when there are none.
+func listCachedRawMetadata(xmlCacheDir, metadataHref, hashKey string, skipPaths ...string) ([]string, error) {
+	urlHash := sha256.Sum256([]byte(hashKey))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	ext := filepath.Ext(metadataHref)
+	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), ext)
+
+	matches, err := filepath.Glob(filepath.Join(xmlCacheDir, fmt.Sprintf("%s_%s_*%s", baseFilename, urlHashStr, ext)))
+	if err != nil {
+		return nil, err
+	}
+	// Filenames embed a lexically-sortable timestamp ("2006-01-02_15-04-05"), so
+	// the last sorted match is the most recently cached raw file.
+	sort.Strings(matches)
+	paths := make([]string, 0, len(matches))
+	for i := len(matches) - 1; i >= 0; i-- {
+		if !slices.Contains(skipPaths, matches[i]) {
+			paths = append(paths, matches[i])
+		}
+	}
+	if len(paths) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return paths, nil
 }
