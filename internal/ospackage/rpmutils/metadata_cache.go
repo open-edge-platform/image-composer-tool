@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -29,6 +30,16 @@ import (
 type rpmPrimaryLocationCache struct {
 	PrimaryHref string              `json:"primary_href"`
 	Primary     rpmPrimaryReference `json:"primary"`
+}
+
+type rpmRawMetadataCache struct {
+	MetadataID string              `json:"metadata_id"`
+	Primary    rpmPrimaryReference `json:"primary"`
+	DataFile   string              `json:"data_file"`
+	// ContentDigest is the SHA-256 of the payload, recorded when repomd.xml
+	// publishes no checksum so that a later load can still detect a payload that
+	// changed without changing size.
+	ContentDigest string `json:"content_digest,omitempty"`
 }
 
 type rpmPrimaryReference struct {
@@ -54,6 +65,22 @@ func (ref rpmPrimaryReference) isPartialChecksum() bool {
 
 func (ref rpmPrimaryReference) isPartialOpenChecksum() bool {
 	return (ref.OpenChecksumType != "" && ref.OpenChecksum == "") || (ref.OpenChecksumType == "" && ref.OpenChecksum != "")
+}
+
+func (ref rpmPrimaryReference) matches(other rpmPrimaryReference) bool {
+	return ref.Href == other.Href &&
+		ref.Size == other.Size &&
+		ref.OpenSize == other.OpenSize &&
+		strings.EqualFold(ref.ChecksumType, other.ChecksumType) &&
+		strings.EqualFold(ref.Checksum, other.Checksum) &&
+		strings.EqualFold(ref.OpenChecksumType, other.OpenChecksumType) &&
+		strings.EqualFold(ref.OpenChecksum, other.OpenChecksum)
+}
+
+func rpmMetadataID(baseURL, metadataHref string) string {
+	metadataURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(metadataHref, "/")
+	sum := sha256.Sum256([]byte(metadataURL))
+	return hex.EncodeToString(sum[:])
 }
 
 func redactURLForLog(rawURL string) string {
@@ -293,6 +320,235 @@ func loadRPMPrimaryReferenceCache(cacheFile string) (rpmPrimaryReference, error)
 		return rpmPrimaryReference{}, fmt.Errorf("empty primary href in cache %s", cacheFile)
 	}
 	return rpmPrimaryReference{Href: cache.PrimaryHref}, nil
+}
+
+// rpmRawMetadataManifestPath is the manifest that names the current payload for
+// metadataHref. Payloads are named by rpmRawMetadataPayloadPath; the manifest
+// records which one is current.
+func rpmRawMetadataManifestPath(xmlCacheDir, metadataHref string) string {
+	hrefHash := sha256.Sum256([]byte(metadataHref))
+	return filepath.Join(xmlCacheDir, fmt.Sprintf("primary_%s.cache.json", hex.EncodeToString(hrefHash[:])[:16]))
+}
+
+func normalizeMetadataHref(metadataHref string) string {
+	if idx := strings.IndexAny(metadataHref, "?#"); idx != -1 {
+		return metadataHref[:idx]
+	}
+	return metadataHref
+}
+
+func extractMetadataExtension(metadataHref string) string {
+	basePath := normalizeMetadataHref(metadataHref)
+	ext := strings.ToLower(filepath.Ext(basePath))
+	if ext == "" {
+		ext = ".xml"
+	}
+	return ext
+}
+
+// contentDigest is the hex SHA-256 of data.
+func contentDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// rpmRawMetadataPayloadPath names a payload after its content identity, so two
+// revisions never share a file: the checksum repomd.xml publishes when there is
+// one, otherwise a digest of the payload itself.
+func rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref string, primary rpmPrimaryReference, data []byte) string {
+	identity := strings.ToUpper(primary.ChecksumType) + ":" + strings.ToLower(primary.Checksum)
+	if !primary.hasIntegrity() {
+		identity = "CONTENT:" + contentDigest(data)
+	}
+
+	hrefHash := sha256.Sum256([]byte(metadataHref))
+	checksumHash := sha256.Sum256([]byte(identity))
+	ext := extractMetadataExtension(metadataHref)
+	dataFile := fmt.Sprintf("primary_%s_%s%s", hex.EncodeToString(hrefHash[:])[:16], hex.EncodeToString(checksumHash[:])[:16], ext)
+	return filepath.Join(xmlCacheDir, dataFile)
+}
+
+// afterRawManifestRead runs between loading the manifest and opening the payload
+// it names. Tests use it to interleave a writer that replaces the manifest.
+var afterRawManifestRead = func() {}
+
+// loadRPMRawMetadataCache returns the cached primary payload for metadataHref.
+// If the payload the manifest named is gone by the time it is opened, a writer
+// has published a newer revision and pruned it, so the manifest is read once more
+// and the call answers for the revision that is current now.
+func loadRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, primary rpmPrimaryReference) ([]byte, string, error) {
+	data, dataPath, payloadGone, err := readRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary)
+	if payloadGone {
+		data, dataPath, _, err = readRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary)
+	}
+	return data, dataPath, err
+}
+
+// readRPMRawMetadataCache reports payloadGone when the manifest was read but the
+// payload it names does not exist. The returned path is the manifest until the
+// payload it names is known, and that payload after.
+func readRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, primary rpmPrimaryReference) (data []byte, dataPath string, payloadGone bool, err error) {
+	metaPath := rpmRawMetadataManifestPath(xmlCacheDir, metadataHref)
+	dataPath = metaPath
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, dataPath, false, err
+	}
+
+	var cache rpmRawMetadataCache
+	if err := json.Unmarshal(metaData, &cache); err != nil {
+		return nil, dataPath, false, fmt.Errorf("invalid rpm raw metadata cache %s: %w", metaPath, err)
+	}
+	if cache.MetadataID != metadataID {
+		return nil, dataPath, false, fmt.Errorf("rpm raw metadata cache identity mismatch in %s: got %s, want %s",
+			metaPath, cache.MetadataID, metadataID)
+	}
+	if primary.Href != "" && !cache.Primary.matches(primary) {
+		return nil, dataPath, false, fmt.Errorf("rpm raw metadata cache primary reference mismatch in %s", metaPath)
+	}
+	if filepath.Base(cache.DataFile) != cache.DataFile || cache.DataFile == "" {
+		return nil, dataPath, false, fmt.Errorf("invalid rpm raw metadata data file in %s", metaPath)
+	}
+
+	dataPath = filepath.Join(xmlCacheDir, cache.DataFile)
+	afterRawManifestRead()
+	data, err = os.ReadFile(dataPath)
+	if err != nil {
+		return nil, dataPath, os.IsNotExist(err), err
+	}
+	if len(data) == 0 {
+		return nil, dataPath, false, fmt.Errorf("empty rpm raw metadata cache %s", dataPath)
+	}
+	// cache.Primary equals primary whenever one was requested, and is the only
+	// integrity information available when none was.
+	if err := verifyRPMPrimaryBytes(data, cache.Primary); err != nil {
+		return nil, dataPath, false, fmt.Errorf("verify cached RPM primary metadata %s: %w", dataPath, err)
+	}
+	if !cache.Primary.hasIntegrity() {
+		if got := contentDigest(data); !strings.EqualFold(got, cache.ContentDigest) {
+			return nil, dataPath, false, fmt.Errorf("verify cached RPM primary metadata %s: content digest mismatch: got %s, want %q",
+				dataPath, got, cache.ContentDigest)
+		}
+	}
+
+	return data, dataPath, false, nil
+}
+
+func saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, primary rpmPrimaryReference, data []byte) error {
+	if err := verifyRPMPrimaryBytes(data, primary); err != nil {
+		return fmt.Errorf("refusing to cache invalid RPM primary metadata: %w", err)
+	}
+
+	// Writing a payload, publishing the manifest and pruning must not interleave
+	// with another build doing the same: a pruner holding stale information about a
+	// payload could otherwise delete one a writer has just republished. Without the
+	// lock the payload and manifest are still written, which is safe on its own,
+	// but nothing is pruned.
+	unlock, lockErr := lockRPMRawMetadata(xmlCacheDir, metadataHref)
+	if lockErr != nil {
+		logger.Logger().Warnf("Failed to lock the RPM primary metadata cache; superseded payloads are not pruned: %v", lockErr)
+	} else {
+		defer unlock()
+	}
+
+	dataPath := rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref, primary, data)
+	metaPath := rpmRawMetadataManifestPath(xmlCacheDir, metadataHref)
+	if err := writeFileAtomic(dataPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write rpm raw metadata %s: %w", dataPath, err)
+	}
+
+	cache := rpmRawMetadataCache{
+		MetadataID: metadataID,
+		Primary:    primary,
+		DataFile:   filepath.Base(dataPath),
+	}
+	if !primary.hasIntegrity() {
+		cache.ContentDigest = contentDigest(data)
+	}
+	metaData, err := json.Marshal(cache)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rpm raw metadata cache: %w", err)
+	}
+	if err := writeFileAtomic(metaPath, metaData, 0644); err != nil {
+		return fmt.Errorf("failed to write rpm raw metadata cache %s: %w", metaPath, err)
+	}
+
+	if lockErr == nil {
+		pruneSupersededRawPayloads(xmlCacheDir, metadataHref, dataPath)
+	}
+	return nil
+}
+
+func rpmRawMetadataLockPath(xmlCacheDir, metadataHref string) string {
+	hrefHash := sha256.Sum256([]byte(metadataHref))
+	return filepath.Join(xmlCacheDir, fmt.Sprintf("primary_%s.lock", hex.EncodeToString(hrefHash[:])[:16]))
+}
+
+// lockRPMRawMetadata takes an exclusive advisory lock on the raw metadata cache
+// of metadataHref, shared by every build using the same cache directory, and
+// returns the function that releases it.
+func lockRPMRawMetadata(xmlCacheDir, metadataHref string) (func(), error) {
+	lockPath := rpmRawMetadataLockPath(xmlCacheDir, metadataHref)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file %s: %w", lockPath, err)
+	}
+	for {
+		err = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		_ = lockFile.Close()
+		return nil, fmt.Errorf("lock %s: %w", lockPath, err)
+	}
+	return func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+	}, nil
+}
+
+// rpmRawPayloadGracePeriod is how long a payload no longer named by the manifest
+// is kept. A concurrent writer's payload is only unreferenced between its payload
+// and manifest writes, and a reader only needs a payload for the moment between
+// reading the manifest and the file, so anything this old is not in use.
+const rpmRawPayloadGracePeriod = 10 * time.Minute
+
+// beforeRawPayloadPrune runs just before a superseded payload is removed. Tests
+// use it to interleave another cache writer.
+var beforeRawPayloadPrune = func(path string) {}
+
+// pruneSupersededRawPayloads removes payloads for metadataHref other than keepPath
+// that are older than the grace period, so refreshes of metadata at the same
+// href do not accumulate payloads without bound. The caller holds the href's
+// cache lock.
+func pruneSupersededRawPayloads(xmlCacheDir, metadataHref, keepPath string) {
+	log := logger.Logger()
+
+	hrefHash := sha256.Sum256([]byte(metadataHref))
+	prefix := fmt.Sprintf("primary_%s_", hex.EncodeToString(hrefHash[:])[:16])
+	ext := extractMetadataExtension(metadataHref)
+
+	entries, err := os.ReadDir(xmlCacheDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		path := filepath.Join(xmlCacheDir, name)
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ext) || path == keepPath {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() || time.Since(info.ModTime()) < rpmRawPayloadGracePeriod {
+			continue
+		}
+		beforeRawPayloadPrune(path)
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			log.Warnf("Failed to prune superseded RPM primary metadata payload %s: %v", name, rmErr)
+		}
+	}
 }
 
 func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
