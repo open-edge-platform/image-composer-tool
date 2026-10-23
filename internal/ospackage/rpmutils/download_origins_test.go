@@ -117,6 +117,47 @@ func TestValidateOriginsUnknownOriginFallsBackToUnionCheck(t *testing.T) {
 	}
 }
 
+// Verification of a download covers the resolved files only: an RPM an earlier
+// build left in the shared cache must neither fail nor be checked against the
+// current configuration.
+func TestValidateSelectedOriginsIgnoresUnrelatedCachedRPMs(t *testing.T) {
+	destDir := t.TempDir()
+	selected := "trusted-1.0-1.x86_64.rpm"
+	unrelated := "removed-repo-2.0-1.x86_64.rpm"
+	for _, name := range []string{selected, unrelated} {
+		if err := os.WriteFile(filepath.Join(destDir, name), []byte("rpm bytes"), 0644); err != nil {
+			t.Fatalf("failed to create RPM %s: %v", name, err)
+		}
+	}
+
+	fileOrigins := map[string]string{selected: "http://trusted.local/repo/" + selected}
+	repos := []repoOrigin{{baseURL: "http://trusted.local/repo/", keys: []string{"[trusted=yes]"}}}
+
+	if err := validateSelectedOrigins(destDir, []string{selected}, fileOrigins, repos); err != nil {
+		t.Fatalf("validateSelectedOrigins() error = %v, want the unrelated RPM left unverified", err)
+	}
+	if err := ValidateOrigins(destDir, fileOrigins, repos); err == nil {
+		t.Fatal("ValidateOrigins() should still verify every RPM in the directory")
+	}
+}
+
+// A selected file with no recorded origin is still verified against the union
+// of the configured keys.
+func TestValidateSelectedOriginsUnknownOriginFallsBackToUnionCheck(t *testing.T) {
+	destDir := t.TempDir()
+	unknown := "unknown-origin-1.0-1.x86_64.rpm"
+	if err := os.WriteFile(filepath.Join(destDir, unknown), []byte("rpm bytes"), 0644); err != nil {
+		t.Fatalf("failed to create RPM: %v", err)
+	}
+
+	fileOrigins := map[string]string{"other.rpm": "http://trusted.local/repo/other.rpm"}
+	repos := []repoOrigin{{baseURL: "http://trusted.local/repo/", keys: []string{"[trusted=yes]"}}}
+
+	if err := validateSelectedOrigins(destDir, []string{unknown}, fileOrigins, repos); err == nil {
+		t.Fatal("expected verification failure for a selected RPM with an unknown origin")
+	}
+}
+
 func TestValidateOriginsAllTrustedSkipsVerification(t *testing.T) {
 	destDir := t.TempDir()
 	rpmName := "trusted-1.0-1.x86_64.rpm"

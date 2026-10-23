@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -582,6 +585,24 @@ func testPrimaryXML(packageName string) string {
     <arch>x86_64</arch>
     <version epoch="0" ver="1.0" rel="1"/>
     <checksum type="sha256">abc</checksum>
+    <format><rpm:provides><rpm:entry name="%s"/></rpm:provides></format>
+  </package>
+</metadata>`, packageName, packageName, packageName)
+}
+
+// testPrimaryXMLInRepodataOrder lists the elements in the order repository
+// tools write them, with <name> before <location>. Parsing then names the
+// package by its rpm file name, unlike testPrimaryXML, whose <location> comes
+// first and leaves the package named by <name>.
+func testPrimaryXMLInRepodataOrder(packageName string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">
+  <package type="rpm">
+    <name>%s</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1.0" rel="1"/>
+    <checksum type="sha256">abc</checksum>
+    <location href="Packages/%s-1.0-1.x86_64.rpm"/>
     <format><rpm:provides><rpm:entry name="%s"/></rpm:provides></format>
   </package>
 </metadata>`, packageName, packageName, packageName)
@@ -2313,10 +2334,10 @@ func TestRPMRawMetadataCacheWriteFailureIsReported(t *testing.T) {
 	primaryHref := "repodata/primary.xml.gz"
 	data := compressGzip(t, testPrimaryXML("bash"))
 	primary := primaryRefForData(primaryHref, data)
-	cacheRoot := t.TempDir()
-	cacheDir := filepath.Join(cacheRoot, "not-a-directory")
-	if err := os.WriteFile(cacheDir, []byte("x"), 0644); err != nil {
-		t.Fatalf("failed to create file in place of cache directory: %v", err)
+	cacheDir := t.TempDir()
+	// A directory in place of the payload cannot be replaced by a file.
+	if err := os.Mkdir(rpmRawMetadataPayloadPath(cacheDir, primaryHref, primary, data), 0755); err != nil {
+		t.Fatalf("failed to create directory in place of the payload: %v", err)
 	}
 
 	err := saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID("https://example.invalid/repo", primaryHref), primary, data)
@@ -2455,8 +2476,23 @@ func TestRPMMetadataCacheSeparatesRepositoriesWithSameBasename(t *testing.T) {
 	}
 }
 
+// stubValidateOrigins replaces RPM signature verification, which needs signed
+// packages, and records the files each verification was asked to check.
+func stubValidateOrigins(t *testing.T) *[]map[string]string {
+	t.Helper()
+	var calls []map[string]string
+	orig := validateOriginsFunc
+	validateOriginsFunc = func(destDir string, files []string, fileOrigins map[string]string, repos []repoOrigin) error {
+		calls = append(calls, maps.Clone(fileOrigins))
+		return nil
+	}
+	t.Cleanup(func() { validateOriginsFunc = orig })
+	return &calls
+}
+
 func TestDownloadPackagesCompleteUsesMetadataAndPackageCachesWithoutHTTP(t *testing.T) {
 	setRPMMetadataTestCache(t)
+	stubValidateOrigins(t)
 
 	origRepoCfg := RepoCfg
 	origGzHref := GzHref
@@ -2497,6 +2533,151 @@ func TestDownloadPackagesCompleteUsesMetadataAndPackageCachesWithoutHTTP(t *test
 	}
 	if atomic.LoadInt32(&requestCount) != 0 {
 		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
+	}
+}
+
+// A complete package cache is not trusted by itself: a cached file that carries
+// the expected name but fails signature verification must be rejected.
+func TestDownloadPackagesCompleteVerifiesCachedRPMsOnCacheHit(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	origGzHref := GzHref
+	origUserRepo := UserRepo
+	t.Cleanup(func() {
+		RepoCfg = origRepoCfg
+		GzHref = origGzHref
+		UserRepo = origUserRepo
+	})
+
+	var rpmRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/key.asc":
+			_, _ = w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nnot a key\n-----END PGP PUBLIC KEY BLOCK-----\n"))
+		case strings.HasSuffix(r.URL.Path, ".rpm"):
+			atomic.AddInt32(&rpmRequests, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	seedRPMRawMetadataCache(t, server.URL, primaryHref, compressGzip(t, testPrimaryXML("bash")))
+	RepoCfg = RepoConfig{URL: server.URL, GPGKey: server.URL + "/key.asc"}
+	GzHref = primaryHref
+	UserRepo = nil
+
+	pkgCacheDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgCacheDir, "bash-1.0-1.x86_64.rpm"), []byte("unsigned rpm"), 0644); err != nil {
+		t.Fatalf("failed to seed RPM payload cache: %v", err)
+	}
+
+	_, _, err := DownloadPackagesComplete([]string{"bash"}, pkgCacheDir, "", nil, false)
+	if err == nil || !strings.Contains(err.Error(), "verification failed") {
+		t.Fatalf("DownloadPackagesComplete() error = %v, want verification failure for the cached RPM", err)
+	}
+	if n := atomic.LoadInt32(&rpmRequests); n != 0 {
+		t.Fatalf("RPM requests = %d, want 0: the cached file is not downloaded again", n)
+	}
+}
+
+// A complete cache that also holds an obsolete and an unrelated RPM must yield
+// only the resolved packages, with the resolved package information.
+func TestDownloadPackagesCompleteCacheHitReturnsOnlyResolvedPackages(t *testing.T) {
+	setRPMMetadataTestCache(t)
+	validated := stubValidateOrigins(t)
+
+	origRepoCfg := RepoCfg
+	origGzHref := GzHref
+	origUserRepo := UserRepo
+	t.Cleanup(func() {
+		RepoCfg = origRepoCfg
+		GzHref = origGzHref
+		UserRepo = origUserRepo
+	})
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	seedRPMRawMetadataCache(t, server.URL, primaryHref, compressGzip(t, testPrimaryXML("bash")))
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = primaryHref
+	UserRepo = nil
+
+	pkgCacheDir := t.TempDir()
+	for _, name := range []string{"bash-1.0-1.x86_64.rpm", "bash-0.9-1.x86_64.rpm", "curl-1.0-1.x86_64.rpm"} {
+		if err := os.WriteFile(filepath.Join(pkgCacheDir, name), []byte("cached rpm"), 0644); err != nil {
+			t.Fatalf("failed to seed %s: %v", name, err)
+		}
+	}
+
+	downloaded, infos, err := DownloadPackagesComplete([]string{"bash"}, pkgCacheDir, "", nil, false)
+	if err != nil {
+		t.Fatalf("DownloadPackagesComplete() error = %v", err)
+	}
+	if len(downloaded) != 1 || downloaded[0] != "bash-1.0-1.x86_64.rpm" {
+		t.Fatalf("downloaded = %v, want only the resolved bash rpm", downloaded)
+	}
+	if len(infos) != 1 || infos[0].Name != "bash" || infos[0].Version == "" {
+		t.Fatalf("infos = %+v, want the resolved bash package information", infos)
+	}
+	if len(*validated) != 1 {
+		t.Fatalf("verification runs = %d, want 1", len(*validated))
+	}
+	if atomic.LoadInt32(&requestCount) != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
+	}
+}
+
+// A complete cache under a root whose name holds glob metacharacters must still
+// be recognised as complete, or its metadata is discarded and an offline build
+// fails.
+func TestDownloadPackagesCompleteReadsBracketedPackageCacheLiterally(t *testing.T) {
+	setRPMMetadataTestCache(t)
+	stubValidateOrigins(t)
+
+	origRepoCfg := RepoCfg
+	origGzHref := GzHref
+	origUserRepo := UserRepo
+	t.Cleanup(func() {
+		RepoCfg = origRepoCfg
+		GzHref = origGzHref
+		UserRepo = origUserRepo
+	})
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	seedRPMRawMetadataCache(t, server.URL, primaryHref, compressGzip(t, testPrimaryXMLInRepodataOrder("bash")))
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = primaryHref
+	UserRepo = nil
+
+	pkgCacheDir, _ := bracketedDirs(t)
+	writeTestFiles(t, pkgCacheDir, "bash-1.0-1.x86_64.rpm")
+
+	downloaded, _, err := DownloadPackagesComplete([]string{"bash"}, pkgCacheDir, "", nil, false)
+	if err != nil {
+		t.Fatalf("DownloadPackagesComplete() error = %v", err)
+	}
+	if len(downloaded) != 1 || downloaded[0] != "bash-1.0-1.x86_64.rpm" {
+		t.Fatalf("downloaded = %v, want the cached bash rpm", downloaded)
+	}
+	if n := atomic.LoadInt32(&requestCount); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
 	}
 }
 
@@ -2849,5 +3030,476 @@ func TestRPMParsedCacheRejectsSizeOnlyReferenceChange(t *testing.T) {
 	}
 	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
 		t.Fatalf("packages = %+v, want bash re-parsed from the current primary file, not the stale parsed index", pkgs)
+	}
+}
+
+// TestClearRPMMetadataCachePreservesOfflineManifests reproduces the flow that
+// broke offline rebuilds: a first-ever online build populates repomd.xml and
+// primary.location.json via FetchPrimaryURL at Init, then handleRPMCacheRetry
+// clears the metadata cache before retrying the download. If those two
+// manifests are removed by clearRPMMetadataCache, the next Init on the offline
+// rebuild cannot resolve the primary reference without HTTP and the build fails.
+func TestClearRPMMetadataCachePreservesOfflineManifests(t *testing.T) {
+	cacheRoot := setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	t.Cleanup(func() { RepoCfg = origRepoCfg })
+
+	baseURL := "https://example.invalid/repo"
+	RepoCfg = RepoConfig{URL: baseURL}
+
+	cacheDir := filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+
+	primaryHref := "repodata/primary.xml.gz"
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomd(primaryHref), 0644); err != nil {
+		t.Fatalf("seed repomd.xml: %v", err)
+	}
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), rpmPrimaryReference{Href: primaryHref}); err != nil {
+		t.Fatalf("seed primary.location.json: %v", err)
+	}
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+	} {
+		if err := os.WriteFile(filepath.Join(cacheDir, name), []byte("{}"), 0644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	clearRPMMetadataCache(configuredRPMRepoURLs())
+
+	for _, name := range []string{"repomd.xml", "primary.location.json"} {
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); err != nil {
+			t.Fatalf("clearRPMMetadataCache() removed offline manifest %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+	} {
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("clearRPMMetadataCache() left stale artifact %s (err=%v)", name, err)
+		}
+	}
+}
+
+// TestFetchPrimaryURL_UsesPreservedManifestsAfterClearRetry simulates the full
+// online-with-clear then offline scenario end-to-end: build A populates the
+// cache, the retry path clears the parsed/payload artifacts, then the network
+// is severed and build B loads the primary reference purely from the preserved
+// repomd.xml manifest.
+func TestFetchPrimaryURL_UsesPreservedManifestsAfterClearRetry(t *testing.T) {
+	cacheRoot := setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	t.Cleanup(func() { RepoCfg = origRepoCfg })
+
+	primaryHref := "repodata/primary.xml.gz"
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		switch r.URL.Path {
+		case "/repodata/repomd.xml":
+			_, _ = w.Write(testRepomd(primaryHref))
+		case "/repodata/primary.xml.gz":
+			_, _ = w.Write(compressGzip(t, testPrimaryXML("bash")))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	RepoCfg = RepoConfig{URL: server.URL}
+
+	if _, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml"); err != nil {
+		t.Fatalf("online FetchPrimaryURL: %v", err)
+	}
+	if _, err := ParseRepositoryMetadata(server.URL, primaryHref, nil); err != nil {
+		t.Fatalf("online ParseRepositoryMetadata: %v", err)
+	}
+
+	cacheDir := filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(server.URL))
+	if _, err := os.Stat(filepath.Join(cacheDir, "repomd.xml")); err != nil {
+		t.Fatalf("expected repomd.xml populated after online build: %v", err)
+	}
+
+	clearRPMMetadataCache(configuredRPMRepoURLs())
+
+	server.Close()
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("offline FetchPrimaryURL after clear should use preserved repomd: %v", err)
+	}
+	if href != primaryHref {
+		t.Fatalf("offline href = %q, want %q", href, primaryHref)
+	}
+	if atomic.LoadInt32(&requestCount) != 2 {
+		t.Fatalf("HTTP requests = %d, want still 2 (offline reused preserved cache)", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestClearRPMMetadataCacheRemovesTimestampedArtifacts(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	t.Cleanup(func() { RepoCfg = origRepoCfg })
+	baseURL := "https://example.invalid/repo"
+	RepoCfg = RepoConfig{URL: baseURL}
+
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+
+	// Populate the cache with the real save helpers, for plain and
+	// checksum-prefixed hrefs, so the file names are the ones production writes.
+	for _, href := range []string{"repodata/primary.xml.gz", "repodata/0123abcd-primary.xml.zst", "repodata/primary_data.xml.gz"} {
+		data := []byte("primary " + href)
+		fullURL := baseURL + "/" + href
+		saveOriginalXML(cacheDir, href, fullURL, data)
+		saveUncompressedXML(cacheDir, href, fullURL, data)
+		if err := saveRPMRawMetadataCache(cacheDir, href, rpmMetadataID(baseURL, href), rpmPrimaryReference{Href: href}, data); err != nil {
+			t.Fatalf("saveRPMRawMetadataCache(%s) error = %v", href, err)
+		}
+	}
+	manifests := []string{"repomd.xml", "primary.location.json"}
+	for _, name := range manifests {
+		if err := os.WriteFile(filepath.Join(cacheDir, name), []byte("{}"), 0644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	clearRPMMetadataCache(configuredRPMRepoURLs())
+
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("read cache dir: %v", err)
+	}
+	var left []string
+	for _, e := range entries {
+		// The per-href lock files are kept: removing one while another build holds
+		// it would let a third build lock a new file and run alongside it.
+		if strings.HasSuffix(e.Name(), ".lock") {
+			continue
+		}
+		left = append(left, e.Name())
+	}
+	sort.Strings(left)
+	sort.Strings(manifests)
+	if strings.Join(left, ",") != strings.Join(manifests, ",") {
+		t.Fatalf("cache dir after clear = %v, want only %v", left, manifests)
+	}
+}
+
+func TestClearRPMMetadataCacheReadsCacheRootLiterally(t *testing.T) {
+	root := t.TempDir()
+	intended := filepath.Join(root, "cache[1]")
+	sibling := filepath.Join(root, "cache1") // matched by the glob pattern "cache[1]"
+
+	origCfg := config.Global()
+	updatedCfg := *origCfg
+	updatedCfg.CacheDir = intended
+	config.SetGlobal(&updatedCfg)
+	t.Cleanup(func() { config.SetGlobal(origCfg) })
+
+	origRepoCfg := RepoCfg
+	t.Cleanup(func() { RepoCfg = origRepoCfg })
+	baseURL := "https://example.invalid/repo"
+	RepoCfg = RepoConfig{URL: baseURL}
+
+	intendedDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	siblingDir := filepath.Join(sibling, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	for _, dir := range []string{intendedDir, siblingDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "primary.parsed.json"), []byte("{}"), 0644); err != nil {
+			t.Fatalf("seed %s: %v", dir, err)
+		}
+	}
+
+	clearRPMMetadataCache(configuredRPMRepoURLs())
+
+	if _, err := os.Stat(filepath.Join(intendedDir, "primary.parsed.json")); !os.IsNotExist(err) {
+		t.Fatalf("the configured cache was not cleared (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(siblingDir, "primary.parsed.json")); err != nil {
+		t.Fatalf("a sibling directory matching the glob pattern was cleared: %v", err)
+	}
+}
+
+func TestRedactCacheFileName(t *testing.T) {
+	tests := map[string]string{
+		"primary.parsed.json":                                           "primary.parsed.json",
+		"primary.xml_12345678_2026-01-01_00-00-00.gz":                   "primary.xml_12345678_2026-01-01_00-00-00.gz",
+		"primary.xml_12345678_2026-01-01_00-00-00.gz?token=secret#frag": "primary.xml_12345678_2026-01-01_00-00-00.gz<redacted>",
+	}
+	for name, want := range tests {
+		if got := redactCacheFileName(name); got != want {
+			t.Fatalf("redactCacheFileName(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// A fully populated cache must be recognised as complete when the primary
+// metadata lists the elements in the usual order, so that nothing is cleared
+// and the build needs no repository access.
+func TestDownloadPackagesCompleteKeepsMetadataCacheWithRepodataElementOrder(t *testing.T) {
+	setRPMMetadataTestCache(t)
+	stubValidateOrigins(t)
+
+	origRepoCfg := RepoCfg
+	origGzHref := GzHref
+	origUserRepo := UserRepo
+	t.Cleanup(func() {
+		RepoCfg = origRepoCfg
+		GzHref = origGzHref
+		UserRepo = origUserRepo
+	})
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	metaDir := seedRPMRawMetadataCache(t, server.URL, primaryHref, compressGzip(t, testPrimaryXMLInRepodataOrder("bash")))
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = primaryHref
+	UserRepo = nil
+
+	pkgCacheDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgCacheDir, "bash-1.0-1.x86_64.rpm"), []byte("cached rpm"), 0644); err != nil {
+		t.Fatalf("failed to seed RPM payload cache: %v", err)
+	}
+
+	downloaded, _, err := DownloadPackagesComplete([]string{"bash"}, pkgCacheDir, "", nil, false)
+	if err != nil {
+		t.Fatalf("DownloadPackagesComplete() error = %v", err)
+	}
+	if len(downloaded) != 1 || downloaded[0] != "bash-1.0-1.x86_64.rpm" {
+		t.Fatalf("downloaded = %v, want the cached bash rpm", downloaded)
+	}
+	if n := atomic.LoadInt32(&requestCount); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+	payloads, _ := filepath.Glob(filepath.Join(metaDir, "primary_*.gz"))
+	if len(payloads) == 0 {
+		t.Fatalf("the raw primary metadata was cleared although every package was cached")
+	}
+}
+
+// The refresh must take the repository's current primary reference: the cached
+// repomd.xml and primary location are replaced, and the base repository's href
+// moves with them. A repository that cannot be reached is left as it was.
+func TestRefreshRPMPrimaryReferencesUpdatesReferenceAndBaseHref(t *testing.T) {
+	setRPMMetadataTestCache(t)
+	origRepoCfg, origGzHref := RepoCfg, GzHref
+	t.Cleanup(func() { RepoCfg, GzHref = origRepoCfg, origGzHref })
+
+	oldHref, newHref := "repodata/old-primary.xml.gz", "repodata/new-primary.xml.gz"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repodata/repomd.xml" {
+			_, _ = w.Write(testRepomd(newHref))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if _, err := fetchAndCachePrimaryReference(server.URL+"/repodata/repomd.xml", primaryReferenceCacheDir(server.URL)); err != nil {
+		t.Fatalf("seeding the repomd cache: %v", err)
+	}
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomd(oldHref), 0644); err != nil {
+		t.Fatalf("seeding stale repomd.xml: %v", err)
+	}
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), rpmPrimaryReference{Href: oldHref}); err != nil {
+		t.Fatalf("seeding stale primary location: %v", err)
+	}
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = oldHref
+
+	unreachable := "http://127.0.0.1:1"
+	got := refreshRPMPrimaryReferences([]string{server.URL, unreachable})
+	if want := []string{server.URL}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("refreshed repositories = %v, want %v", got, want)
+	}
+	if GzHref != newHref {
+		t.Fatalf("GzHref = %q, want %q", GzHref, newHref)
+	}
+
+	server.Close()
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL() from the refreshed cache error = %v", err)
+	}
+	if href != newHref {
+		t.Fatalf("cached primary href = %q, want %q", href, newHref)
+	}
+}
+
+// A refresh that cannot replace the cached repomd.xml has not refreshed the
+// repository: later lookups would still read the superseded reference, so the
+// repository must not be reported as refreshed, which would clear its metadata,
+// and the base href must not move.
+func TestRefreshRPMPrimaryReferencesFailsWhenRepomdCannotBeReplaced(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("file permissions are not enforced for root")
+	}
+	setRPMMetadataTestCache(t)
+	origRepoCfg, origGzHref := RepoCfg, GzHref
+	t.Cleanup(func() { RepoCfg, GzHref = origRepoCfg, origGzHref })
+
+	oldHref, newHref := "repodata/old-primary.xml.gz", "repodata/new-primary.xml.gz"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repodata/repomd.xml" {
+			_, _ = w.Write(testRepomd(newHref))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cacheDir := primaryReferenceCacheDir(server.URL)
+	if cacheDir == "" {
+		t.Fatalf("test setup: no metadata cache directory")
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomd(oldHref), 0644); err != nil {
+		t.Fatalf("seeding the cached repomd.xml: %v", err)
+	}
+	if err := os.Chmod(cacheDir, 0555); err != nil {
+		t.Fatalf("chmod %s: %v", cacheDir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cacheDir, 0755) })
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = oldHref
+
+	if got := refreshRPMPrimaryReferences([]string{server.URL}); len(got) != 0 {
+		t.Fatalf("refreshed repositories = %v, want none: the cached repomd.xml could not be replaced", got)
+	}
+	if GzHref != oldHref {
+		t.Fatalf("GzHref = %q, want it left at %q", GzHref, oldHref)
+	}
+	data, err := os.ReadFile(filepath.Join(cacheDir, "repomd.xml"))
+	if err != nil || !bytes.Equal(data, testRepomd(oldHref)) {
+		t.Fatalf("the cached repomd.xml was altered (err=%v)", err)
+	}
+}
+
+// A refresh whose repomd.xml was replaced but whose directory could not then be
+// synced has published the new reference. The repository must be reported as
+// refreshed and the base href must follow, or the retry would resolve from a
+// primary the cached repomd.xml no longer names.
+func TestRefreshRPMPrimaryReferencesKeepsReferenceWhenFailingAfterReplace(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not restrict root")
+	}
+	setRPMMetadataTestCache(t)
+	origRepoCfg, origGzHref := RepoCfg, GzHref
+	t.Cleanup(func() { RepoCfg, GzHref = origRepoCfg, origGzHref })
+
+	oldHref, newHref := "repodata/old-primary.xml.gz", "repodata/new-primary.xml.gz"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repodata/repomd.xml" {
+			_, _ = w.Write(testRepomd(newHref))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cacheDir := primaryReferenceCacheDir(server.URL)
+	if cacheDir == "" {
+		t.Fatalf("test setup: no metadata cache directory")
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomd(oldHref), 0644); err != nil {
+		t.Fatalf("seeding the cached repomd.xml: %v", err)
+	}
+	// Without read permission files can still be replaced, but the directory
+	// cannot be opened to sync the rename.
+	if err := os.Chmod(cacheDir, 0300); err != nil {
+		t.Fatalf("chmod %s: %v", cacheDir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cacheDir, 0755) })
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = oldHref
+
+	if got, want := refreshRPMPrimaryReferences([]string{server.URL}), []string{server.URL}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("refreshed repositories = %v, want %v: the new repomd.xml was published", got, want)
+	}
+	if GzHref != newHref {
+		t.Fatalf("GzHref = %q, want %q", GzHref, newHref)
+	}
+	data, err := os.ReadFile(filepath.Join(cacheDir, "repomd.xml"))
+	if err != nil || !bytes.Equal(data, testRepomd(newHref)) {
+		t.Fatalf("the cached repomd.xml = %q (err=%v), want the refreshed one", data, err)
+	}
+}
+
+// When a repository has rotated its primary file, the retry that follows a
+// package-cache miss must resolve from the file the repository serves now, not
+// fetch the retired one named by the cached repomd.xml.
+func TestDownloadPackagesCompleteFollowsRotatedPrimaryOnCacheMiss(t *testing.T) {
+	setRPMMetadataTestCache(t)
+	stubValidateOrigins(t)
+
+	origRepoCfg, origGzHref, origUserRepo := RepoCfg, GzHref, UserRepo
+	t.Cleanup(func() { RepoCfg, GzHref, UserRepo = origRepoCfg, origGzHref, origUserRepo })
+
+	oldHref, newHref := "repodata/old-primary.xml.gz", "repodata/new-primary.xml.gz"
+	var retiredRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repodata/repomd.xml":
+			_, _ = w.Write(testRepomd(newHref))
+		case "/" + newHref:
+			_, _ = w.Write(compressGzip(t, testPrimaryXML("bash")))
+		case "/bash-1.0-1.x86_64.rpm":
+			_, _ = w.Write([]byte("rpm"))
+		case "/" + oldHref:
+			atomic.AddInt32(&retiredRequests, 1)
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// The cache holds the index of the retired primary file, and no RPM.
+	seedRPMRawMetadataCache(t, server.URL, oldHref, compressGzip(t, testPrimaryXML("bash")))
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = oldHref
+	UserRepo = nil
+
+	pkgCacheDir := t.TempDir()
+	downloaded, _, err := DownloadPackagesComplete([]string{"bash"}, pkgCacheDir, "", nil, false)
+	if err != nil {
+		t.Fatalf("DownloadPackagesComplete() error = %v", err)
+	}
+	if len(downloaded) != 1 || downloaded[0] != "bash-1.0-1.x86_64.rpm" {
+		t.Fatalf("downloaded = %v, want bash rpm", downloaded)
+	}
+	if n := atomic.LoadInt32(&retiredRequests); n != 0 {
+		t.Fatalf("requests for the retired primary file = %d, want 0", n)
+	}
+	if GzHref != newHref {
+		t.Fatalf("GzHref = %q, want %q", GzHref, newHref)
 	}
 }

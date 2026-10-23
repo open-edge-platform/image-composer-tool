@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -880,30 +881,7 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 	log := logger.Logger()
 	baseURL := strings.TrimSuffix(repomdURL, "/repodata/repomd.xml")
-	cacheEnabled := !system.IsLiveInstallerExecution()
-
-	// Create cache directory for repomd-derived artifacts.
-	xmlCacheDir := ""
-	if cacheEnabled {
-		cacheDir, cacheDirErr := rpmMetadataCacheDir(baseURL)
-		if cacheDirErr != nil {
-			log.Warnf("Failed to resolve RPM metadata cache directory: %v", cacheDirErr)
-		} else {
-			xmlCacheDir = cacheDir
-		}
-		if xmlCacheDir != "" {
-			if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
-				log.Warnf("Failed to create XML cache directory: %v", err)
-				xmlCacheDir = ""
-			} else {
-				// Providers append "/repodata/repomd.xml" to the configured URL, so a
-				// trailing slash reaches here and earlier builds cached under it.
-				migrateLegacyRPMMetadataDir(baseURL, xmlCacheDir)
-			}
-		}
-	} else {
-		log.Debugf("Bypassing RPM primary location cache in live-installer mode")
-	}
+	xmlCacheDir := primaryReferenceCacheDir(baseURL)
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
 		if repomdCachedPrimary, repomdCacheErr := loadPrimaryReferenceFromCachedRepomd(xmlCacheDir); repomdCacheErr == nil {
@@ -920,26 +898,94 @@ func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 		}
 	}
 
+	return fetchAndCachePrimaryReference(repomdURL, xmlCacheDir)
+}
+
+// refreshPrimaryReference fetches repoURL's repomd.xml from the repository,
+// ignoring any cached copy, and records it as the cached repomd.xml and primary
+// location. It fails if the repomd.xml cannot be replaced, since later lookups
+// would still read the superseded reference; the cached repomd.xml is then as it
+// was. A failure after the new repomd.xml is in place, such as syncing its
+// directory, is only logged: the reference is published and the caller must use
+// it, or the retry would run on a primary the cached manifest no longer names.
+func refreshPrimaryReference(repoURL string) (rpmPrimaryReference, error) {
+	log := logger.Logger()
+
+	baseURL := strings.TrimRight(repoURL, "/")
+	xmlCacheDir := primaryReferenceCacheDir(baseURL)
+	primary, cacheErr, err := downloadAndCachePrimaryReference(baseURL+"/repodata/repomd.xml", xmlCacheDir)
+	if err != nil {
+		return rpmPrimaryReference{}, err
+	}
+	if cacheErr != nil {
+		published, loadErr := loadPrimaryReferenceFromCachedRepomd(xmlCacheDir)
+		if loadErr != nil || published != primary {
+			return rpmPrimaryReference{}, fmt.Errorf("refreshed repomd.xml for %s could not be cached: %w", redactURLForLog(baseURL), cacheErr)
+		}
+		log.Warnf("Refreshed repomd.xml for %s is cached but may not be durable: %v", redactURLForLog(baseURL), cacheErr)
+	}
+	return primary, nil
+}
+
+// primaryReferenceCacheDir returns the metadata cache directory for baseURL, or ""
+// when caching is unavailable.
+func primaryReferenceCacheDir(baseURL string) string {
+	log := logger.Logger()
+	if system.IsLiveInstallerExecution() {
+		log.Debugf("Bypassing RPM primary location cache in live-installer mode")
+		return ""
+	}
+
+	xmlCacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		log.Warnf("Failed to resolve RPM metadata cache directory: %v", err)
+		return ""
+	}
+	if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
+		log.Warnf("Failed to create XML cache directory: %v", err)
+		return ""
+	}
+	// Providers append "/repodata/repomd.xml" to the configured URL, so a
+	// trailing slash reaches here and earlier builds cached under it.
+	migrateLegacyRPMMetadataDir(baseURL, xmlCacheDir)
+	return xmlCacheDir
+}
+
+// fetchAndCachePrimaryReference downloads repomd.xml, extracts its primary
+// reference and, when xmlCacheDir is set, caches both. A failure to cache is
+// logged, not returned: the reference is still good for this run.
+func fetchAndCachePrimaryReference(repomdURL, xmlCacheDir string) (rpmPrimaryReference, error) {
+	primary, _, err := downloadAndCachePrimaryReference(repomdURL, xmlCacheDir)
+	return primary, err
+}
+
+// downloadAndCachePrimaryReference is fetchAndCachePrimaryReference, but returns
+// the error from caching the repomd.xml separately from the download's.
+func downloadAndCachePrimaryReference(repomdURL, xmlCacheDir string) (rpmPrimaryReference, error, error) {
+	log := logger.Logger()
+	baseURL := strings.TrimSuffix(repomdURL, "/repodata/repomd.xml")
+
 	client := network.NewSecureHTTPClient()
 	repomdData, err := fetchURLWithRetry(runctx.Context(), client, repomdURL, "repomd.xml")
 	if err != nil {
-		return rpmPrimaryReference{}, err
+		return rpmPrimaryReference{}, nil, err
 	}
 
 	primary, err := extractPrimaryReferenceFromRepomdData(repomdData)
 	if err != nil {
-		return rpmPrimaryReference{}, fmt.Errorf("parsing primary reference from %s: %w", redactURLForLog(repomdURL), err)
+		return rpmPrimaryReference{}, nil, fmt.Errorf("parsing primary reference from %s: %w", redactURLForLog(repomdURL), err)
 	}
 
+	var cacheErr error
 	if xmlCacheDir != "" {
-		saveRepomdXMLCache(xmlCacheDir, baseURL, repomdData)
+		cacheErr = saveRepomdXMLCache(xmlCacheDir, baseURL, repomdData)
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
 		if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, primary); saveErr != nil {
 			log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
 		}
 	}
 
-	return primary, nil
+	return primary, cacheErr, nil
 }
 
 func GetRepoMetaDataURL(baseURL, repoMetaXmlPath string) string {

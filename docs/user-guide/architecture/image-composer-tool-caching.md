@@ -135,9 +135,54 @@ refresh is staged in a temporary directory and moved into place only once every
 file has arrived, so a failed or interrupted refresh cannot leave a partial
 `Release` behind and break a working offline build.
 
-Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
+DEB metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
 execution.
+
+RPM repositories use the same cache contract under
+`cache_dir/rpm-metadata/{repo-id}_{arch}_{repo-hash}_rpm/`. The cache stores a stable
+`repomd.xml`, the resolved primary metadata location in `primary.location.json`,
+the compressed primary metadata payload keyed by the exact `repodata/primary.xml.*`
+href, and the parsed package index in `primary.parsed.json`. Cache manifests store
+hashed metadata identities rather than repository URLs. Metadata files that are
+used for offline builds are written through temporary files, synced, and atomically
+renamed into place so partial writes do not become valid cache entries. RPM metadata
+caching is only bypassed during live-installer execution.
+
+RPM cache reads differ from the DEB flow above in two ways:
+
+- **No freshness check.** A cached `repomd.xml` or `primary.location.json` is used
+  before any request is made, so a cached RPM build does not look for repository
+  updates. Metadata is fetched again only when the cache is missing or invalid, or
+  after it was cleared: the retry for missing packages first re-reads `repomd.xml`
+  from each repository that supplies a missing package, so that the retry uses the
+  primary file the repository serves now rather than one it may have retired, and
+  then clears that repository's parsed index, raw payloads and their manifests.
+  `repomd.xml` and `primary.location.json` are kept (now holding the refreshed
+  reference), since they are needed before any network access. A repository whose
+  `repomd.xml` cannot be fetched, or whose refreshed copy cannot be written to the
+  cache, keeps all of its cached metadata and is not retried, and other repositories keep their cache too, so one that is only
+  available offline stays usable while a different repository is refreshed. Raw
+  payloads are cleared and written under a per-file lock; when it cannot be taken
+  they are left as they are rather than changed without it.
+- **Verification is per path, not per hit.** A matching `primary.parsed.json` (same
+  metadata identity and primary reference) is returned without reading or
+  re-verifying the raw payload. The `.gz` or `.zst` payload is verified against the
+  size and checksum published by `repomd.xml` when the index has to be parsed from
+  it, and again before a downloaded payload is cached.
+
+On a complete cache hit, RPM builds therefore resolve the primary href locally,
+reuse the parsed index or the verified raw payload, and reuse cached RPM payloads
+without contacting the repository. Cached RPMs still go through the same filename
+validation and per-repository signature verification as freshly downloaded ones,
+and the build reports only the packages it resolved, not everything in the cache
+directory.
+
+The exception is a repository marked `[trusted=yes]`: its cached RPMs are deleted
+and downloaded again on every build, so that the opt-out from signature
+verification only ever applies to bytes fetched from that repository during the
+build. A build that selects packages from such a repository needs it to be
+reachable, even when every cache is complete.
 
 ### Web UI Package Index Cache
 
