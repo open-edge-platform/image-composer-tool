@@ -52,6 +52,7 @@ systemConfig:
         args: ["--mode", "docker"]
         env:
           DEPLOYMENT_MODE: docker
+        timeoutSec: 600
         rebootAfter: true
       - name: first
         local: first.sh
@@ -87,7 +88,7 @@ func TestParseProvisioningSections(t *testing.T) {
 		t.Errorf("SortedProvisioningScripts order = %+v", scripts)
 	}
 	if got := scripts[1]; !slices.Equal(got.Args, []string{"--mode", "docker"}) ||
-		got.Env["DEPLOYMENT_MODE"] != "docker" || len(got.Env) != 1 || !got.RebootAfter {
+		got.Env["DEPLOYMENT_MODE"] != "docker" || len(got.Env) != 1 || got.TimeoutSec != 600 || !got.RebootAfter {
 		t.Errorf("script args/env not parsed: %+v", got)
 	}
 	if got := sc.AptPolicy.UpgradeAllowedRepos; len(got) != 1 || got[0] != "platform" {
@@ -109,6 +110,7 @@ func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 		{"arg with a space", `args: ["--mode", "docker"]`, `args: ["--mode docker"]`},
 		{"env name with a dash", "DEPLOYMENT_MODE: docker", "DEPLOYMENT-MODE: docker"},
 		{"env value with a quote", "DEPLOYMENT_MODE: docker", "DEPLOYMENT_MODE: \"do'cker\""},
+		{"negative timeoutSec", "timeoutSec: 600", "timeoutSec: -1"},
 		{"non-boolean rebootAfter", "rebootAfter: true", "rebootAfter: sometimes"},
 	}
 	for _, tt := range tests {
@@ -231,7 +233,8 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"env name with a dash", func(s *ProvisioningScript) { s.Env = map[string]string{"A-B": "x"} }, false, true},
 		{"env name starting with a digit", func(s *ProvisioningScript) { s.Env = map[string]string{"1A": "x"} }, false, true},
 		{"env value with a quote", func(s *ProvisioningScript) { s.Env = map[string]string{"A": `x"y`} }, false, true},
-		{"valid rebootAfter", func(s *ProvisioningScript) { s.RebootAfter = true }, false, false},
+		{"negative timeoutSec", func(s *ProvisioningScript) { s.TimeoutSec = -1 }, false, true},
+		{"valid timeoutSec and rebootAfter", func(s *ProvisioningScript) { s.TimeoutSec = 60; s.RebootAfter = true }, false, false},
 		{"rebootAfter on an every-boot script", func(s *ProvisioningScript) {
 			s.Stage = ProvisioningStageEveryBoot
 			s.RebootAfter = true

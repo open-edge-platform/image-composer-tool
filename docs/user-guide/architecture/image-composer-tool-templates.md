@@ -1187,6 +1187,7 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
 | `scripts[].args` | list of string | No | Command-line arguments passed to the script. Each is 1-256 characters of letters, digits, and `._@%+:/=,-` (no spaces, quotes, `$`, or `;`, which systemd would interpret) |
 | `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters) |
+| `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in

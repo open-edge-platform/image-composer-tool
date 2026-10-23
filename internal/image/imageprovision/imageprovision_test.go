@@ -513,21 +513,30 @@ func TestRenderProvisioningUnitArgsAndEnv(t *testing.T) {
 	}
 }
 
-func TestRenderProvisioningUnitReboot(t *testing.T) {
+func TestRenderProvisioningUnitTimeoutAndReboot(t *testing.T) {
 	t.Parallel()
 	unit := renderProvisioningUnit(config.ProvisioningScript{
-		Name: "s", Final: "/usr/local/sbin/s.sh", RebootAfter: true,
+		Name: "s", Final: "/usr/local/sbin/s.sh", TimeoutSec: 900, RebootAfter: true,
 	}, "")
-	if !strings.Contains(unit, "ExecStartPost=/usr/bin/systemctl reboot --no-block\n") {
-		t.Errorf("unit missing the reboot:\n%s", unit)
+	for _, want := range []string{"TimeoutStartSec=900\n", "ExecStartPost=/usr/bin/systemctl reboot --no-block\n"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("unit missing %q:\n%s", want, unit)
+		}
 	}
 	// The reboot must be queued only after success is recorded in the stamp.
 	if strings.Index(unit, "reboot --no-block") < strings.Index(unit, "touch "+StampDir+"/s") {
 		t.Errorf("reboot must come after the stamp is written:\n%s", unit)
 	}
 	plain := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "")
-	if strings.Contains(plain, "reboot") {
-		t.Errorf("no reboot unless requested:\n%s", plain)
+	if strings.Contains(plain, "TimeoutStartSec") || strings.Contains(plain, "reboot") {
+		t.Errorf("no timeout or reboot unless requested:\n%s", plain)
+	}
+	// An every-boot script with a timeout has no stamp and still gets the limit.
+	every := renderProvisioningUnit(config.ProvisioningScript{
+		Name: "e", Final: "/usr/local/sbin/e.sh", Stage: config.ProvisioningStageEveryBoot, TimeoutSec: 30,
+	}, "")
+	if !strings.Contains(every, "TimeoutStartSec=30\n") || strings.Contains(every, "touch") {
+		t.Errorf("every-boot unit:\n%s", every)
 	}
 }
 

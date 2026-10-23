@@ -121,6 +121,9 @@ func renderProvisioningUnit(script config.ProvisioningScript, after string) stri
 		// After the stamp: the reboot job is queued only once success is recorded.
 		b.WriteString("ExecStartPost=/usr/bin/systemctl reboot --no-block\n")
 	}
+	if script.TimeoutSec > 0 {
+		fmt.Fprintf(&b, "TimeoutStartSec=%d\n", script.TimeoutSec)
+	}
 	b.WriteString("StandardOutput=journal+console\nStandardError=journal+console\n")
 	return b.String()
 }

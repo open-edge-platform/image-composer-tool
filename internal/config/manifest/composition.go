@@ -95,6 +95,7 @@ type CompositionScript struct {
 	// variables are the more likely place for a credential.
 	Args        []string `json:"args,omitempty"`
 	EnvNames    []string `json:"envNames,omitempty"`
+	TimeoutSec  int      `json:"timeoutSec,omitempty"`
 	RebootAfter bool     `json:"rebootAfter,omitempty"`
 }
 
@@ -221,7 +222,7 @@ func compositionScripts(scripts []config.ProvisioningScript) []CompositionScript
 		out = append(out, CompositionScript{
 			Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order,
 			Args: s.Args, EnvNames: slices.Sorted(maps.Keys(s.Env)),
-			RebootAfter: s.RebootAfter,
+			TimeoutSec: s.TimeoutSec, RebootAfter: s.RebootAfter,
 		})
 	}
 	return out
