@@ -348,6 +348,7 @@
       "type": "object",
       "description": "Boot-time provisioning scripts run by generated systemd units",
       "properties": {
+        "beforeLogin": { "type": "boolean", "default": false, "description": "Run the scripts before the login prompt: non-root logins are unavailable until they finish (root is exempt from the login block; a script whose timeoutSec is unset or 0 is limited to 3600 s)" },
         "scripts": {
           "type": "array",
           "items": {
@@ -370,7 +371,7 @@
                 "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{0,256}$" },
                 "description": "Environment variables set for the script (no spaces, quotes, $ or ; in values)"
               },
-              "timeoutSec": { "type": "integer", "minimum": 0, "description": "Fail the script's unit if it runs longer than this many seconds; 0 means no limit" },
+              "timeoutSec": { "type": "integer", "minimum": 0, "description": "Fail the script's unit if it runs longer than this many seconds; 0 or unset means no limit, except with provisioning.beforeLogin where it means 3600 s" },
               "rebootAfter": { "type": "boolean", "default": false, "description": "Reboot once the script has succeeded; first-boot scripts only, and only on the last script to run" }
             },
             "additionalProperties": false

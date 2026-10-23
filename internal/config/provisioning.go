@@ -80,7 +80,8 @@ type ProvisioningScript struct {
 	// shares with other templates (for example a deployment mode).
 	Args []string          `yaml:"args,omitempty"`
 	Env  map[string]string `yaml:"env,omitempty"`
-	// TimeoutSec fails the script's unit if it runs longer. Zero means no limit.
+	// TimeoutSec fails the script's unit if it runs longer. Zero (or unset) means
+	// no limit, except with BeforeLogin where it means DefaultBeforeLoginTimeoutSec.
 	TimeoutSec int `yaml:"timeoutSec,omitempty"`
 	// RebootAfter reboots the system once the script has succeeded.
 	RebootAfter bool `yaml:"rebootAfter,omitempty"`
@@ -89,6 +90,20 @@ type ProvisioningScript struct {
 // ProvisioningConfig holds boot-time provisioning scripts.
 type ProvisioningConfig struct {
 	Scripts []ProvisioningScript `yaml:"scripts,omitempty"`
+	// BeforeLogin runs the scripts before the login prompt: logins (console
+	// and SSH) are unavailable until they have finished, except for root, which
+	// /run/nologin does not stop. A pointer so a child layer can turn off an
+	// inherited setting with an explicit false.
+	BeforeLogin *bool `yaml:"beforeLogin,omitempty"`
+}
+
+// DefaultBeforeLoginTimeoutSec bounds a script that blocks logins when its
+// timeoutSec is unset or 0, so a hung script cannot lock a system out for good.
+const DefaultBeforeLoginTimeoutSec = 3600
+
+// RunsBeforeLogin reports whether provisioning scripts block logins until done.
+func (p ProvisioningConfig) RunsBeforeLogin() bool {
+	return p.BeforeLogin != nil && *p.BeforeLogin
 }
 
 // CloudInitConfig installs cloud-init and seeds it with NoCloud data.
@@ -165,7 +180,7 @@ func (t *ImageTemplate) SortedProvisioningScripts() []ProvisioningScript {
 
 func hasProvisioningSections(sc SystemConfig) bool {
 	return sc.Proxy.wasProvided || !sc.Proxy.IsEmpty() || len(sc.Provisioning.Scripts) > 0 ||
-		!sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
+		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
 }
 
 // mergeProvisioningSections applies child-wins merging: a section set by the
@@ -178,6 +193,9 @@ func mergeProvisioningSections(merged *SystemConfig, defaultConfig, userConfig S
 	if len(userConfig.Provisioning.Scripts) > 0 {
 		merged.Provisioning.Scripts = mergeProvisioningScripts(
 			defaultConfig.Provisioning.Scripts, userConfig.Provisioning.Scripts)
+	}
+	if userConfig.Provisioning.BeforeLogin != nil {
+		merged.Provisioning.BeforeLogin = userConfig.Provisioning.BeforeLogin
 	}
 	if !userConfig.CloudInit.isEmpty() {
 		merged.CloudInit = userConfig.CloudInit
@@ -635,6 +653,13 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 	}
 	if err := checkRebootAfterIsLast(t.SortedProvisioningScripts()); err != nil {
 		return err
+	}
+	if t.SystemConfig.Provisioning.RunsBeforeLogin() &&
+		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool {
+			return s.Stage == ProvisioningStageEveryBoot
+		}) {
+		log.Warnf("systemConfig.provisioning.beforeLogin is set and an every-boot script is configured: " +
+			"logins are unavailable until that script finishes on every boot")
 	}
 	if t.hasSSHKeys() && !t.hasPackage("openssh-server") {
 		log.Warnf("sshAuthorizedKeys are configured but openssh-server is not in systemConfig.packages; " +

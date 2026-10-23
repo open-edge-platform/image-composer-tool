@@ -1213,7 +1213,8 @@ func applyProvisioningConfig(installRoot string, template *config.ImageTemplate)
 		return fmt.Errorf("failed to configure cloud-init: %w", err)
 	}
 	scripts := template.SortedProvisioningScripts()
-	if err := imageprovision.ConfigureProvisioningScripts(installRoot, scripts); err != nil {
+	beforeLogin := sc.Provisioning.RunsBeforeLogin()
+	if err := imageprovision.ConfigureProvisioningScripts(installRoot, scripts, beforeLogin); err != nil {
 		return fmt.Errorf("failed to configure provisioning scripts: %w", err)
 	}
 	if err := imageprovision.WriteAptPolicy(installRoot, template); err != nil {

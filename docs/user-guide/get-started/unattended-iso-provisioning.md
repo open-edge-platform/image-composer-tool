@@ -144,6 +144,12 @@ A first-boot script that fails is retried on the next boot.
 `args` and `env` are written into that unit file, which any local user can
 read, so do not use them for secrets.
 
+By default the login prompt appears while the scripts are still running. Set
+`systemConfig.provisioning.beforeLogin: true` to hold the prompt (and SSH) until they have
+finished (root is exempt, see the templates reference), and `rebootAfter: true` on the last script to reboot once it succeeds
+without the prompt ever appearing. Add `timeoutSec` if a script may take longer than
+the one-hour limit, which also applies when `timeoutSec` is `0`.
+
 ### Developer source archives and other artifacts
 
 Copy any file with `additionalFiles`. Files larger than 4 GiB are supported on

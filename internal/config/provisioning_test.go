@@ -44,6 +44,7 @@ systemConfig:
   cloudInit:
     enabled: true
   provisioning:
+    beforeLogin: true
     scripts:
       - name: second
         local: second.sh
@@ -87,6 +88,9 @@ func TestParseProvisioningSections(t *testing.T) {
 	if len(scripts) != 2 || scripts[0].Name != "first" || scripts[1].Name != "second" {
 		t.Errorf("SortedProvisioningScripts order = %+v", scripts)
 	}
+	if !sc.Provisioning.RunsBeforeLogin() {
+		t.Error("provisioning.beforeLogin not parsed")
+	}
 	if got := scripts[1]; !slices.Equal(got.Args, []string{"--mode", "docker"}) ||
 		got.Env["DEPLOYMENT_MODE"] != "docker" || len(got.Env) != 1 || got.TimeoutSec != 600 || !got.RebootAfter {
 		t.Errorf("script args/env not parsed: %+v", got)
@@ -110,6 +114,7 @@ func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 		{"arg with a space", `args: ["--mode", "docker"]`, `args: ["--mode docker"]`},
 		{"env name with a dash", "DEPLOYMENT_MODE: docker", "DEPLOYMENT-MODE: docker"},
 		{"env value with a quote", "DEPLOYMENT_MODE: docker", "DEPLOYMENT_MODE: \"do'cker\""},
+		{"non-boolean beforeLogin", "beforeLogin: true", "beforeLogin: soon"},
 		{"negative timeoutSec", "timeoutSec: 600", "timeoutSec: -1"},
 		{"non-boolean rebootAfter", "rebootAfter: true", "rebootAfter: sometimes"},
 	}
@@ -255,6 +260,37 @@ func TestValidateProvisioningScripts(t *testing.T) {
 				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMergeProvisioningBeforeLogin(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	tests := []struct {
+		name          string
+		parent, child *bool
+		want          bool
+	}{
+		{"unset everywhere", nil, nil, false},
+		{"inherited", &yes, nil, true},
+		{"child turns it on", nil, &yes, true},
+		{"child turns an inherited setting off", &yes, &no, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			parent := SystemConfig{Provisioning: ProvisioningConfig{BeforeLogin: tt.parent}}
+			child := SystemConfig{Provisioning: ProvisioningConfig{BeforeLogin: tt.child}}
+			merged := parent
+			mergeProvisioningSections(&merged, parent, child)
+			if got := merged.Provisioning.RunsBeforeLogin(); got != tt.want {
+				t.Errorf("RunsBeforeLogin = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if !hasProvisioningSections(SystemConfig{Provisioning: ProvisioningConfig{BeforeLogin: &no}}) {
+		t.Error("an explicit beforeLogin: false is a provisioning section a child layer must keep")
 	}
 }
 

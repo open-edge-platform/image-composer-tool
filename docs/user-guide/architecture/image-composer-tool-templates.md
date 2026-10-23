@@ -1180,6 +1180,7 @@ User scripts copied into the image and run by generated systemd units at boot.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `beforeLogin` | bool | No | Run the scripts before the login prompt: console and SSH logins are unavailable until they finish, except for root. Default `false` (the prompt appears while the scripts run). See below |
 | `scripts[].name` | string | **Yes** | Identifier (`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`), unique |
 | `scripts[].local` | string | **Yes** | Script on the host (absolute, or relative to the template) |
 | `scripts[].final` | string | **Yes** | Absolute in-image file path of letters, digits, and `._@%+-` (so it is safe in a systemd `ExecStart=`); the script is made executable. It may not equal, contain, or sit inside another script's `final` or a path image-composer-tool generates (for example `/etc/environment`, the apt sources file, or the cloud-init seed directory) |
@@ -1187,7 +1188,7 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
 | `scripts[].args` | list of string | No | Command-line arguments passed to the script. Each is 1-256 characters of letters, digits, and `._@%+:/=,-` (no spaces, quotes, `$`, or `;`, which systemd would interpret) |
 | `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters) |
-| `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit |
+| `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit, except with `beforeLogin: true`, where it means 3600 s |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
@@ -1220,6 +1221,19 @@ Do not put secrets in `args` or `env`. They are written into the generated unit
 file, which is world-readable inside the image, and `args` are also visible in
 the process list. The composition manifest records `args` as written and only
 the names of the `env` variables, never their values.
+
+With `beforeLogin: true` the units are ordered before `systemd-user-sessions.service`
+instead of after `cloud-final.service`, so a script cannot rely on what cloud-init
+applies in its final stage (packages, `runcmd`); `cloud-config.service` still runs
+first. systemd shows "A start job is running for ICT provisioning script ..." on the
+console. A script whose `timeoutSec` is unset or 0 is limited to 3600 s so a hung
+script cannot lock the system out (a script cannot opt out of the limit in this mode); a failed or timed-out script releases the login and, if
+`first-boot`, is retried on the next boot. A layer that sets `beforeLogin` replaces
+the inherited value, so `beforeLogin: false` turns an inherited `true` off.
+
+The login block is `/run/nologin`, which `pam_nologin` and sshd do not apply to root,
+so root can still log in on the console, or over SSH where root login is permitted,
+while the scripts run. With `rebootAfter` such a session is cut off by the reboot.
 
 Scripts from every layer of an `extends` chain accumulate, and a script that
 reuses an inherited `name` replaces it as a whole, including its `args` and `env`,

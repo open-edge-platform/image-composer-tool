@@ -101,6 +101,7 @@ type CompositionScript struct {
 
 type CompositionProvisioner struct {
 	Scripts             []CompositionScript `json:"scripts,omitempty"`
+	BeforeLogin         bool                `json:"beforeLogin"`
 	CloudInit           bool                `json:"cloudInit"`
 	ProxyHosts          []string            `json:"proxyHosts,omitempty"`
 	UpgradeAllowedRepos []string            `json:"upgradeAllowedRepos,omitempty"`
@@ -140,6 +141,7 @@ func BuildCompositionManifest(t *config.ImageTemplate, baseRepos []config.Provid
 		Artifacts: artifacts,
 		Provisioning: CompositionProvisioner{
 			Scripts:             compositionScripts(t.SortedProvisioningScripts()),
+			BeforeLogin:         sc.Provisioning.RunsBeforeLogin(),
 			CloudInit:           sc.CloudInit.IsEnabled(),
 			ProxyHosts:          proxyHosts(sc.Proxy),
 			UpgradeAllowedRepos: sc.AptPolicy.UpgradeAllowedRepos,
