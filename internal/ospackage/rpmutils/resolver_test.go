@@ -1107,12 +1107,30 @@ func TestParseRepositoryMetadata_DoesNotReuseRawCacheAcrossHrefChange(t *testing
 	}
 }
 
-// A stale (version-mismatched) parsed cache whose MetadataURL matches fullURL is
-// trusted evidence that a legacy, baseURL-only-keyed raw cache (saved by a
+// A stale (version-mismatched) parsed cache that names fullURL, by its stored
+// URL or by its hashed metadata identity, is trusted evidence that a legacy, baseURL-only-keyed raw cache (saved by a
 // binary built before the fullURL key existed) belongs to this exact URL: it
 // must be reparsed offline instead of forcing a network fetch, then migrated to
 // the current key so future lookups don't need the legacy fallback.
 func TestParseRepositoryMetadata_MigratesLegacyRawCacheOffline(t *testing.T) {
+	staleCaches := map[string]func(fullURL string) string{
+		"stored URL": func(fullURL string) string {
+			return fmt.Sprintf(`{"version":%d,"metadata_url":%q,"packages":[{"PkgName":"stale-cached-package"}]}`,
+				rpmParsedMetadataCacheVersion-1, fullURL)
+		},
+		"hashed identity": func(fullURL string) string {
+			return fmt.Sprintf(`{"version":%d,"metadata_id":%q,"packages":[{"PkgName":"stale-cached-package"}]}`,
+				rpmParsedMetadataCacheVersion-1, rpmMetadataID(strings.TrimSuffix(fullURL, "primary.xml.gz"), "primary.xml.gz"))
+		},
+	}
+	for name, staleCache := range staleCaches {
+		t.Run(name, func(t *testing.T) {
+			testMigratesLegacyRawCacheOffline(t, staleCache)
+		})
+	}
+}
+
+func testMigratesLegacyRawCacheOffline(t *testing.T, staleCacheFor func(fullURL string) string) {
 	origCfg := config.Global()
 	updatedCfg := origCfg
 	updatedCfg.CacheDir = t.TempDir()
@@ -1141,8 +1159,7 @@ func TestParseRepositoryMetadata_MigratesLegacyRawCacheOffline(t *testing.T) {
 
 	// A stale (older-version) parsed cache confirming this legacy raw file was
 	// fetched for this exact fullURL.
-	staleCache := fmt.Sprintf(`{"version":%d,"metadata_url":%q,"packages":[{"PkgName":"stale-cached-package"}]}`,
-		rpmParsedMetadataCacheVersion-1, fullURL)
+	staleCache := staleCacheFor(fullURL)
 	if err := os.WriteFile(filepath.Join(cacheDir, "primary.parsed.json"), []byte(staleCache), 0600); err != nil {
 		t.Fatalf("seed stale cache: %v", err)
 	}
@@ -1665,6 +1682,45 @@ func TestRPMMetadataChecksumMismatchRejectsValidXMLCache(t *testing.T) {
 	}
 	if atomic.LoadInt32(&requestCount) == 0 {
 		t.Fatalf("expected online refresh attempt after checksum mismatch")
+	}
+}
+
+func TestRPMParsedCacheSourceMismatchUsesVerifiedRawMetadata(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	goodData := compressGzip(t, testPrimaryXML("bash"))
+	cacheDir := seedRPMRawMetadataCache(t, server.URL, primaryHref, goodData)
+	parsedFromOtherSource := rpmParsedMetadataCache{
+		Version:    rpmParsedMetadataCacheVersion,
+		MetadataID: rpmMetadataID(server.URL, primaryHref),
+		Primary:    primaryRefForData(primaryHref, compressGzip(t, testPrimaryXML("coreutils"))),
+		Packages:   []ospackage.PackageInfo{{Name: "coreutils", PkgName: "coreutils", Type: "rpm"}},
+	}
+	parsedData, err := json.Marshal(parsedFromOtherSource)
+	if err != nil {
+		t.Fatalf("failed to marshal parsed cache fixture: %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "primary.parsed.json"), parsedData, 0600); err != nil {
+		t.Fatalf("failed to write parsed cache fixture: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() should fall back to verified raw metadata: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want verified raw bash metadata", pkgs)
+	}
+	if atomic.LoadInt32(&requestCount) != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
 	}
 }
 
@@ -2755,5 +2811,43 @@ func TestFetchRPMRawMetadata_ErrorNamesNoArtifactWithoutCachePath(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "after an invalid cache artifact: ") || !strings.Contains(err.Error(), "(cache error: boom)") {
 		t.Fatalf("error = %q, want a clause without an empty artifact name and the cache error", err)
+	}
+}
+
+func TestRPMParsedCacheRejectsSizeOnlyReferenceChange(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	primaryHref := "repodata/primary.xml.gz"
+	data := compressGzip(t, testPrimaryXML("bash"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+
+	// repomd.xml publishes no checksum, only the current size of the primary file.
+	current := rpmPrimaryReference{Href: primaryHref, Size: int64(len(data))}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(current), 0644); err != nil {
+		t.Fatalf("failed to seed repomd cache: %v", err)
+	}
+	stale := rpmPrimaryReference{Href: primaryHref, Size: current.Size + 5}
+	stalePkgs := []ospackage.PackageInfo{{Name: "coreutils", PkgName: "coreutils", Type: "rpm"}}
+	if err := saveRPMParsedMetadataCache(filepath.Join(cacheDir, "primary.parsed.json"), rpmMetadataID(server.URL, primaryHref), stale, stalePkgs); err != nil {
+		t.Fatalf("failed to seed parsed cache: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() error = %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash re-parsed from the current primary file, not the stale parsed index", pkgs)
 	}
 }
