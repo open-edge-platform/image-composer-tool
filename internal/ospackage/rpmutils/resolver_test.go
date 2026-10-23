@@ -536,6 +536,33 @@ func compressGzip(t *testing.T, content string) []byte {
 	return buf.Bytes()
 }
 
+// setRPMMetadataTestCache points the process-wide config at a temporary cache
+// directory, so tests using it must not run in parallel.
+func setRPMMetadataTestCache(t *testing.T) string {
+	t.Helper()
+
+	origCfg := config.Global()
+	updatedCfg := *origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(&updatedCfg)
+	t.Cleanup(func() { config.SetGlobal(origCfg) })
+
+	return updatedCfg.CacheDir
+}
+
+func testRepomdWithPrimary(primary rpmPrimaryReference) []byte {
+	checksum := ""
+	if primary.Checksum != "" {
+		checksum = fmt.Sprintf("\n    <checksum type=\"%s\">%s</checksum>", primary.ChecksumType, primary.Checksum)
+	}
+	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo">
+  <data type="primary">
+    <location href="%s"/>%s
+  </data>
+</repomd>`, primary.Href, checksum))
+}
+
 // TestMatchRequestedAdvanced tests advanced scenarios for MatchRequested function
 func TestMatchRequestedAdvanced(t *testing.T) {
 	testPackages := []ospackage.PackageInfo{
@@ -1216,7 +1243,76 @@ func TestFetchPrimaryURL_UsesCachedRepomdWhenPrimaryLocationMissing(t *testing.T
 	}
 }
 
-func TestRedactURLForLog(t *testing.T) {
+func TestFetchPrimaryURL_DoesNotCacheMalformedRepomd(t *testing.T) {
+	tests := []struct {
+		name   string
+		repomd string
+	}{
+		{name: "truncated inside primary entry", repomd: `<repomd><data type="primary">`},
+		{
+			name:   "truncated after primary entry",
+			repomd: `<repomd><data type="primary"><location href="repodata/primary.xml.gz"/></data><data type="filelists">`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRPMMetadataTestCache(t)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tt.repomd))
+			}))
+			defer server.Close()
+
+			_, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+			if err == nil {
+				t.Fatalf("expected malformed repomd fetch to fail")
+			}
+
+			cacheDir, err := rpmMetadataCacheDir(server.URL)
+			if err != nil {
+				t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(cacheDir, "repomd.xml")); !os.IsNotExist(statErr) {
+				t.Fatalf("malformed repomd.xml was published to stable cache, stat error: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestFetchPrimaryURL_PrefersStableRepomdOverStaleLocationCache(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	newPrimary := rpmPrimaryReference{Href: "repodata/new-primary.xml.gz"}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(newPrimary), 0644); err != nil {
+		t.Fatalf("failed to seed stable repomd cache: %v", err)
+	}
+	oldPrimary := rpmPrimaryReference{Href: "repodata/old-primary.xml.gz"}
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), oldPrimary.Href); err != nil {
+		t.Fatalf("failed to seed stale primary location cache: %v", err)
+	}
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL() should use stable repomd cache: %v", err)
+	}
+	if href != newPrimary.Href {
+		t.Fatalf("FetchPrimaryURL() href = %q, want stable repomd href %q", href, newPrimary.Href)
+	}
+}
+
+func TestRPMMetadataCacheDoesNotPersistOrFormatCredentials(t *testing.T) {
 	redacted := redactURLForLog("https://user:secret-token@example.invalid/repo?token=abc123#frag")
 	for _, secret := range []string{"user", "secret-token", "token=abc123", "frag"} {
 		if strings.Contains(redacted, secret) {
@@ -1512,5 +1608,22 @@ func TestExtractPrimaryReference_ReadsWholeChecksumText(t *testing.T) {
 				t.Fatalf("href = %q, want %q", got.Href, "repodata/primary.xml.gz")
 			}
 		})
+	}
+}
+
+func TestWriteFileAtomic_ReportsDirectorySyncFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not restrict root")
+	}
+
+	dir := filepath.Join(t.TempDir(), "write-only")
+	if err := os.Mkdir(dir, 0300); err != nil {
+		t.Fatalf("failed to create write-only directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+
+	err := writeFileAtomic(filepath.Join(dir, "repomd.xml"), []byte("data"), 0644)
+	if err == nil || !strings.Contains(err.Error(), "replaced but opening its directory") {
+		t.Fatalf("writeFileAtomic() error = %v, want directory open failure", err)
 	}
 }
