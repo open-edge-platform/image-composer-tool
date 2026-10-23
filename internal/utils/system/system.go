@@ -2,7 +2,9 @@ package system
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,6 +134,21 @@ func StopGPGComponents(chrootPath string) error {
 	if !shell.IsBashAvailable(chrootPath) {
 		log.Debugf("Bash not available in chroot environment, skipping GPG components stop")
 		return nil
+	}
+
+	// gpgconf aborts with "Fatal: failed to open '/dev/null'" if the chroot's
+	// /dev bind mount has already been torn down (for example when an earlier
+	// StopGPGComponents call ran under a live /dev and the success path then
+	// unmounted the chroot's system mounts, which include /dev). Treat that as an
+	// idempotent no-op instead of failing the whole cleanup.
+	if chrootPath != shell.HostPath {
+		if _, err := os.Stat(filepath.Join(chrootPath, "dev", "null")); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("failed to check /dev/null in chroot environment %s: %w", chrootPath, err)
+			}
+			log.Debugf("/dev/null not available in chroot environment %s, skipping GPG components stop", chrootPath)
+			return nil
+		}
 	}
 
 	cmdExist, err := shell.IsCommandExist("gpgconf", chrootPath)
