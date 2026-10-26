@@ -30,3 +30,8 @@ block dangerous git commands, flag `gofmt` drift / invalid templates after
 edits, and ask before `git push` when the branch diff vs `main` exceeds ~500
 LOC. Don't add logic directly in `.claude/settings.json` — extend the shared
 scripts instead so GHCP and Claude Code can't drift apart.
+
+Copilot also reads `.claude/settings.json` but doesn't set
+`$CLAUDE_PROJECT_DIR`, so keep each entry's `[ -z "$CLAUDE_PROJECT_DIR" ] ||`
+guard: without it Copilot would run every hook twice, and the unresolved
+script path would make its `preToolUse` hook fail, which denies the tool call.
