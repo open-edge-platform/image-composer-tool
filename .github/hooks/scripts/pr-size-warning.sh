@@ -7,6 +7,12 @@ set -euo pipefail
 LOC_THRESHOLD=500
 
 input="$(cat)"
+if ! command -v jq >/dev/null 2>&1; then
+  if [[ "$input" == *"git push"* ]]; then
+    echo '{"systemMessage":"PR size check skipped: jq is not installed."}'
+  fi
+  exit 0
+fi
 command_text="$(jq -r '.tool_input.command // .command // empty' <<<"$input" 2>/dev/null || true)"
 
 if [[ -z "$command_text" || "$command_text" != *"git push"* ]]; then
