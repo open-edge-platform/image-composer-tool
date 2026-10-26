@@ -1,28 +1,38 @@
 #!/usr/bin/env bash
 # PreToolUse hook: denies git/shell commands that bypass repo safety gates.
+# Only emits a decision on deny; otherwise exits silently so the normal
+# permission flow (user approval) still applies — "allow" would auto-approve.
 set -euo pipefail
 
 input="$(cat)"
 command_text="$(jq -r '.tool_input.command // .command // empty' <<<"$input" 2>/dev/null || true)"
-
 if [[ -z "$command_text" ]]; then
-  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 fi
 
-deny_reason=""
-if [[ "$command_text" == *"push"* && "$command_text" =~ (^|[[:space:]])(--force|--force-with-lease|-f)([[:space:]=]|$) ]]; then
-  deny_reason="git push --force is not allowed; see copilot-instructions.md Git Commits & PRs"
-elif [[ "$command_text" == *"--no-verify"* ]]; then
-  deny_reason="--no-verify bypasses commit/push hooks and is not allowed"
-elif [[ "$command_text" =~ reset[[:space:]]+--hard ]]; then
-  deny_reason="git reset --hard is destructive; confirm with the user before running manually"
-fi
-
-if [[ -n "$deny_reason" ]]; then
-  jq -n --arg reason "$deny_reason" \
+deny() {
+  jq -n --arg reason "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
   exit 0
-fi
+}
 
-echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+# Check each command of a chain separately so a flag from one command
+# (e.g. `rm -f x && git push`) isn't attributed to another.
+segments="${command_text//&&/$'\n'}"
+segments="${segments//||/$'\n'}"
+segments="${segments//;/$'\n'}"
+segments="${segments//|/$'\n'}"
+
+while IFS= read -r seg; do
+  if [[ "$seg" =~ (^|[[:space:]])git[[:space:]](.*[[:space:]])?push([[:space:]]|$) ]] &&
+    [[ "$seg" =~ [[:space:]](--force|--force-with-lease|-f)([[:space:]=]|$) || "$seg" =~ [[:space:]]\+[^[:space:]] ]]; then
+    deny "git push --force (or a +refspec) is not allowed; see copilot-instructions.md Git Commits & PRs"
+  fi
+  if [[ "$seg" == *"--no-verify"* ]] ||
+    [[ "$seg" =~ (^|[[:space:]])git[[:space:]](.*[[:space:]])?commit[[:space:]](.*[[:space:]])?-n([[:space:]]|$) ]]; then
+    deny "--no-verify (git commit -n) bypasses commit/push hooks and is not allowed"
+  fi
+  if [[ "$seg" =~ (^|[[:space:]])git[[:space:]](.*[[:space:]])?reset[[:space:]](.*[[:space:]])?--hard([[:space:]]|$) ]]; then
+    deny "git reset --hard is destructive; confirm with the user before running manually"
+  fi
+done <<<"$segments"

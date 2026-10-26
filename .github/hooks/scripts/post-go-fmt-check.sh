@@ -14,6 +14,7 @@ fi
 
 fmt_diff="$(gofmt -l "$file_path" 2>/dev/null || true)"
 if [[ -n "$fmt_diff" ]]; then
+  # systemMessage is shown to the user; additionalContext is fed back to the agent.
   jq -n --arg msg "gofmt would reformat $file_path — run 'gofmt -w $file_path'." \
-    '{systemMessage:$msg}'
+    '{systemMessage:$msg,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$msg}}'
 fi
