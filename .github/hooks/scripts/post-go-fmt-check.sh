@@ -3,6 +3,10 @@
 set -euo pipefail
 
 input="$(cat)"
+if ! command -v jq >/dev/null 2>&1; then
+  echo '{"systemMessage":"gofmt check hook skipped: jq is not installed."}'
+  exit 0
+fi
 file_path="$(jq -r '.tool_input.filePath // .tool_input.path // empty' <<<"$input" 2>/dev/null || true)"
 
 if [[ -z "$file_path" || "$file_path" != *.go ]]; then

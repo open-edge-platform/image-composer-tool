@@ -230,7 +230,7 @@ This single file is loaded into every chat. Keep it lean — path-specific and w
   - [web.instructions.md](instructions/web.instructions.md) — `applyTo: "web/**"`
 - **`.github/prompts/*.prompt.md`** — Reusable task prompts. Existing:
   - [add-os-provider.prompt.md](prompts/add-os-provider.prompt.md)
-- **`.github/hooks/*.json`** — Deterministic lifecycle hooks (not just guidance). Existing:
+- **`.github/hooks/*.json`** — Deterministic lifecycle hooks (not just guidance); the scripts require `jq`. Existing:
   - [block-dangerous-git.json](hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
   - [post-edit-checks.json](hooks/post-edit-checks.json) — flags `gofmt` drift on edited `.go` files and schema-validates edited `image-templates/**/*.yml`
 - **`.github/agents/*.agent.md`** — Custom agent personas with restricted tool sets, selectable from the agent picker or delegated to as subagents. Existing:

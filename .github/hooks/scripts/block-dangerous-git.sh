@@ -5,6 +5,14 @@
 set -euo pipefail
 
 input="$(cat)"
+# Without jq the payload can't be parsed; ask on anything git-related rather
+# than silently letting it through.
+if ! command -v jq >/dev/null 2>&1; then
+  if [[ "$input" == *"git "* ]]; then
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"jq is not installed, so the git safety hook cannot inspect this command. Install jq."}}'
+  fi
+  exit 0
+fi
 command_text="$(jq -r '.tool_input.command // .command // empty' <<<"$input" 2>/dev/null || true)"
 if [[ -z "$command_text" ]]; then
   exit 0
