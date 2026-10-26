@@ -30,4 +30,3 @@ block dangerous git commands, flag `gofmt` drift / invalid templates after
 edits, and ask before `git push` when the branch diff vs `main` exceeds ~500
 LOC. Don't add logic directly in `.claude/settings.json` — extend the shared
 scripts instead so GHCP and Claude Code can't drift apart.
-
