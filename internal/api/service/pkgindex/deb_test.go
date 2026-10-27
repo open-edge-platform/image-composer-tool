@@ -129,6 +129,12 @@ func TestParseDebIndex(t *testing.T) {
 			want: []Entry{{Name: "ubuntu-desktop", Description: "d", Depends: []string{"a", "b", "c"}}},
 		},
 		{
+			// A tab is as valid a separator before a qualifier as a space.
+			name: "tab before qualifier",
+			body: "Package: m\nSection: metapackages\nDepends: alpha\t(>= 1.0), beta\t[amd64]\n",
+			want: []Entry{{Name: "m", Depends: []string{"alpha", "beta"}}},
+		},
+		{
 			// Ordinary packages' dependency lists are not kept.
 			name: "non-metapackage depends dropped",
 			body: "Package: bash\nSection: shells\nDepends: libc6, base-files\n",

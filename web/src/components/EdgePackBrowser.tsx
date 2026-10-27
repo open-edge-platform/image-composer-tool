@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react'
-import { useStore } from '../store'
+import { useStore, type AddedPackage } from '../store'
 import type {
   EdgePack,
   EdgePackBaseRuntime,
@@ -461,7 +461,11 @@ function BaseRuntimeSelector({
             isEffectivelySelected(r.package.name, addedPackages, baseLock),
         )
         .map((r) => (
-          <IncludedPackages key={r.id} runtime={r} />
+          <IncludedPackages
+            key={r.id}
+            runtime={r}
+            pinnedVersion={pinnedVersionOf(r.package.name, addedPackages, baseLock)}
+          />
         ))}
             {/* Stated rather than left to be inferred from the greyed-out domains —
           a locked control with no reason reads as a broken one. */}
@@ -599,10 +603,22 @@ function DomainCard({
 // material, and the domain grid below is what the user came here to act on.
 // The rows mirror the repository browser's (checked, disabled checkbox; name,
 // version, description) so they read as packages in the image, not as choices.
-function IncludedPackages({ runtime }: { runtime: EdgePackBaseRuntime }) {
+function IncludedPackages({
+  runtime,
+  pinnedVersion,
+}: {
+  runtime: EdgePackBaseRuntime
+  pinnedVersion?: string
+}) {
   const [open, setOpen] = useState(false)
   const includes = runtime.includes ?? []
   const count = countIncluded(includes)
+  // The server resolves the tree from the newest version of the runtime
+  // package, which is package.version. A pin to any other version may pull in
+  // a different set, so the list is labelled as the newest version's rather
+  // than presented as what this image will install.
+  const latest = runtime.package.version
+  const pinMismatch = pinnedVersion !== undefined && latest !== undefined && pinnedVersion !== latest
   return (
     <div className="mt-2.5">
       <button
@@ -622,6 +638,12 @@ function IncludedPackages({ runtime }: { runtime: EdgePackBaseRuntime }) {
             Installed by {runtime.package.name} itself — these cannot be removed
             individually.
           </p>
+          {pinMismatch && (
+            <p className="mt-1 text-[11px] text-amber-700">
+              Shown for {runtime.package.name} {latest}, the newest version. {runtime.displayName} is
+              pinned to {pinnedVersion}, which may include a different set.
+            </p>
+          )}
           <div
             role="list"
             aria-label={`Packages included with ${runtime.displayName}`}
@@ -635,6 +657,17 @@ function IncludedPackages({ runtime }: { runtime: EdgePackBaseRuntime }) {
       )}
     </div>
   )
+}
+
+// pinnedVersionOf is the version a runtime package is pinned to: the user's own
+// pick when it names a version, else the matched template's pinned entry.
+// undefined means unpinned ("latest"), which is what the included list is
+// resolved from.
+function pinnedVersionOf(name: string, addedPackages: AddedPackage[], baseLock: BaseLock) {
+  const picked = addedPackages.find((p) => p.name === name)
+  if (picked) return picked.version || undefined
+  const lock = baseLock.info(name)
+  return lock.locked && !lock.currentIsFloating ? lock.currentVersion : undefined
 }
 
 // countIncluded is the number of distinct package names anywhere in the tree,

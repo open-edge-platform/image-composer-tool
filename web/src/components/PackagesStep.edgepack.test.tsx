@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EdgePack } from '../api/types'
 import { PackagesStep } from './PackagesStep'
+import { useStore } from '../store'
 
 const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
@@ -34,6 +35,7 @@ const advance = (ms: number) =>
 const mediaCard = () => screen.queryByRole('button', { expanded: false, name: /Media/ })
 
 beforeEach(() => {
+  useStore.setState({ addedPackages: [], enabledRepos: [] })
   vi.useFakeTimers()
   vi.resetAllMocks()
   mockApi.listPackageRepos.mockResolvedValue({
@@ -145,6 +147,27 @@ describe('PackagesStep Edge Pack', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand gfx-core' }))
     expect(screen.getByRole('checkbox', { name: 'libmesa' })).toBeTruthy()
     expect(screen.getByText('7.0')).toBeTruthy()
+  })
+
+  it('labels the included list when the runtime is pinned to another version', async () => {
+    const p = pack('7.1')
+    p.baseRuntimes[0].package.version = '1.1'
+    p.baseRuntimes[0].includes = [{ name: 'gfx-core' }]
+    mockApi.getEdgePack.mockResolvedValue(p)
+
+    render(<PackagesStep os="ubuntu24" active basePackages={[]} />)
+    await advance(0)
+    act(() => {
+      useStore.getState().setPackage({ name: 'base-standard', version: '1.0', repo: 'intel-eci' })
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Included with Standard/ }))
+    expect(screen.getByText(/pinned to 1\.0, which may include a different set/)).toBeTruthy()
+
+    // Pinned to the newest version, or unpinned, the list is exact — no note.
+    act(() => {
+      useStore.getState().setPackage({ name: 'base-standard', version: '1.1', repo: 'intel-eci' })
+    })
+    expect(screen.queryByText(/which may include a different set/)).toBeNull()
   })
 
   it('reports Edge Pack unavailable when the first request fails', async () => {

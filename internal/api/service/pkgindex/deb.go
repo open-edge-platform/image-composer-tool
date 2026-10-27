@@ -221,12 +221,13 @@ func isMetapackageSection(section string) bool {
 // parseDebDepends reduces a Depends value to package names: each comma-
 // separated clause keeps its first alternative, minus any version constraint
 // "(>= 1.0)", architecture qualifier ":any" or restriction "[amd64]".
+// Any whitespace may separate a name from its qualifiers, tabs included.
 func parseDebDepends(raw string) []string {
 	var out []string
 	for _, clause := range strings.Split(raw, ",") {
 		first, _, _ := strings.Cut(clause, "|")
 		name := strings.TrimSpace(first)
-		if i := strings.IndexAny(name, " ([<"); i >= 0 {
+		if i := strings.IndexAny(name, " \t([<"); i >= 0 {
 			name = name[:i]
 		}
 		name, _, _ = strings.Cut(name, ":")
