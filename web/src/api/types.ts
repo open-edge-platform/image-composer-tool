@@ -137,6 +137,35 @@ export interface ComposeSummary {
   partitionTable: string
   hostname: string
   baseImage?: string
+  // What the Advanced tab changed relative to the matched template. Absent
+  // when nothing was overridden.
+  advanced?: AdvancedChanges
+}
+
+export interface AdvancedChanges {
+  imageName?: string
+  // Added packages; a `name_version` entry is a pinned version.
+  packages?: string[]
+  repos?: string[]
+  disk?: DiskChangeSummary
+  // Accounts created that the template does not declare.
+  newUsers?: string[]
+  // Template accounts a login was supplied for (names only, never secrets).
+  credentialsFor?: string[]
+}
+
+export interface DiskChangeSummary {
+  size?: string
+  partitionTable?: string
+  partitions?: DiskPartitionSummary[]
+}
+
+export interface DiskPartitionSummary {
+  id?: string
+  fsType?: string
+  mountPoint?: string
+  start?: string
+  end?: string
 }
 
 export interface ComposeResponse {

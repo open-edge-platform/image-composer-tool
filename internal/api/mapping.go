@@ -388,7 +388,39 @@ func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 		PartitionTable: s.PartitionTable,
 		Hostname:       s.Hostname,
 		BaseImage:      optStr(s.BaseImage),
+
+		Advanced: fromAdvancedChanges(s.Advanced),
 	}
+}
+
+func fromAdvancedChanges(a *service.AdvancedChanges) *httpapi.AdvancedChanges {
+	if a == nil {
+		return nil
+	}
+	out := &httpapi.AdvancedChanges{
+		ImageName:      optStr(a.ImageName),
+		Packages:       optStrs(a.Packages),
+		Repos:          optStrs(a.Repos),
+		NewUsers:       optStrs(a.NewUsers),
+		CredentialsFor: optStrs(a.CredentialsFor),
+	}
+	if d := a.Disk; d != nil {
+		parts := make([]httpapi.DiskPartitionSummary, len(d.Partitions))
+		for i, p := range d.Partitions {
+			parts[i] = httpapi.DiskPartitionSummary{
+				Id: optStr(p.ID), FsType: optStr(p.FsType), MountPoint: optStr(p.MountPoint),
+				Start: optStr(p.Start), End: optStr(p.End),
+			}
+		}
+		out.Disk = &httpapi.DiskChangeSummary{
+			Size:           optStr(d.Size),
+			PartitionTable: optStr(d.PartitionTable),
+		}
+		if len(parts) > 0 {
+			out.Disk.Partitions = &parts
+		}
+	}
+	return out
 }
 
 // fromComposeResult maps the compose outcome onto the contract type. deltaYaml
