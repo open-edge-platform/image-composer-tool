@@ -43,6 +43,7 @@ Prefer **Earthly** (used by CI). Fall back to plain Go if Earthly is unavailable
 | Test (fast) | `earthly +test-quick` | `go test ./...` |
 | Test (coverage) | `earthly +test` | `go test -coverprofile=coverage.out ./...` |
 | Lint | `earthly +lint` | `golangci-lint run` |
+| ICT image (CLI + web UI + toolchain) | `earthly +ict-image` | `docker compose build` |
 
 Coverage threshold lives in `.coverage-threshold` and auto-ratchets.
 
