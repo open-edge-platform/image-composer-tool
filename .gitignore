@@ -1,5 +1,9 @@
 # ignore build artifacts, cache files, and temporary files
 build/
+# ...except the ICT image definition, which lives under the root build/.
+!/build/
+/build/*
+!/build/ict/
 downloads/
 builds/
 benchmark-logs/
