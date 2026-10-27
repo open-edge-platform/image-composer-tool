@@ -226,6 +226,13 @@ archives, generated content, or other non-DEB artifacts. It also does not infer
 such content from the selected profile. Consumers must not interpret the ICT
 SBOM as a complete inventory of the system after first-boot installation.
 
+Debian packages that a profile delivers as direct download URLs, rather than
+through an apt repository, are an exception to installing Debian packages
+before first boot. ICT does not duplicate the installer's download logic for
+them, so `oep-installer` installs them at first boot, and they are not in the
+ICT-generated SBOM. Once such a package is published to an apt repository,
+the profile can list it by name and ICT installs it during composition.
+
 ## Consequences
 
 ### Benefits

@@ -146,9 +146,9 @@ ICT handles `pkg-list` entries as follows:
 
 | Entry | ICT behavior |
 | --- | --- |
-| Package name or `name=version` | Resolved from the template's repositories plus the repositories in the output, and installed. A package that no configured repository provides fails the build. |
-| Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories, taking the newest version of each. A glob that matches nothing fails the build. |
-| `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot. |
+| Package name or `name=version` | Resolved from the template's repositories plus the repositories in the output, and installed. A package that no configured repository provides fails the build. Two `name=version` entries for the same package with different versions fail the build. |
+| Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: repository priority first (including `Pin: origin` priorities from the output), then the newest version. A glob that matches nothing fails the build. |
+| `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
 | Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Skipped with a warning. The image template selects the kernel. |
 
 #### Repository group
@@ -280,9 +280,13 @@ is online, as the template-defined user:
 openedge-cli install <profile> [<template-provided arguments>...]
 ```
 
-- **Sudo.** ICT gives the user passwordless sudo while the unit runs and
-  removes it once the installation succeeds, so `ensure_sudo` takes its
-  `sudo -n` path.
+- **Sudo.** ICT gives the user passwordless sudo only while the unit runs,
+  so `ensure_sudo` takes its `sudo -n` path. The grant is a separate
+  `/etc/sudoers.d/` drop-in and does not change any sudo rights the user
+  already has. The unit adds it at the start of each attempt and removes it
+  whenever the attempt ends, on success or failure, including when the unit
+  is stopped for a reboot. A `tmpfiles.d` rule also deletes it early in every
+  boot, so a power loss or crash cannot leave it in place.
 - **Proxy.** The unit inherits the image's proxy settings (`http_proxy`,
   `https_proxy`, `no_proxy`).
 - **Retries and reboots.** The unit runs on every boot until the command exits
