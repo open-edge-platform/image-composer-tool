@@ -32,6 +32,9 @@ keeps its key names. The changes requested from `openedge-cli` are:
 5. For packages pinned with `Pin: version`, also list the exact version in
    `pkg-list` (A.6). The first profile, `handheld_multi_modal`, has no such
    pins.
+6. Validate the `list --sbom` output of every profile against the JSON Schema
+   in the appendix, ideally in CI. This catches problems like item 4 before
+   ICT sees them.
 
 The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 
@@ -216,7 +219,38 @@ They MUST be `apt-source` and `apt-list-file`.
 ---
 ```
 
-### A.8 Open questions for the OEP Installer team
+### A.8 How ICT processes the output
+
+ICT runs the query on the build host before it resolves packages:
+
+1. **Run.** ICT downloads the pinned `openedge-cli`, verifies its SHA-256,
+   generates the target `os-release` file (A.1), and runs the query. A
+   non-zero exit fails the build and shows stderr.
+2. **Parse and validate.** ICT reads the YAML stream and checks that:
+   - the header's `schema-version` is supported and its `profile` is the one
+     requested
+   - every document matches the JSON Schema in the appendix
+   - the rules the schema cannot express hold: `signed-by` in `apt-source`
+     equals `key-file`, and every non-URL, non-kernel `pkg-list` entry
+     resolves from a configured repository
+
+   Any failure stops the build with an error naming the failing document.
+3. **Convert packages.** `pkg-list` entries are added to the image's package
+   list as described in A.6: names and globs as given, `name=version`
+   converted to ICT's `name_version` form, URLs and kernel packages skipped,
+   duplicates removed.
+4. **Convert repositories.** Each repository group becomes an ICT package
+   repository used for resolution: URL, suite, and component from
+   `apt-source`, the key from `gpg-key`, and the priority from a
+   `Package: *` / `Pin: origin` stanza in `apt-pref`, if present. For the
+   image, ICT writes `apt-list-file`, `key-file`, and `apt-pref-file` at the
+   installer's paths (A.6) instead of its own generated repository files. If
+   the template already defines a repository with the same URL and suite,
+   the entry from the output replaces it.
+5. **Compose.** ICT resolves the complete dependency set, installs it, and
+   records it in the image SBOM, as for any other template packages.
+
+### A.9 Open questions for the OEP Installer team
 
 1. **Install options.** The EdgePack module installs with
    `--no-install-recommends` and allows downgrades of a fixed package list.
