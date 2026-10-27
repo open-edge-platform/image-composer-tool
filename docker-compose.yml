@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Run the ICT web UI in a container. The host needs only Docker:
+#
+#   docker compose up --build      # then open http://127.0.0.1:8080
+#
+# SECURITY: the service runs privileged with the host's /dev mounted, because
+# image builds create loop devices, mount filesystems and chroot. A privileged
+# container is root-equivalent on the host, and the web UI has no
+# authentication: anyone who can reach the port can run builds as root on this
+# machine. The port is therefore published on 127.0.0.1 only.
+
+services:
+  ict:
+    build:
+      context: .
+      dockerfile: build/ict/Dockerfile
+      target: ict
+      # Proxy settings are passed through only when set on the host.
+      args:
+        - http_proxy
+        - https_proxy
+        - no_proxy
+        - HTTP_PROXY
+        - HTTPS_PROXY
+        - NO_PROXY
+    command: image-composer-tool serve --host 0.0.0.0
+    privileged: true
+    # Reaps helper processes a build leaves orphaned (for example gpg-agent).
+    init: true
+    # On SIGTERM, serve cancels a running build and waits for its teardown
+    # (unmount, loop-device detach). Docker's default 10s would cut that short
+    # and leave mounts and loop devices behind on the host.
+    stop_grace_period: 60s
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - http_proxy
+      - https_proxy
+      - no_proxy
+      - HTTP_PROXY
+      - HTTPS_PROXY
+      - NO_PROXY
+    volumes:
+      - /dev:/dev
+      # Build history, per-build work directories and artifacts.
+      - webui-workspace:/opt/ict/webui-workspace
+      # Package cache for CLI builds run in the container (cache_dir).
+      - cache:/opt/ict/cache
+
+volumes:
+  webui-workspace:
+  cache:
