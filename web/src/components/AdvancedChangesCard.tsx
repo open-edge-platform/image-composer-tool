@@ -9,13 +9,16 @@ import type { AdvancedChanges } from '../api/types'
 export function AdvancedChangesCard({
   changes,
   defaultOpen = false,
+  frame = 'rounded bg-white p-3 shadow-sm',
 }: {
   changes: AdvancedChanges
   defaultOpen?: boolean
+  // Border/background/padding, so the card can match the panels around it.
+  frame?: string
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="rounded bg-white p-3 shadow-sm">
+    <div className={`${frame} text-xs`}>
       <button
         type="button"
         className="flex w-full items-center gap-1.5 text-left"

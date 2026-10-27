@@ -432,7 +432,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                     by item — open here, since reviewing it is the point. */}
                 {composed.summary.advanced && (
                   <div className="mb-4">
-                    <AdvancedChangesCard changes={composed.summary.advanced} defaultOpen />
+                    <AdvancedChangesCard
+                      changes={composed.summary.advanced}
+                      defaultOpen
+                      frame="rounded-lg border border-slate-200 bg-white p-4"
+                    />
                   </div>
                 )}
 
