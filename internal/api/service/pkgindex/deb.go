@@ -122,14 +122,14 @@ func verifyDebRelease(ctx context.Context, client *http.Client, r Repo, base, in
 	return nil
 }
 
-// parseDebIndex reads RFC822 stanzas, keeping only the four fields the picker
-// shows. Continuation lines — the indented body of a Description, and the
-// multi-line Depends some repositories emit — are skipped, so the long
-// description never reaches the heap.
+// parseDebIndex reads RFC822 stanzas, keeping only the fields the picker
+// shows, plus Depends for metapackages (see Entry.Depends). Continuation lines
+// are skipped — the indented body of a Description never reaches the heap —
+// except under Depends, which some repositories wrap across several lines.
 func parseDebIndex(r io.Reader) ([]Entry, error) {
 	var (
 		entries []Entry
-		cur     Entry
+		cur     debStanza
 		sc      = bufio.NewScanner(r)
 	)
 	sc.Buffer(make([]byte, 0, 64*1024), maxDebLine)
@@ -139,45 +139,100 @@ func parseDebIndex(r io.Reader) ([]Entry, error) {
 		switch {
 		case line == "":
 			// A blank line ends the stanza.
-			if cur.Name != "" {
-				entries = append(entries, cur)
+			if e, ok := cur.entry(); ok {
+				entries = append(entries, e)
 			}
-			cur = Entry{}
+			cur = debStanza{}
 		case line[0] == ' ' || line[0] == '\t':
-			// Continuation of the previous field; nothing here needs it.
+			// Continuation of the previous field; only Depends needs it.
+			if cur.field == "Depends" {
+				cur.depends += " " + strings.TrimSpace(line)
+			}
 		default:
-			applyDebField(&cur, line)
+			cur.apply(line)
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
 	// A file whose last stanza is not followed by a blank line still has one.
-	if cur.Name != "" {
-		entries = append(entries, cur)
+	if e, ok := cur.entry(); ok {
+		entries = append(entries, e)
 	}
 	return entries, nil
 }
 
-// applyDebField assigns one "Key: value" line to the stanza under construction.
-func applyDebField(e *Entry, line string) {
+// debStanza is one stanza under construction. Section and the raw Depends are
+// held here rather than on Entry because whether Depends is kept depends on
+// Section, and the two may arrive in either order.
+type debStanza struct {
+	Entry
+	section string
+	depends string
+	field   string // the most recent field name, for continuation lines
+}
+
+// entry finishes the stanza, reporting false for one with no Package field.
+func (s *debStanza) entry() (Entry, bool) {
+	if s.Name == "" {
+		return Entry{}, false
+	}
+	e := s.Entry
+	if isMetapackageSection(s.section) {
+		e.Depends = parseDebDepends(s.depends)
+	}
+	return e, true
+}
+
+// apply assigns one "Key: value" line to the stanza under construction.
+func (s *debStanza) apply(line string) {
 	name, value, ok := strings.Cut(line, ":")
 	if !ok {
 		return
 	}
+	s.field = name
 	value = strings.TrimSpace(value)
 	switch name {
 	case "Package":
-		e.Name = value
+		s.Name = value
 	case "Version":
-		e.Version = value
+		s.Version = value
 	case "Architecture":
-		e.Arch = value
+		s.Arch = value
+	case "Section":
+		s.section = value
+	case "Depends":
+		s.depends = value
 	case "Description":
 		// Only the synopsis. A stanza may also carry Description-en, which is
 		// not matched here, so the plain field always wins.
-		if e.Description == "" {
-			e.Description = value
+		if s.Description == "" {
+			s.Description = value
 		}
 	}
+}
+
+// isMetapackageSection matches both the bare section and the archive-area
+// prefixed form Ubuntu uses for non-main components ("universe/metapackages").
+func isMetapackageSection(section string) bool {
+	return section == "metapackages" || strings.HasSuffix(section, "/metapackages")
+}
+
+// parseDebDepends reduces a Depends value to package names: each comma-
+// separated clause keeps its first alternative, minus any version constraint
+// "(>= 1.0)", architecture qualifier ":any" or restriction "[amd64]".
+func parseDebDepends(raw string) []string {
+	var out []string
+	for _, clause := range strings.Split(raw, ",") {
+		first, _, _ := strings.Cut(clause, "|")
+		name := strings.TrimSpace(first)
+		if i := strings.IndexAny(name, " ([<"); i >= 0 {
+			name = name[:i]
+		}
+		name, _, _ = strings.Cut(name, ":")
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }

@@ -7,6 +7,7 @@ import type {
   EdgePack,
   EdgePackBaseRuntime,
   EdgePackDomain,
+  EdgePackIncludedPackage,
   EdgePackPackage,
 } from '../api/types'
 import {
@@ -448,7 +449,21 @@ function BaseRuntimeSelector({
           the base runtime pulls in are published.
         </p>
       )}
-      {/* Stated rather than left to be inferred from the greyed-out domains —
+      {/* What the chosen runtime installs on its own, so the user can see it
+          without being able to untick it — the metapackage pulls these in
+          whatever this tab says. Only for a runtime that is actually chosen:
+          listing an unchosen one's contents would read as already selected. */}
+      {pack.baseRuntimes
+        .filter(
+          (r) =>
+            r.includes &&
+            r.includes.length > 0 &&
+            isEffectivelySelected(r.package.name, addedPackages, baseLock),
+        )
+        .map((r) => (
+          <IncludedPackages key={r.id} runtime={r} />
+        ))}
+            {/* Stated rather than left to be inferred from the greyed-out domains —
           a locked control with no reason reads as a broken one. */}
       {!anySelected && (
         <p className="mt-1.5 text-[12px] text-amber-700">
@@ -575,6 +590,120 @@ function DomainCard({
       >
         {count}
       </div>
+    </div>
+  )
+}
+
+// IncludedPackages is the collapsible, read-only list of what a chosen base
+// runtime installs by dependency. Collapsed by default: it is reference
+// material, and the domain grid below is what the user came here to act on.
+// The rows mirror the repository browser's (checked, disabled checkbox; name,
+// version, description) so they read as packages in the image, not as choices.
+function IncludedPackages({ runtime }: { runtime: EdgePackBaseRuntime }) {
+  const [open, setOpen] = useState(false)
+  const includes = runtime.includes ?? []
+  const count = countIncluded(includes)
+  return (
+    <div className="mt-2.5">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-[12px] font-semibold text-[#0071c5] hover:underline"
+      >
+        <span aria-hidden className={'inline-block transition-transform ' + (open ? 'rotate-90' : '')}>
+          ▸
+        </span>
+        Included with {runtime.displayName} ({count} package{count === 1 ? '' : 's'})
+      </button>
+      {open && (
+        <>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Installed by {runtime.package.name} itself — these cannot be removed
+            individually.
+          </p>
+          <div
+            role="list"
+            aria-label={`Packages included with ${runtime.displayName}`}
+            className="mt-1.5 max-h-[360px] overflow-y-auto rounded border border-slate-200"
+          >
+            {includes.map((p) => (
+              <IncludedPackageRow key={p.name} pkg={p} depth={0} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// countIncluded is the number of distinct package names anywhere in the tree,
+// so a package several metapackages share is counted once.
+function countIncluded(includes: EdgePackIncludedPackage[]): number {
+  const names = new Set<string>()
+  const walk = (list: EdgePackIncludedPackage[]) => {
+    for (const p of list) {
+      names.add(p.name)
+      if (p.includes) walk(p.includes)
+    }
+  }
+  walk(includes)
+  return names.size
+}
+
+// IncludedPackageRow is one read-only row. A dependency that is itself a
+// metapackage expands, like a folder, to show what it pulls in.
+function IncludedPackageRow({ pkg, depth }: { pkg: EdgePackIncludedPackage; depth: number }) {
+  const [open, setOpen] = useState(false)
+  const children = pkg.includes ?? []
+  return (
+    <div role="listitem">
+      <div
+        className="flex items-start gap-2.5 border-b border-slate-100 bg-slate-50 py-2 pr-3"
+        style={{ paddingLeft: 12 + depth * 20 }}
+      >
+        {children.length > 0 ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={`${open ? 'Collapse' : 'Expand'} ${pkg.name}`}
+            onClick={() => setOpen(!open)}
+            className="mt-0.5 w-3 shrink-0 text-[11px] text-slate-500 hover:text-[#0071c5]"
+          >
+            <span aria-hidden className={'inline-block transition-transform ' + (open ? 'rotate-90' : '')}>
+              ▸
+            </span>
+          </button>
+        ) : (
+          <span className="w-3 shrink-0" />
+        )}
+        <input
+          type="checkbox"
+          checked
+          disabled
+          readOnly
+          aria-label={pkg.name}
+          title="Installed by the base runtime — this can't be unchecked"
+          className="mt-0.5 h-[15px] w-[15px] shrink-0 cursor-not-allowed accent-[#0071c5]"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-baseline gap-1.5">
+            <span className="text-[13px] font-semibold text-slate-500">{pkg.name}</span>
+            {pkg.version && <span className="font-mono text-[11px] text-slate-500">{pkg.version}</span>}
+            {children.length > 0 && (
+              <span className="text-[11px] text-slate-400">
+                {children.length} package{children.length === 1 ? '' : 's'}
+              </span>
+            )}
+          </span>
+          {pkg.description && (
+            <span className="mt-0.5 block truncate text-[11px] text-slate-500" title={pkg.description}>
+              {pkg.description}
+            </span>
+          )}
+        </span>
+      </div>
+      {open && children.map((c) => <IncludedPackageRow key={c.name} pkg={c} depth={depth + 1} />)}
     </div>
   )
 }

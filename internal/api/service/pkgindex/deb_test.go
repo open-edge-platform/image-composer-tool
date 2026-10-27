@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -108,6 +109,31 @@ func TestParseDebIndex(t *testing.T) {
 			body: "Package: bash\nDescription: synopsis\n\ttabbed continuation\n",
 			want: []Entry{{Name: "bash", Description: "synopsis"}},
 		},
+		{
+			// Constraints, arch qualifiers and all but the first alternative
+			// are dropped; Section may follow Depends.
+			name: "metapackage keeps its depends",
+			body: "Package: intel-edge-base-standard\n" +
+				"Depends: intel-edge-graphics-core, libze1 (= 1.28.2-1), " +
+				"qemu-user-binfmt | qemu-user-static, python3:any (>= 3.12) [amd64]\n" +
+				"Section: metapackages\n",
+			want: []Entry{{
+				Name:    "intel-edge-base-standard",
+				Depends: []string{"intel-edge-graphics-core", "libze1", "qemu-user-binfmt", "python3"},
+			}},
+		},
+		{
+			name: "archive-area metapackage section and wrapped depends",
+			body: "Package: ubuntu-desktop\nSection: universe/metapackages\n" +
+				"Depends: a,\n b,\n c\nDescription: d\n continuation\n",
+			want: []Entry{{Name: "ubuntu-desktop", Description: "d", Depends: []string{"a", "b", "c"}}},
+		},
+		{
+			// Ordinary packages' dependency lists are not kept.
+			name: "non-metapackage depends dropped",
+			body: "Package: bash\nSection: shells\nDepends: libc6, base-files\n",
+			want: []Entry{{Name: "bash"}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -128,7 +154,7 @@ func assertEntries(t *testing.T, got, want []Entry) {
 		t.Fatalf("got %d entries, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			t.Errorf("entry %d:\n got %+v\nwant %+v", i, got[i], want[i])
 		}
 	}

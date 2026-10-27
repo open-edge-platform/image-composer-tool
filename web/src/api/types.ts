@@ -268,6 +268,23 @@ export interface EdgePackBaseRuntime {
   // selected — the runtime metapackage pulls in profiles whose dependencies the
   // pack repository does not carry. Same contract as EdgePackDomain's.
   requiresRepos?: string[]
+  // What the runtime's metapackage installs, read from its Depends in the pack
+  // repository's index. Display-only — the runtime installs these regardless,
+  // so none of them is selectable. Absent while the index is unreachable or
+  // still loading.
+  includes?: EdgePackIncludedPackage[]
+}
+
+// One package a base runtime installs by dependency. A dependency that is
+// itself an Edge Pack metapackage carries its own `includes`; one already
+// expanded elsewhere in the tree is listed without them.
+export interface EdgePackIncludedPackage {
+  name: string
+  description?: string
+  // Absent for a package the pack repository doesn't publish, e.g. one from
+  // the base distribution.
+  version?: string
+  includes?: EdgePackIncludedPackage[]
 }
 
 export interface EdgePackDomain {

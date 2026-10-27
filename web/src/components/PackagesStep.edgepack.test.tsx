@@ -112,6 +112,41 @@ describe('PackagesStep Edge Pack', () => {
     expect(mockApi.getEdgePack).toHaveBeenCalledTimes(1)
   })
 
+  it('lists what the chosen runtime includes, collapsed and read-only', async () => {
+    const p = pack('7.1')
+    p.baseRuntimes[0].includes = [
+      {
+        name: 'gfx-core',
+        version: '1.0',
+        description: 'graphics core',
+        includes: [{ name: 'libmesa' }, { name: 'edge-gfx-dkms', version: '7.0' }],
+      },
+      { name: 'media-core', includes: [{ name: 'gfx-core' }, { name: 'libva2' }] },
+    ]
+    mockApi.getEdgePack.mockResolvedValue(p)
+
+    render(<PackagesStep os="ubuntu24" active basePackages={[]} />)
+    await advance(0)
+    // Nothing is listed until the runtime is actually chosen.
+    expect(screen.queryByRole('button', { name: /Included with Standard/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Standard' }))
+    // gfx-core appears twice in the tree but is counted once.
+    const toggle = screen.getByRole('button', { name: 'Included with Standard (5 packages)' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('checkbox', { name: 'gfx-core' })).toBeNull()
+
+    fireEvent.click(toggle)
+    const row = screen.getByRole('checkbox', { name: 'gfx-core' }) as HTMLInputElement
+    expect(row.checked).toBe(true)
+    expect(row.disabled).toBe(true)
+    expect(screen.queryByRole('checkbox', { name: 'libmesa' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand gfx-core' }))
+    expect(screen.getByRole('checkbox', { name: 'libmesa' })).toBeTruthy()
+    expect(screen.getByText('7.0')).toBeTruthy()
+  })
+
   it('reports Edge Pack unavailable when the first request fails', async () => {
     mockApi.getEdgePack.mockRejectedValue(new Error('404'))
 
