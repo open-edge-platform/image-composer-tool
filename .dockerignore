@@ -1,0 +1,24 @@
+# Keep the build context to the sources build/ict/Dockerfile copies. A checkout
+# that has run native builds or `serve` holds large, often root-owned trees
+# (cache/, workspace/, webui-workspace/) that would otherwise be sent to the
+# Docker daemon on every build, or fail it outright when unreadable.
+.git
+.github
+.vscode
+build
+!build/ict
+builds
+downloads
+benchmark-logs
+cache
+tmp
+workspace
+webui-workspace
+.ai-cache
+dist
+*.log
+/image-composer-tool
+/live-installer
+web/node_modules
+web/dist
+image-templates/.ict-adv-*.yml
