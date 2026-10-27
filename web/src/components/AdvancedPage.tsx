@@ -13,6 +13,7 @@ import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
+import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
@@ -69,6 +70,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
+  const [yamlOpen, setYamlOpen] = useState(false)
   // Logins for accounts the resolved template leaves without one. Component
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
@@ -426,6 +428,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </table>
                 </div>
 
+                {/* What this selection changes relative to the template, item
+                    by item — open here, since reviewing it is the point. */}
+                {composed.summary.advanced && (
+                  <div className="mb-4">
+                    <AdvancedChangesCard changes={composed.summary.advanced} defaultOpen />
+                  </div>
+                )}
+
                 {/* Pinned a version for a package the curated template already
                     lists? Both entries survive the merge, so say so rather than
                     letting the resolved YAML look like a duplicate bug. */}
@@ -449,9 +459,19 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                 {/* Section 2: the delta alone — only what Advanced mode
                     contributed. The curated parent it extends and the merge of
                     the two are deliberately not shown. */}
+                {/* Collapsed by default: the Advanced changes card above already
+                    lists the same changes readably; this is the raw file. */}
                 <div className="rounded-lg border border-slate-200 bg-white">
-                  <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2">
-                    <span className="text-sm font-semibold text-[#00285a]">Your changes</span>
+                  <div className={`flex items-center justify-between gap-3 px-4 py-2 ${yamlOpen ? 'border-b border-slate-200' : ''}`}>
+                    <button
+                      type="button"
+                      onClick={() => setYamlOpen((o) => !o)}
+                      aria-expanded={yamlOpen}
+                      className="flex items-center gap-2 text-left text-sm font-semibold text-[#00285a]"
+                    >
+                      <span className="text-xs text-slate-400">{yamlOpen ? '▼' : '▶'}</span>
+                      Your changes (YAML)
+                    </button>
                     {deltaYaml && (
                       <button
                         type="button"
@@ -463,7 +483,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                       </button>
                     )}
                   </div>
-                  {deltaYaml ? (
+                  {!yamlOpen ? null : deltaYaml ? (
                     <>
                       <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[11px] text-slate-500">
                         Only what Advanced mode adds, as a template extending{' '}
