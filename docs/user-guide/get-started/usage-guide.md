@@ -20,6 +20,7 @@ command reference, see the
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Running the Web UI](#running-the-web-ui)
+    - [Running the Web UI in a Container](#running-the-web-ui-in-a-container)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
     - [Minimal Edge Device](#minimal-edge-device)
@@ -381,6 +382,70 @@ the
 [Serve Command](../architecture/image-composer-tool-cli-specification.md#serve-command)
 reference. For building the frontend bundle and the hot-reload development loop,
 see [`web/README.md`](../../../web/README.md).
+
+### Running the Web UI in a Container
+
+To run the web UI without installing Go, Node.js, the image-build toolchain, or
+sudoers rules, start it with Docker Compose from a checkout. The host needs only
+Docker with the Compose plugin:
+
+```bash
+git clone https://github.com/open-edge-platform/image-composer-tool.git
+cd image-composer-tool
+docker compose up --build
+```
+
+For a step-by-step walkthrough, see the [Web UI Quick Start](./web-ui-quick-start.md).
+
+Open <http://127.0.0.1:8080> once the log shows the server listening. The first
+run builds the ICT image from `build/ict/Dockerfile` (the web UI bundle, the
+`image-composer-tool` and `live-installer` binaries, and the Ubuntu 24.04
+toolchain), which takes several minutes; later runs reuse the cached layers.
+Keep passing `--build` after you pull new commits so the image picks them up.
+
+> **Warning: the container is privileged, and therefore root-equivalent on the
+> host.** Image builds create loop devices, mount filesystems, and chroot, so the
+> service runs with `privileged: true` and the host's `/dev` mounted. Every build
+> runs as root with access to all of the host's devices, and the web UI has no
+> authentication of its own: anyone who can reach the port can start one. The
+> port is published on `127.0.0.1` only. Do not change that binding to expose the
+> UI on a network, and run the container only on a machine where you would give
+> the UI's users root.
+
+Two named volumes keep state across `docker compose down` and
+`docker compose up`:
+
+| Volume | Mounted at | Holds |
+|--------|-----------|-------|
+| `webui-workspace` | `/opt/ict/webui-workspace` | Build history, per-build work directories, and artifacts |
+| `cache` | `/opt/ict/cache` | Package cache for CLI builds run inside the container |
+
+`docker compose down -v` deletes both volumes, and with them every build's
+history and artifacts.
+
+`docker compose down` (or Ctrl+C) stops the server with `SIGTERM`: it cancels a
+running build and waits for the build to unmount its filesystems and detach its
+loop devices, and the compose file allows 60 seconds for that. Like an
+interrupted native build, a build killed without that teardown (for example by
+`docker kill`) can leave mounts and loop devices behind on the host.
+
+If your shell sets `http_proxy`, `https_proxy`, or `no_proxy` (or their
+uppercase forms), Compose passes them to the image build and to the server,
+which forwards them to builds exactly as a native `serve` does.
+
+The same image carries the full CLI. Inside the container everything sits under
+`/opt/ict` in the repository layout, which is also the working directory:
+
+```bash
+docker compose exec ict image-composer-tool validate image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
+```
+
+To build the image without Compose, use `earthly +ict-image` (which also stamps
+the version and commit, and accepts `--VERSION=<tag>` and
+`--ICT_IMAGE_NAME=<name>`) or
+`docker build -f build/ict/Dockerfile --target ict -t ict .`.
+`earthly +ict-image-preflight` additionally checks that every tool ICT runs
+resolves inside the image.
 
 ## Shell Completion
 
