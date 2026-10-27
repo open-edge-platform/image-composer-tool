@@ -420,6 +420,9 @@ Two named volumes keep state across `docker compose down` and
 | `webui-workspace` | `/opt/ict/webui-workspace` | Build history, per-build work directories, and artifacts |
 | `cache` | `/opt/ict/cache` | Package cache for CLI builds run inside the container |
 
+To find a build's files on the host or copy them out, see
+[Where Your Files and Image Artifacts Are](./web-ui-quick-start.md#where-your-files-and-image-artifacts-are).
+
 `docker compose down -v` deletes both volumes, and with them every build's
 history and artifacts.
 

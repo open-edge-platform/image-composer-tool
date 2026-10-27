@@ -64,7 +64,8 @@ ssh -L 8080:127.0.0.1:8080 <user>@<docker-host>
    public key for any account that needs one, and confirm.
 3. The **Compose Image** tab streams the build log. When the status reads
    **Completed**, download the image, its SBOM, and the merged template from the
-   **Artefacts** table.
+   **Artefacts** table. To reach the files another way, see
+   [Where Your Files and Image Artifacts Are](#where-your-files-and-image-artifacts-are).
 
 Every compose is listed in the **History** sidebar, where you can reopen it,
 including after a restart.
@@ -96,6 +97,56 @@ artifacts:
 ```bash
 docker compose down -v
 ```
+
+## Where Your Files and Image Artifacts Are
+
+Builds run inside the container, so every path the UI shows, such as the
+**Path** column of the **Artefacts** table, is a path inside the container:
+
+```text
+/opt/ict/webui-workspace/builds/<build-id>/work/<os>-<dist>-<arch>/imagebuild/<config>/<image-file>
+```
+
+`/opt/ict/webui-workspace` is the `webui-workspace` named volume, not a
+directory in your checkout. Each build has its own directory under `builds/`:
+
+| Path under `builds/<build-id>/` | Contents |
+|---------------------------------|----------|
+| `work/<os>-<dist>-<arch>/imagebuild/<config>/` | The image (for example `.iso`, `.raw.gz`, or `.vhdx`), its SPDX SBOM and, for ISO builds, the composition manifest and `template-dump.yaml` |
+| `template.yml` | The merged template the build ran |
+| `compose.log` | The build log |
+| `meta.json` | The build record shown in **History** |
+| `cache/` | The packages the build downloaded |
+
+You can get a file out in three ways.
+
+- **Download it from the UI.** Use the download icon in the build's
+  **Artefacts** table. If Docker runs on a remote machine, forward the port
+  first, as described in [Open the UI](#2-open-the-ui).
+- **Copy it out with Compose.** Run this from your checkout, using the path
+  the UI shows:
+
+  ```bash
+  docker compose cp ict:/opt/ict/webui-workspace/builds/<build-id>/work/<os>-<dist>-<arch>/imagebuild/<config>/<image-file> .
+  ```
+
+- **Read it on the host.** Docker keeps the volume under its own data
+  directory, which only root can read. Compose prefixes the volume's name
+  with your project's name, so look it up by its label:
+
+  ```bash
+  docker volume inspect --format '{{ .Mountpoint }}' \
+    "$(docker volume ls -q --filter label=com.docker.compose.volume=webui-workspace)"
+  # e.g. /var/lib/docker/volumes/image-composer-tool_webui-workspace/_data
+
+  sudo ls /var/lib/docker/volumes/image-composer-tool_webui-workspace/_data/builds/
+  ```
+
+  Files you copy from there with `sudo cp` are owned by root, so `chown`
+  them to your user afterwards.
+
+`docker compose down -v` deletes the volume and every file in it, so copy out
+anything you want to keep first.
 
 ## Behind a Proxy
 
