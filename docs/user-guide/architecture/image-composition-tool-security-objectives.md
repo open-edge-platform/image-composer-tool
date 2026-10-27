@@ -43,7 +43,18 @@ unverified because it has no genuine local trust anchor available today —
 its signing key is fetched from a remote URL, is an rpm repository signed with
 a same-origin key rather than a separately trusted keyring, or has no key
 configured at all.
-## 6. Deployed-System Provisioning
+
+## 6. Containerized Web UI
+
+`docker compose up` runs the web UI in a container that is privileged and has
+the host's `/dev` mounted, because image builds create loop devices, mount
+filesystems, and chroot. The container is therefore root-equivalent on the host,
+and the web UI has no authentication of its own. The compose file publishes the
+port on `127.0.0.1` only, so only users of the host itself can reach it. The
+image takes proxy settings from the environment at run time rather than baking
+the build host's into its configuration.
+
+## 7. Deployed-System Provisioning
 
 The provisioning settings applied during installation
 (`systemConfig.users[].sshAuthorizedKeys`, `proxy`, `provisioning`,

@@ -23,6 +23,8 @@ distributions (rcd10).
 ## Quick Start
 
 See the [Quick Start guide](./get-started/quick-start.md) to build your first image in three steps.
+To use the web UI instead, with only Docker installed, see the
+[Web UI Quick Start](./get-started/web-ui-quick-start.md).
 
 ## Guides
 
@@ -71,6 +73,7 @@ See the [Quick Start guide](./get-started/quick-start.md) to build your first im
 :caption: Get Started
 
 Quick Start <./get-started/quick-start.md>
+Web UI Quick Start (Docker Compose) <./get-started/web-ui-quick-start.md>
 Prerequisites <./get-started/prerequisites.md>
 Installation <./get-started/installation.md>
 Usage Guide <./get-started/usage-guide.md>
