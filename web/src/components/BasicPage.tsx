@@ -139,8 +139,8 @@ export function BasicPage({
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed.
+        Select a use case, SKU, and platform. Pre-configured defaults are
+        applied based on your selection.
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
