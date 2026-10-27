@@ -56,6 +56,10 @@ disk:
       mountPoint: /opt
 
 systemConfig:
+  # Network owner: NetworkManager is installed by this default, so ICT must not
+  # enable systemd-networkd alongside it.
+  network:
+    backend: networkmanager
   name: Default_Raw
   description: Default yml configuration for raw image
 

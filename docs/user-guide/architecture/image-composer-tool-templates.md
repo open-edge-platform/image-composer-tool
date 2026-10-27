@@ -844,7 +844,7 @@ explicit-interface implementation.
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `backend` | string | **Yes** (when section present) | `systemd-networkd`, `netplan`, `networkmanager`, `none` | The component that owns networking on the installed OS |
+| `backend` | string | No (set by the OS default config; **required** when the section is present) | `systemd-networkd`, `netplan`, `networkmanager`, `none` | The component that owns networking on the installed OS |
 | `interfaces` | object[] | No | See below | List of interface configurations |
 
 `interfaces[]` fields:
@@ -881,6 +881,14 @@ explicit-interface implementation.
 > | `netplan` | netplan, which enables the renderer at boot (this is also how cloud-init configures the network on Debian-family images) | Writes any `interfaces` as netplan YAML; does **not** enable `systemd-networkd` |
 > | `networkmanager` | NetworkManager (its package enables it) | Does **not** enable `systemd-networkd`; `interfaces` is rejected |
 > | `none` | The template or image brings its own networking | Does nothing, and leaves `/etc/resolv.conf` alone; `interfaces` is rejected |
+>
+> Each OS default config that ships a `systemd-networkd` DHCP drop-in declares
+> `backend: systemd-networkd`, so a template with no `network` section still
+> gets DHCP. A template that installs NetworkManager must set
+> `backend: networkmanager`, and a Debian-family template that relies on
+> cloud-init must set `backend: netplan`; otherwise it inherits
+> `systemd-networkd` from the OS default and the builder logs a warning if
+> NetworkManager is installed alongside it. WSL2 defaults declare no backend.
 
 ```yaml
 systemConfig:
@@ -1378,7 +1386,7 @@ follow different strategies:
 | `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated) |
 | `systemConfig.kernel` | User overrides `version`, `cmdline`, `packages` individually if non-empty |
 | `systemConfig.bootloader` | User overrides individual fields if non-empty |
-| `systemConfig.network` | User overrides `backend` if non-empty; `interfaces` replaced when provided |
+| `systemConfig.network` | User overrides `backend` if non-empty (OS defaults declare one); `interfaces` replaced when provided |
 | `systemConfig.users` | Merged by `name` - same-name users merged field-by-field; new users appended |
 | `systemConfig.additionalFiles` | Merged by `final` path - same destination overrides; new files appended |
 | `systemConfig.configurations` | **Additive** - user commands appended after defaults |

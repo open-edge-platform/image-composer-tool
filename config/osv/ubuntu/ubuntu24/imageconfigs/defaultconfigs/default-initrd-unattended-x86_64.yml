@@ -9,6 +9,10 @@ target:
   imageType: img # Image type, valid value: [raw, iso].
 
 systemConfig:
+  # Network owner: this default ships a systemd-networkd DHCP drop-in, so ICT enables it.
+  # A template that installs NetworkManager or uses cloud-init overrides it.
+  network:
+    backend: systemd-networkd
   name: Default_Initrd_Unattended
   description: Default yml configuration for unattended initrd image
 

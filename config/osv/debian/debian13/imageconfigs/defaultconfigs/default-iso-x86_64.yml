@@ -30,6 +30,10 @@ disk:
       mountPoint: /
 
 systemConfig:
+  # Network owner: this default ships a systemd-networkd DHCP drop-in, so ICT enables it.
+  # A template that installs NetworkManager or uses cloud-init overrides it.
+  network:
+    backend: systemd-networkd
   name: Default_ISO
   description: Default yml configuration for ISO image
 
