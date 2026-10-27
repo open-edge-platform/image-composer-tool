@@ -75,11 +75,35 @@ type ProvisioningScript struct {
 	Final string `yaml:"final"`           // in-image path of the script
 	Stage string `yaml:"stage,omitempty"` // first-boot (default) | every-boot
 	Order int    `yaml:"order,omitempty"` // lower runs first; ties keep template order
+	// Args are passed to the script as command-line arguments and Env as
+	// environment variables, so a template can parameterise a script it
+	// shares with other templates (for example a deployment mode).
+	Args []string          `yaml:"args,omitempty"`
+	Env  map[string]string `yaml:"env,omitempty"`
+	// TimeoutSec fails the script's unit if it runs longer. Zero (or unset) means
+	// no limit, except with BeforeLogin where it means DefaultBeforeLoginTimeoutSec.
+	TimeoutSec int `yaml:"timeoutSec,omitempty"`
+	// RebootAfter reboots the system once the script has succeeded.
+	RebootAfter bool `yaml:"rebootAfter,omitempty"`
 }
 
 // ProvisioningConfig holds boot-time provisioning scripts.
 type ProvisioningConfig struct {
 	Scripts []ProvisioningScript `yaml:"scripts,omitempty"`
+	// BeforeLogin runs the scripts before the login prompt: logins (console
+	// and SSH) are unavailable until they have finished, except for root, which
+	// /run/nologin does not stop. A pointer so a child layer can turn off an
+	// inherited setting with an explicit false.
+	BeforeLogin *bool `yaml:"beforeLogin,omitempty"`
+}
+
+// DefaultBeforeLoginTimeoutSec bounds a script that blocks logins when its
+// timeoutSec is unset or 0, so a hung script cannot lock a system out for good.
+const DefaultBeforeLoginTimeoutSec = 3600
+
+// RunsBeforeLogin reports whether provisioning scripts block logins until done.
+func (p ProvisioningConfig) RunsBeforeLogin() bool {
+	return p.BeforeLogin != nil && *p.BeforeLogin
 }
 
 // CloudInitConfig installs cloud-init and seeds it with NoCloud data.
@@ -156,7 +180,7 @@ func (t *ImageTemplate) SortedProvisioningScripts() []ProvisioningScript {
 
 func hasProvisioningSections(sc SystemConfig) bool {
 	return sc.Proxy.wasProvided || !sc.Proxy.IsEmpty() || len(sc.Provisioning.Scripts) > 0 ||
-		!sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
+		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
 }
 
 // mergeProvisioningSections applies child-wins merging: a section set by the
@@ -169,6 +193,9 @@ func mergeProvisioningSections(merged *SystemConfig, defaultConfig, userConfig S
 	if len(userConfig.Provisioning.Scripts) > 0 {
 		merged.Provisioning.Scripts = mergeProvisioningScripts(
 			defaultConfig.Provisioning.Scripts, userConfig.Provisioning.Scripts)
+	}
+	if userConfig.Provisioning.BeforeLogin != nil {
+		merged.Provisioning.BeforeLogin = userConfig.Provisioning.BeforeLogin
 	}
 	if !userConfig.CloudInit.isEmpty() {
 		merged.CloudInit = userConfig.CloudInit
@@ -345,6 +372,15 @@ var scriptFinalRe = regexp.MustCompile(`^/[A-Za-z0-9._@%+/-]*[A-Za-z0-9._@%+-]$`
 // file name without escaping.
 var provisioningScriptNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
 
+// provisioningEnvNameRe is a portable environment variable name.
+var provisioningEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// provisioningValueRe keeps an argument or environment value safe to place in
+// a systemd unit: no whitespace, quotes, backslashes, $ (expanded by systemd)
+// or ; (an ExecStart separator). A literal % is allowed and escaped when the
+// unit is rendered.
+var provisioningValueRe = regexp.MustCompile(`^[A-Za-z0-9._@%+:/=,-]{0,256}$`)
+
 // validateProvisioning checks the provisioning sections of a single layer.
 // Values end up in generated files (/etc/environment, apt.conf.d, systemd
 // units), so anything that could break out of a line is rejected.
@@ -468,6 +504,50 @@ func validateProvisioningScripts(scripts []ProvisioningScript) error {
 		if s.Order < 0 {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: order must be >= 0", s.Name)
 		}
+		if err := validateProvisioningScriptParams(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateProvisioningScriptParams checks the args, env, timeoutSec and
+// rebootAfter of one script. Values end up in a generated systemd unit.
+func validateProvisioningScriptParams(s ProvisioningScript) error {
+	for i, a := range s.Args {
+		if a == "" || !provisioningValueRe.MatchString(a) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: args[%d] must be 1-256 characters of "+
+				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", s.Name, i)
+		}
+	}
+	for k, v := range s.Env {
+		if !provisioningEnvNameRe.MatchString(k) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: invalid env name %q: must match %s",
+				s.Name, k, provisioningEnvNameRe.String())
+		}
+		if !provisioningValueRe.MatchString(v) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s must be at most 256 characters of "+
+				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", s.Name, k)
+		}
+	}
+	if s.TimeoutSec < 0 {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: timeoutSec must be >= 0", s.Name)
+	}
+	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+
+			"an every-boot script would reboot on every boot", s.Name, ProvisioningStageFirstBoot)
+	}
+	return nil
+}
+
+// checkRebootAfterIsLast rejects a rebootAfter script that is not the last
+// one to run: the reboot would cut the later scripts off until the next boot.
+func checkRebootAfterIsLast(scripts []ProvisioningScript) error {
+	for i, s := range scripts {
+		if s.RebootAfter && i != len(scripts)-1 {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter is only allowed on the "+
+				"last script to run (it is followed by %q)", s.Name, scripts[len(scripts)-1].Name)
+		}
 	}
 	return nil
 }
@@ -570,6 +650,16 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 	if !policy.isEmpty() && !slice.Contains(AptPolicyTargetOS, t.Target.OS) {
 		return fmt.Errorf("systemConfig.aptPolicy is only supported for ubuntu and debian targets (got %q)",
 			t.Target.OS)
+	}
+	if err := checkRebootAfterIsLast(t.SortedProvisioningScripts()); err != nil {
+		return err
+	}
+	if t.SystemConfig.Provisioning.RunsBeforeLogin() &&
+		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool {
+			return s.Stage == ProvisioningStageEveryBoot
+		}) {
+		log.Warnf("systemConfig.provisioning.beforeLogin is set and an every-boot script is configured: " +
+			"logins are unavailable until that script finishes on every boot")
 	}
 	if t.hasSSHKeys() && !t.hasPackage("openssh-server") {
 		log.Warnf("sshAuthorizedKeys are configured but openssh-server is not in systemConfig.packages; " +

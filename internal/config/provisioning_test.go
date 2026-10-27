@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,11 +44,17 @@ systemConfig:
   cloudInit:
     enabled: true
   provisioning:
+    beforeLogin: true
     scripts:
       - name: second
         local: second.sh
         final: /usr/local/sbin/second.sh
         order: 20
+        args: ["--mode", "docker"]
+        env:
+          DEPLOYMENT_MODE: docker
+        timeoutSec: 600
+        rebootAfter: true
       - name: first
         local: first.sh
         final: /usr/local/sbin/first.sh
@@ -81,6 +88,13 @@ func TestParseProvisioningSections(t *testing.T) {
 	if len(scripts) != 2 || scripts[0].Name != "first" || scripts[1].Name != "second" {
 		t.Errorf("SortedProvisioningScripts order = %+v", scripts)
 	}
+	if !sc.Provisioning.RunsBeforeLogin() {
+		t.Error("provisioning.beforeLogin not parsed")
+	}
+	if got := scripts[1]; !slices.Equal(got.Args, []string{"--mode", "docker"}) ||
+		got.Env["DEPLOYMENT_MODE"] != "docker" || len(got.Env) != 1 || got.TimeoutSec != 600 || !got.RebootAfter {
+		t.Errorf("script args/env not parsed: %+v", got)
+	}
 	if got := sc.AptPolicy.UpgradeAllowedRepos; len(got) != 1 || got[0] != "platform" {
 		t.Errorf("aptPolicy not parsed: %+v", sc.AptPolicy)
 	}
@@ -97,6 +111,12 @@ func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 		{"private key", "- " + testKey1 + " admin@example", "- \"-----BEGIN OPENSSH PRIVATE KEY-----\""},
 		{"invalid key blob", "- " + testKey1 + " admin@example", "- ssh-ed25519 not-a-key admin@example"},
 		{"invalid hostname", "hostname: platform", "hostname: \"edge: 01\""},
+		{"arg with a space", `args: ["--mode", "docker"]`, `args: ["--mode docker"]`},
+		{"env name with a dash", "DEPLOYMENT_MODE: docker", "DEPLOYMENT-MODE: docker"},
+		{"env value with a quote", "DEPLOYMENT_MODE: docker", "DEPLOYMENT_MODE: \"do'cker\""},
+		{"non-boolean beforeLogin", "beforeLogin: true", "beforeLogin: soon"},
+		{"negative timeoutSec", "timeoutSec: 600", "timeoutSec: -1"},
+		{"non-boolean rebootAfter", "rebootAfter: true", "rebootAfter: sometimes"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -207,6 +227,24 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"bad stage", func(s *ProvisioningScript) { s.Stage = "later" }, false, true},
 		{"negative order", func(s *ProvisioningScript) { s.Order = -1 }, false, true},
 		{"duplicate name", func(*ProvisioningScript) {}, true, true},
+		{"valid args and env", func(s *ProvisioningScript) {
+			s.Args = []string{"--mode", "k3s", "a=b,c"}
+			s.Env = map[string]string{"DEPLOYMENT_MODE": "k3s", "EMPTY": ""}
+		}, false, false},
+		{"empty arg", func(s *ProvisioningScript) { s.Args = []string{""} }, false, true},
+		{"arg with a space", func(s *ProvisioningScript) { s.Args = []string{"a b"} }, false, true},
+		{"arg with $", func(s *ProvisioningScript) { s.Args = []string{"$HOME"} }, false, true},
+		{"arg with ;", func(s *ProvisioningScript) { s.Args = []string{"a;b"} }, false, true},
+		{"env name with a dash", func(s *ProvisioningScript) { s.Env = map[string]string{"A-B": "x"} }, false, true},
+		{"env name starting with a digit", func(s *ProvisioningScript) { s.Env = map[string]string{"1A": "x"} }, false, true},
+		{"env value with a quote", func(s *ProvisioningScript) { s.Env = map[string]string{"A": `x"y`} }, false, true},
+		{"negative timeoutSec", func(s *ProvisioningScript) { s.TimeoutSec = -1 }, false, true},
+		{"valid timeoutSec and rebootAfter", func(s *ProvisioningScript) { s.TimeoutSec = 60; s.RebootAfter = true }, false, false},
+		{"rebootAfter on an every-boot script", func(s *ProvisioningScript) {
+			s.Stage = ProvisioningStageEveryBoot
+			s.RebootAfter = true
+		}, false, true},
+		{"env value too long", func(s *ProvisioningScript) { s.Env = map[string]string{"A": strings.Repeat("x", 257)} }, false, true},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -222,6 +260,52 @@ func TestValidateProvisioningScripts(t *testing.T) {
 				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMergeProvisioningBeforeLogin(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	tests := []struct {
+		name          string
+		parent, child *bool
+		want          bool
+	}{
+		{"unset everywhere", nil, nil, false},
+		{"inherited", &yes, nil, true},
+		{"child turns it on", nil, &yes, true},
+		{"child turns an inherited setting off", &yes, &no, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			parent := SystemConfig{Provisioning: ProvisioningConfig{BeforeLogin: tt.parent}}
+			child := SystemConfig{Provisioning: ProvisioningConfig{BeforeLogin: tt.child}}
+			merged := parent
+			mergeProvisioningSections(&merged, parent, child)
+			if got := merged.Provisioning.RunsBeforeLogin(); got != tt.want {
+				t.Errorf("RunsBeforeLogin = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if !hasProvisioningSections(SystemConfig{Provisioning: ProvisioningConfig{BeforeLogin: &no}}) {
+		t.Error("an explicit beforeLogin: false is a provisioning section a child layer must keep")
+	}
+}
+
+func TestCheckRebootAfterIsLast(t *testing.T) {
+	t.Parallel()
+	a := ProvisioningScript{Name: "a"}
+	b := ProvisioningScript{Name: "b", RebootAfter: true}
+	if err := checkRebootAfterIsLast([]ProvisioningScript{a, b}); err != nil {
+		t.Errorf("rebootAfter on the last script must be accepted: %v", err)
+	}
+	if err := checkRebootAfterIsLast([]ProvisioningScript{b, a}); err == nil {
+		t.Error("rebootAfter on a script that is followed by another must be rejected")
+	}
+	if err := checkRebootAfterIsLast(nil); err != nil {
+		t.Errorf("no scripts: %v", err)
 	}
 }
 

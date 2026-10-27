@@ -3,8 +3,10 @@ package manifest
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,10 +91,17 @@ type CompositionScript struct {
 	Final string `json:"final"`
 	Stage string `json:"stage,omitempty"`
 	Order int    `json:"order,omitempty"`
+	// Args are recorded as written; for env only the names are, since
+	// variables are the more likely place for a credential.
+	Args        []string `json:"args,omitempty"`
+	EnvNames    []string `json:"envNames,omitempty"`
+	TimeoutSec  int      `json:"timeoutSec,omitempty"`
+	RebootAfter bool     `json:"rebootAfter,omitempty"`
 }
 
 type CompositionProvisioner struct {
 	Scripts             []CompositionScript `json:"scripts,omitempty"`
+	BeforeLogin         bool                `json:"beforeLogin"`
 	CloudInit           bool                `json:"cloudInit"`
 	ProxyHosts          []string            `json:"proxyHosts,omitempty"`
 	UpgradeAllowedRepos []string            `json:"upgradeAllowedRepos,omitempty"`
@@ -132,6 +141,7 @@ func BuildCompositionManifest(t *config.ImageTemplate, baseRepos []config.Provid
 		Artifacts: artifacts,
 		Provisioning: CompositionProvisioner{
 			Scripts:             compositionScripts(t.SortedProvisioningScripts()),
+			BeforeLogin:         sc.Provisioning.RunsBeforeLogin(),
 			CloudInit:           sc.CloudInit.IsEnabled(),
 			ProxyHosts:          proxyHosts(sc.Proxy),
 			UpgradeAllowedRepos: sc.AptPolicy.UpgradeAllowedRepos,
@@ -211,7 +221,11 @@ func compositionArtifacts(files []config.AdditionalFileInfo) ([]CompositionArtif
 func compositionScripts(scripts []config.ProvisioningScript) []CompositionScript {
 	out := make([]CompositionScript, 0, len(scripts))
 	for _, s := range scripts {
-		out = append(out, CompositionScript{Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order})
+		out = append(out, CompositionScript{
+			Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order,
+			Args: s.Args, EnvNames: slices.Sorted(maps.Keys(s.Env)),
+			TimeoutSec: s.TimeoutSec, RebootAfter: s.RebootAfter,
+		})
 	}
 	return out
 }

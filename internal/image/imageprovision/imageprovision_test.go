@@ -3,6 +3,7 @@ package imageprovision
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -333,7 +334,7 @@ func TestConfigureProvisioningScripts(t *testing.T) {
 		{Name: "a", Final: "/usr/local/sbin/a.sh"},
 		{Name: "b", Final: "/usr/local/sbin/b.sh", Stage: config.ProvisioningStageEveryBoot},
 	}
-	if err := ConfigureProvisioningScripts(root, scripts); err != nil {
+	if err := ConfigureProvisioningScripts(root, scripts, false); err != nil {
 		t.Fatalf("ConfigureProvisioningScripts: %v", err)
 	}
 	assertMode(t, root, "usr/local/sbin/a.sh", 0755)
@@ -390,7 +391,7 @@ func TestConfigureProvisioningScripts(t *testing.T) {
 	}
 
 	// Re-running replaces the enable symlinks instead of failing.
-	if err := ConfigureProvisioningScripts(root, scripts); err != nil {
+	if err := ConfigureProvisioningScripts(root, scripts, false); err != nil {
 		t.Errorf("second run: %v", err)
 	}
 }
@@ -398,7 +399,7 @@ func TestConfigureProvisioningScripts(t *testing.T) {
 func TestConfigureProvisioningScriptsMissingScript(t *testing.T) {
 	t.Parallel()
 	root := newImageRoot(t, nil)
-	err := ConfigureProvisioningScripts(root, []config.ProvisioningScript{{Name: "x", Final: "/usr/local/sbin/x.sh"}})
+	err := ConfigureProvisioningScripts(root, []config.ProvisioningScript{{Name: "x", Final: "/usr/local/sbin/x.sh"}}, false)
 	if err == nil || !strings.Contains(err.Error(), "missing from the image") {
 		t.Errorf("err = %v", err)
 	}
@@ -426,7 +427,7 @@ func TestConfigureProvisioningScriptsRejectsDirectory(t *testing.T) {
 	t.Parallel()
 	root := newImageRoot(t, nil)
 	mustMkdir(t, filepath.Join(root, "usr", "local", "bin"))
-	err := ConfigureProvisioningScripts(root, []config.ProvisioningScript{{Name: "x", Final: "/usr/local/bin"}})
+	err := ConfigureProvisioningScripts(root, []config.ProvisioningScript{{Name: "x", Final: "/usr/local/bin"}}, false)
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Errorf("err = %v, want not a regular file", err)
 	}
@@ -485,9 +486,130 @@ func enabled() *bool {
 
 func TestRenderProvisioningUnitEscapesPercent(t *testing.T) {
 	t.Parallel()
-	unit := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/opt/setup%20script"}, "")
+	unit := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/opt/setup%20script"}, "", false)
 	if !strings.Contains(unit, "ExecStart=/opt/setup%%20script\n") {
 		t.Errorf("literal %% must be escaped for systemd:\n%s", unit)
+	}
+}
+
+func TestConfigureProvisioningScriptsBeforeLogin(t *testing.T) {
+	t.Parallel()
+	root := newImageRoot(t, map[string]string{
+		"usr/local/sbin/a.sh": "#!/bin/sh\n",
+		"usr/local/sbin/b.sh": "#!/bin/sh\n",
+	})
+	scripts := []config.ProvisioningScript{
+		{Name: "a", Final: "/usr/local/sbin/a.sh"},
+		{Name: "b", Final: "/usr/local/sbin/b.sh", TimeoutSec: 120, RebootAfter: true},
+	}
+	if err := ConfigureProvisioningScripts(root, scripts, true); err != nil {
+		t.Fatalf("ConfigureProvisioningScripts: %v", err)
+	}
+	unitA := readImageFile(t, root, "etc/systemd/system/ict-provision-000-a.service")
+	for _, want := range []string{
+		"After=network-online.target cloud-config.service\n",
+		"Before=systemd-user-sessions.service apt-daily.service apt-daily-upgrade.service\n",
+		"ConditionPathExists=!" + StampDir + "/a\n",
+		"TimeoutStartSec=" + strconv.Itoa(config.DefaultBeforeLoginTimeoutSec) + "\n",
+		"[Install]\nWantedBy=multi-user.target\n",
+	} {
+		if !strings.Contains(unitA, want) {
+			t.Errorf("before-login unit missing %q:\n%s", want, unitA)
+		}
+	}
+	// cloud-final.service is After=multi-user.target; ordering a unit that is
+	// before systemd-user-sessions.service after it would be a cycle.
+	if strings.Contains(unitA, "cloud-final") {
+		t.Errorf("before-login unit must not wait for cloud-final.service:\n%s", unitA)
+	}
+	unitB := readImageFile(t, root, "etc/systemd/system/ict-provision-001-b.service")
+	for _, want := range []string{
+		"After=network-online.target cloud-config.service ict-provision-000-a.service\n",
+		"Requires=ict-provision-000-a.service\n",
+		"TimeoutStartSec=120\n",
+		"ExecStartPost=/usr/bin/systemctl reboot --no-block\n",
+	} {
+		if !strings.Contains(unitB, want) {
+			t.Errorf("second before-login unit missing %q:\n%s", want, unitB)
+		}
+	}
+	for _, unit := range []string{"ict-provision-000-a.service", "ict-provision-001-b.service"} {
+		target, err := os.Readlink(filepath.Join(root, wantsDir, unit))
+		if err != nil || target != "/etc/systemd/system/"+unit {
+			t.Errorf("%s not enabled: target=%q err=%v", unit, target, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc/systemd/system", ProvisioningTriggerUnit)); err == nil {
+		t.Error("before-login mode must not install the trigger unit")
+	}
+	if _, err := os.Lstat(filepath.Join(root, wantsDir, ProvisioningTriggerUnit)); err == nil {
+		t.Error("before-login mode must not enable the trigger unit")
+	}
+}
+
+func TestRenderProvisioningUnitDefaultModeUnchanged(t *testing.T) {
+	t.Parallel()
+	got := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "", false)
+	want := "# Generated by image-composer-tool\n[Unit]\n" +
+		"Description=ICT provisioning script s\n" +
+		"Wants=network-online.target\nAfter=network-online.target cloud-final.service\n" +
+		"ConditionPathExists=!" + StampDir + "/s\n" +
+		"\n[Service]\nType=oneshot\nRemainAfterExit=yes\n" +
+		"ExecStart=/usr/local/sbin/s.sh\n" +
+		"ExecStartPost=/usr/bin/mkdir -p " + StampDir + "\n" +
+		"ExecStartPost=/usr/bin/touch " + StampDir + "/s\n" +
+		"StandardOutput=journal+console\nStandardError=journal+console\n"
+	if got != want {
+		t.Errorf("default-mode unit changed:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderProvisioningUnitArgsAndEnv(t *testing.T) {
+	t.Parallel()
+	unit := renderProvisioningUnit(config.ProvisioningScript{
+		Name:  "s",
+		Final: "/usr/local/sbin/s.sh",
+		Args:  []string{"--mode", "k3s", "100%"},
+		Env:   map[string]string{"B_VAR": "two", "A_VAR": "50%"},
+	}, "", false)
+	for _, want := range []string{
+		"Environment=\"A_VAR=50%%\"\nEnvironment=\"B_VAR=two\"\n", // sorted by name, % escaped
+		"ExecStart=/usr/local/sbin/s.sh --mode k3s 100%%\n",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("unit missing %q:\n%s", want, unit)
+		}
+	}
+	plain := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "", false)
+	if strings.Contains(plain, "Environment=") || !strings.Contains(plain, "ExecStart=/usr/local/sbin/s.sh\n") {
+		t.Errorf("a script without args or env must render as before:\n%s", plain)
+	}
+}
+
+func TestRenderProvisioningUnitTimeoutAndReboot(t *testing.T) {
+	t.Parallel()
+	unit := renderProvisioningUnit(config.ProvisioningScript{
+		Name: "s", Final: "/usr/local/sbin/s.sh", TimeoutSec: 900, RebootAfter: true,
+	}, "", false)
+	for _, want := range []string{"TimeoutStartSec=900\n", "ExecStartPost=/usr/bin/systemctl reboot --no-block\n"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("unit missing %q:\n%s", want, unit)
+		}
+	}
+	// The reboot must be queued only after success is recorded in the stamp.
+	if strings.Index(unit, "reboot --no-block") < strings.Index(unit, "touch "+StampDir+"/s") {
+		t.Errorf("reboot must come after the stamp is written:\n%s", unit)
+	}
+	plain := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "", false)
+	if strings.Contains(plain, "TimeoutStartSec") || strings.Contains(plain, "reboot") {
+		t.Errorf("no timeout or reboot unless requested:\n%s", plain)
+	}
+	// An every-boot script with a timeout has no stamp and still gets the limit.
+	every := renderProvisioningUnit(config.ProvisioningScript{
+		Name: "e", Final: "/usr/local/sbin/e.sh", Stage: config.ProvisioningStageEveryBoot, TimeoutSec: 30,
+	}, "", false)
+	if !strings.Contains(every, "TimeoutStartSec=30\n") || strings.Contains(every, "touch") {
+		t.Errorf("every-boot unit:\n%s", every)
 	}
 }
 

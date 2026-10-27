@@ -130,3 +130,58 @@ func TestSPDXPackageRedactsDownloadLocation(t *testing.T) {
 		t.Errorf("empty URL must be NOASSERTION, got %q", got)
 	}
 }
+
+func TestCompositionScriptsRecordsArgsAndEnvNames(t *testing.T) {
+	t.Parallel()
+	got := compositionScripts([]config.ProvisioningScript{{
+		Name: "s", Final: "/usr/local/sbin/s.sh", Args: []string{"--mode", "k3s"},
+		Env: map[string]string{"B": "secret", "A": "1"}, TimeoutSec: 90, RebootAfter: true,
+	}})
+	if len(got) != 1 || len(got[0].Args) != 2 || got[0].Args[1] != "k3s" ||
+		len(got[0].EnvNames) != 2 || got[0].EnvNames[0] != "A" || got[0].EnvNames[1] != "B" {
+		t.Errorf("args/env names not recorded in order: %+v", got)
+	}
+	if got[0].TimeoutSec != 90 || !got[0].RebootAfter {
+		t.Errorf("timeoutSec/rebootAfter not recorded: %+v", got[0])
+	}
+	if b, _ := json.Marshal(got); strings.Contains(string(b), "secret") {
+		t.Errorf("env values must not reach the manifest: %s", b)
+	}
+}
+
+func TestCompositionManifestRecordsBeforeLogin(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	tests := []struct {
+		name        string
+		beforeLogin *bool
+		want        string
+	}{
+		{"enabled", &on, `"beforeLogin": true`},
+		{"explicit false", &off, `"beforeLogin": false`},
+		{"unset", nil, `"beforeLogin": false`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tmpl := &config.ImageTemplate{SystemConfig: config.SystemConfig{
+				Provisioning: config.ProvisioningConfig{BeforeLogin: tt.beforeLogin},
+			}}
+			m, err := BuildCompositionManifest(tmpl, nil, "", "")
+			if err != nil {
+				t.Fatalf("BuildCompositionManifest: %v", err)
+			}
+			out := filepath.Join(t.TempDir(), "image.composition.json")
+			if err := WriteCompositionManifest(m, out); err != nil {
+				t.Fatalf("WriteCompositionManifest: %v", err)
+			}
+			data, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), tt.want) {
+				t.Errorf("manifest lacks %s:\n%s", tt.want, data)
+			}
+		})
+	}
+}

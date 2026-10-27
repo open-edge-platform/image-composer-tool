@@ -1715,7 +1715,7 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	if !sc.Proxy.IsEmpty() {
 		offending = append(offending, "proxy")
 	}
-	if len(sc.Provisioning.Scripts) > 0 {
+	if len(sc.Provisioning.Scripts) > 0 || sc.Provisioning.BeforeLogin != nil {
 		offending = append(offending, "provisioning")
 	}
 	if !sc.CloudInit.isEmpty() {
