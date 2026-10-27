@@ -54,30 +54,52 @@ func TestBuildComposeSummary_KernelVersion(t *testing.T) {
 	})
 }
 
+// TestAdvancedChanges confirms the build summary records each Advanced-tab
+// override, and that logins are reduced to account names.
 func TestAdvancedChanges(t *testing.T) {
-	if got := advancedChanges(Selection{Vertical: "v"}); got != nil {
-		t.Fatalf("no overrides: got %+v, want nil", got)
-	}
+	t.Run("nil without overrides", func(t *testing.T) {
+		if got := advancedChanges(Selection{Vertical: "v"}); got != nil {
+			t.Fatalf("got %+v, want nil", got)
+		}
+	})
+
 	sel := Selection{
-		ImageName:   "custom",
-		Packages:    []string{"vim", "curl_8.5.0"},
-		Repos:       []string{"intel-gpu"},
-		Disk:        &DiskOverride{Size: "32GiB", PartitionTableType: "gpt", Partitions: []DiskPartitionOverride{{ID: "root", FsType: "ext4", MountPoint: "/"}}},
+		ImageName: "custom",
+		Packages:  []string{"vim", "curl_8.5.0"},
+		Repos:     []string{"intel-gpu"},
+		Disk: &DiskOverride{
+			Size:               "32GiB",
+			PartitionTableType: "gpt",
+			Partitions:         []DiskPartitionOverride{{ID: "root", FsType: "ext4", MountPoint: "/"}},
+		},
 		NewUsers:    []NewUserInput{{User: "alice", Password: "secret"}},
 		Credentials: []CredentialInput{{User: "user", SSHAuthorizedKey: "ssh-ed25519 AAAA"}},
 	}
 	got := advancedChanges(sel)
-	if got.ImageName != "custom" || len(got.Packages) != 2 || len(got.Repos) != 1 {
-		t.Fatalf("got %+v", got)
-	}
-	if got.Disk == nil || got.Disk.Size != "32GiB" || len(got.Disk.Partitions) != 1 || got.Disk.Partitions[0].MountPoint != "/" {
-		t.Fatalf("disk: got %+v", got.Disk)
-	}
-	if len(got.NewUsers) != 1 || got.NewUsers[0] != "alice" || len(got.CredentialsFor) != 1 || got.CredentialsFor[0] != "user" {
-		t.Fatalf("users: got %+v / %+v", got.NewUsers, got.CredentialsFor)
-	}
-	b, _ := json.Marshal(got)
-	if strings.Contains(string(b), "secret") || strings.Contains(string(b), "AAAA") {
-		t.Fatalf("summary leaks a credential: %s", b)
-	}
+
+	t.Run("records every override", func(t *testing.T) {
+		if got.ImageName != "custom" || len(got.Packages) != 2 || len(got.Repos) != 1 {
+			t.Fatalf("got %+v", got)
+		}
+		d := got.Disk
+		if d == nil || d.Size != "32GiB" || len(d.Partitions) != 1 || d.Partitions[0].MountPoint != "/" {
+			t.Fatalf("disk: got %+v", d)
+		}
+	})
+
+	t.Run("keeps account names only", func(t *testing.T) {
+		if len(got.NewUsers) != 1 || got.NewUsers[0] != "alice" {
+			t.Fatalf("new users: got %+v", got.NewUsers)
+		}
+		if len(got.CredentialsFor) != 1 || got.CredentialsFor[0] != "user" {
+			t.Fatalf("credentials: got %+v", got.CredentialsFor)
+		}
+		b, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "secret") || strings.Contains(string(b), "AAAA") {
+			t.Fatalf("summary leaks a credential: %s", b)
+		}
+	})
 }
