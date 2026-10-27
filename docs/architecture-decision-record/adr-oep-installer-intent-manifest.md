@@ -145,7 +145,8 @@ The dependency interface shall:
 
 The exact command, transport, and response schema shall be defined in a
 separate interface specification. A simple CLI that emits versioned JSON is
-sufficient for the initial implementation.
+sufficient for the initial implementation. See
+[Interface Specification: OEP Installer → ICT Profile Package Requirements](./oep-installer-sbom-interface.md).
 
 ## Options Considered
 
