@@ -501,14 +501,21 @@
       "properties": {
         "backend": {
           "type": "string",
-          "description": "Network backend to use",
-          "enum": ["systemd-networkd", "netplan"]
+          "description": "Which component owns networking on the installed OS. systemd-networkd: ICT enables systemd-networkd. netplan: netplan (for example via cloud-init) drives the renderer at boot. networkmanager: NetworkManager owns networking. none: ICT leaves networking alone.",
+          "enum": ["systemd-networkd", "netplan", "networkmanager", "none"]
         },
         "interfaces": {
           "type": "array",
           "description": "List of network interfaces to configure",
           "items": { "$ref": "#/$defs/NetworkInterface" }
         }
+      },
+      "if": {
+        "properties": { "backend": { "enum": ["networkmanager", "none"] } },
+        "required": ["backend"]
+      },
+      "then": {
+        "properties": { "interfaces": { "maxItems": 0 } }
       },
       "additionalProperties": false
     },

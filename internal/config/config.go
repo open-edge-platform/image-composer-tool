@@ -407,9 +407,20 @@ type NetworkInterface struct {
 	Nameservers []string       `yaml:"nameservers,omitempty"` // Nameservers: DNS server addresses
 }
 
+// Network backends: the component that owns network configuration on the
+// installed OS. ICT enables systemd-networkd at build time only for
+// NetworkBackendSystemdNetworkd; for every other value the named component (or
+// nobody) is responsible for bringing the network up at boot.
+const (
+	NetworkBackendSystemdNetworkd = "systemd-networkd" // ICT enables systemd-networkd; interfaces are written as .network files
+	NetworkBackendNetplan         = "netplan"          // netplan owns networking and enables networkd/NetworkManager itself at boot (e.g. cloud-init images)
+	NetworkBackendNetworkManager  = "networkmanager"   // NetworkManager owns networking; ICT does not enable systemd-networkd
+	NetworkBackendNone            = "none"             // ICT leaves networking alone; the template or image brings its own
+)
+
 // NetworkConfig represents the network configuration for the installed OS
 type NetworkConfig struct {
-	Backend    string             `yaml:"backend,omitempty"`    // Backend: network backend (netplan or systemd-networkd)
+	Backend    string             `yaml:"backend,omitempty"`    // Backend: network owner (systemd-networkd, netplan, networkmanager or none)
 	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
 }
 

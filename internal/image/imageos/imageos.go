@@ -1236,17 +1236,30 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return fmt.Errorf("failed to write declarative network config: %w", err)
 	}
 
-	// Only enable systemd-networkd when the template explicitly opts into it
-	// as the network backend. Leaving Backend unset means the template did
-	// not ask ICT to manage networking at all, and the netplan backend
-	// manages its own renderer — in both cases systemd-networkd must not be
-	// unconditionally enabled, since the unit ships as part of the base
-	// systemd package and is almost always present. Enabling it regardless
-	// of backend makes it fight NetworkManager (or networkd's own default
-	// renderer) for the same interfaces, producing a DHCP lease on one or
-	// both managers with broken or duplicate routing and no real
-	// connectivity, even though the interface still shows "connected".
-	if template.SystemConfig.Network.Backend != "systemd-networkd" {
+	// systemd-networkd's unit ships in the base systemd package, so its mere
+	// presence says nothing about whether it should run. The template's
+	// network.backend (usually inherited from the OS default config) names the
+	// component that owns networking, and only "systemd-networkd" means ICT
+	// must enable it here. With netplan (e.g. cloud-init images) the netplan
+	// generator enables the right renderer at boot; with networkmanager the
+	// NetworkManager package enables itself. Enabling networkd as well makes it
+	// fight them for the same interface: DHCP still succeeds and the link shows
+	// "connected", but routing is broken or duplicated.
+	networkManagerPresent := pathExists(filepath.Join(installRoot, "lib", "systemd", "system", "NetworkManager.service"))
+	switch backend := template.SystemConfig.Network.Backend; backend {
+	case config.NetworkBackendSystemdNetworkd:
+		if networkManagerPresent {
+			log.Warnf("network.backend is %q but NetworkManager is installed in %s; both will manage the same interfaces. "+
+				"Set network.backend to %q if NetworkManager should own networking",
+				backend, installRoot, config.NetworkBackendNetworkManager)
+		}
+	case config.NetworkBackendNetworkManager:
+		if !networkManagerPresent {
+			log.Warnf("network.backend is %q but NetworkManager is not installed in %s; add the network-manager package or choose another backend",
+				backend, installRoot)
+		}
+		return nil
+	default:
 		return nil
 	}
 
@@ -1260,6 +1273,11 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return fmt.Errorf("failed to enable systemd-networkd: %w", err)
 	}
 	return nil
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func addImageIDFile(installRoot string, template *config.ImageTemplate) error {
@@ -1478,6 +1496,10 @@ func fstabEntry(mountId, mountPoint string, partition config.PartitionInfo) stri
 }
 
 func createResolvConfSymlink(installRoot string, template *config.ImageTemplate) error {
+	if template.SystemConfig.Network.Backend == config.NetworkBackendNone {
+		log.Debug("network.backend is none, leaving resolv.conf alone")
+		return nil
+	}
 	log.Infof("Creating resolv.conf for image: %s", template.GetImageName())
 	resolveConfPath := "/etc/resolv.conf"
 	resolveConfFullPath := filepath.Join(installRoot, resolveConfPath)

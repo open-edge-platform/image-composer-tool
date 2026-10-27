@@ -555,6 +555,45 @@ func TestNetworkView_MergeInterfaces(t *testing.T) {
 	}
 }
 
+func TestNetworkView_RejectsInterfacesForOwnerOnlyBackends(t *testing.T) {
+	for _, backend := range []string{config.NetworkBackendNetworkManager, config.NetworkBackendNone} {
+		t.Run(backend, func(t *testing.T) {
+			template := &config.ImageTemplate{
+				SystemConfig: config.SystemConfig{
+					Network: config.NetworkConfig{Backend: backend},
+				},
+			}
+
+			nextCalled := false
+			nextPage := func() { nextCalled = true }
+
+			nv := New()
+			if err := nv.Initialize("Back", template, tview.NewApplication(), nextPage, func() {}, func() {}, func() {}); err != nil {
+				t.Fatalf("Initialize() returned error: %v", err)
+			}
+
+			nv.interfaceField.SetText("eth0")
+			nv.dhcpDropDown.SetCurrentOption(0) // DHCP
+			nv.onNextButton(nextPage)
+
+			if nextCalled {
+				t.Error("expected the installer to stay on the page when interfaces cannot be configured")
+			}
+			network := template.SystemConfig.Network
+			if network.Backend != backend || len(network.Interfaces) != 0 {
+				t.Errorf("template network config must be left untouched, got %+v", network)
+			}
+
+			// Leaving the interface name blank still continues.
+			nv.interfaceField.SetText("")
+			nv.onNextButton(nextPage)
+			if !nextCalled {
+				t.Error("expected a blank interface name to continue")
+			}
+		})
+	}
+}
+
 func TestNetworkView_ReplaceExistingInterface(t *testing.T) {
 	template := &config.ImageTemplate{
 		Target: config.TargetInfo{

@@ -185,6 +185,14 @@ func (nv *NetworkView) onNextButton(nextPage func()) {
 		return
 	}
 
+	// These backends cannot render interface configuration, so reject the edit
+	// now rather than failing the installation after the disk is partitioned.
+	switch backend := nv.template.SystemConfig.Network.Backend; backend {
+	case config.NetworkBackendNetworkManager, config.NetworkBackendNone:
+		nv.navBar.SetUserFeedback(fmt.Sprintf(uitext.NetworkOwnerOnlyErrorFmt, backend), tview.Styles.TertiaryTextColor)
+		return
+	}
+
 	_, selectedDHCP := nv.dhcpDropDown.GetCurrentOption()
 	useDHCP := selectedDHCP == dhcpOptionYes
 

@@ -160,6 +160,7 @@ const (
 	NetworkIPInvalidErrorFmt      = "invalid IP address (CIDR format required): %s"
 	NetworkGatewayInvalidErrorFmt = "invalid gateway address: %s"
 	NetworkDNSInvalidErrorFmt     = "invalid DNS server address: %s"
+	NetworkOwnerOnlyErrorFmt      = "networking on this image is managed by %s, so interfaces cannot be configured here; leave the interface name blank"
 )
 
 // ProgressView text.

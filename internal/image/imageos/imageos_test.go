@@ -1349,16 +1349,18 @@ func TestUpdateImageNetwork(t *testing.T) {
 	}
 }
 
-// TestUpdateImageNetworkDoesNotEnableNetworkdUnlessRequested is a regression test:
-// systemd-networkd must only be enabled when the template explicitly selects it as
-// the network backend. The systemd-networkd unit ships as part of the base systemd
-// package and is present in virtually every image, so enabling it whenever the
-// backend is merely not "netplan" (including when no network config is specified
-// at all) makes it fight NetworkManager, or any distro-default renderer, for the
-// same interfaces: DHCP still succeeds and the interface still reports
-// "connected", but routing becomes broken or duplicated and outbound connectivity
-// fails.
-func TestUpdateImageNetworkDoesNotEnableNetworkdUnlessRequested(t *testing.T) {
+// TestUpdateImageNetworkEnablesNetworkdOnlyForNetworkdBackend is a regression
+// test: network.backend names the component that owns networking, and ICT
+// enables systemd-networkd only when that owner is systemd-networkd. The unit
+// ships in the base systemd package and is present in virtually every image, so
+// enabling it for any other owner (netplan/cloud-init, NetworkManager, or
+// nobody) makes it fight that owner for the same interfaces: DHCP still
+// succeeds and the interface still reports "connected", but routing becomes
+// broken or duplicated and outbound connectivity fails.
+//
+// The mocked "systemctl enable" returns a sentinel error, so each case proves
+// whether the enable call was reached rather than tolerating both outcomes.
+func TestUpdateImageNetworkEnablesNetworkdOnlyForNetworkdBackend(t *testing.T) {
 	originalExecutor := shell.Default
 	t.Cleanup(func() { shell.Default = originalExecutor })
 
@@ -1368,13 +1370,19 @@ func TestUpdateImageNetworkDoesNotEnableNetworkdUnlessRequested(t *testing.T) {
 	})
 
 	testCases := []struct {
-		name        string
-		backend     string
-		expectError bool
+		name               string
+		backend            string
+		networkManagerUnit bool
+		expectEnable       bool
 	}{
-		{name: "unset backend (no network config requested)", backend: "", expectError: false},
-		{name: "netplan backend", backend: "netplan", expectError: false},
-		{name: "systemd-networkd backend", backend: "systemd-networkd", expectError: true},
+		{name: "unset backend", backend: "", expectEnable: false},
+		{name: "none", backend: config.NetworkBackendNone, expectEnable: false},
+		{name: "netplan", backend: config.NetworkBackendNetplan, expectEnable: false},
+		{name: "networkmanager", backend: config.NetworkBackendNetworkManager, networkManagerUnit: true, expectEnable: false},
+		{name: "networkmanager without the package installed", backend: config.NetworkBackendNetworkManager, expectEnable: false},
+		{name: "systemd-networkd", backend: config.NetworkBackendSystemdNetworkd, expectEnable: true},
+		// Only a warning: an explicit systemd-networkd choice is honored.
+		{name: "systemd-networkd with NetworkManager installed", backend: config.NetworkBackendSystemdNetworkd, networkManagerUnit: true, expectEnable: true},
 	}
 
 	for _, tc := range testCases {
@@ -1389,18 +1397,40 @@ func TestUpdateImageNetworkDoesNotEnableNetworkdUnlessRequested(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
 				t.Fatalf("failed to create unit file: %v", err)
 			}
+			if tc.networkManagerUnit {
+				if err := os.WriteFile(filepath.Join(unitDir, "NetworkManager.service"), []byte(""), 0644); err != nil {
+					t.Fatalf("failed to create NetworkManager unit file: %v", err)
+				}
+			}
 
 			template := createTestImageTemplate()
 			template.SystemConfig.Network.Backend = tc.backend
 
 			err := updateImageNetwork(installRoot, template)
-			if tc.expectError && err == nil {
+			if tc.expectEnable && err == nil {
 				t.Errorf("backend %q: expected systemd-networkd to be enabled, but it was not", tc.backend)
 			}
-			if !tc.expectError && err != nil {
+			if !tc.expectEnable && err != nil {
 				t.Errorf("backend %q: systemd-networkd must not be enabled, got error: %v", tc.backend, err)
 			}
 		})
+	}
+}
+
+// TestUpdateImageNetworkSkipsEnableWhenNetworkdUnitMissing keeps the existing
+// tolerance for minimal images that do not ship systemd-networkd at all.
+func TestUpdateImageNetworkSkipsEnableWhenNetworkdUnitMissing(t *testing.T) {
+	originalExecutor := shell.Default
+	t.Cleanup(func() { shell.Default = originalExecutor })
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: `systemctl enable.*systemd-networkd`, Output: "", Error: fmt.Errorf("must not be reached")},
+	})
+
+	template := createTestImageTemplate()
+	template.SystemConfig.Network.Backend = config.NetworkBackendSystemdNetworkd
+
+	if err := updateImageNetwork(t.TempDir(), template); err != nil {
+		t.Errorf("a missing systemd-networkd unit must be skipped, got: %v", err)
 	}
 }
 
@@ -1911,6 +1941,18 @@ func TestCreateResolvConfSymlink(t *testing.T) {
 		err := createResolvConfSymlink(installRoot, template)
 		if err != nil {
 			t.Fatalf("createResolvConfSymlink() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("leaves resolv.conf alone when network.backend is none", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `ln -sf`, Output: "", Error: fmt.Errorf("resolv.conf must not be touched for backend none")},
+		})
+
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+		template.SystemConfig.Network.Backend = config.NetworkBackendNone
+		if err := createResolvConfSymlink(t.TempDir(), template); err != nil {
+			t.Fatalf("createResolvConfSymlink() must skip backend none, got: %v", err)
 		}
 	})
 
