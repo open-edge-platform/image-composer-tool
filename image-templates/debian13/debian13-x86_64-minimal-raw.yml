@@ -54,6 +54,10 @@ disk:
       mountOptions: defaults
 
 systemConfig:
+  # Network owner: cloud-init renders netplan config at boot and the netplan
+  # generator enables the renderer, so ICT must not also enable systemd-networkd.
+  network:
+    backend: netplan
   name: minimal
   description: Minimal debian image
 

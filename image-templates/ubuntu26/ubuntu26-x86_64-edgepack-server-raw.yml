@@ -62,6 +62,10 @@ packageRepositories:
     component: "stable"
 
 systemConfig:
+  # Network owner: this image installs NetworkManager, so ICT must not also
+  # enable systemd-networkd.
+  network:
+    backend: networkmanager
   name: edgepack-server-demo
   description: Ubuntu 26.04 (resolute) minimal server image with the EdgePack base metapackage and media/manageability add-ons
 
