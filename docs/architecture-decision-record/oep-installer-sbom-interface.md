@@ -56,6 +56,21 @@ reads the host's `/etc/os-release`, so repository suites and `.deb` URLs come
 out for the build host instead of the target. For example, an Ubuntu 22.04
 build host gets `jammy` repositories for a `noble` image.
 
+ICT generates the file from the template's target in a temporary directory.
+It is not copied into the image. The file sets these fields, and the CLI MUST
+NOT rely on any others: `NAME`, `PRETTY_NAME`, `ID`, `ID_LIKE`, `VERSION_ID`,
+`VERSION_CODENAME`, and `UBUNTU_CODENAME`. For an Ubuntu 24.04 target:
+
+```ini
+NAME="Ubuntu"
+PRETTY_NAME="Ubuntu 24.04 LTS"
+ID=ubuntu
+ID_LIKE=debian
+VERSION_ID="24.04"
+VERSION_CODENAME=noble
+UBUNTU_CODENAME=noble
+```
+
 Version 1 covers `amd64` targets only.
 
 ### A.2 Behavioral requirements
