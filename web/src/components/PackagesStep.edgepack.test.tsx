@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EdgePack } from '../api/types'
 import { PackagesStep } from './PackagesStep'
+import { useStore } from '../store'
 
 const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
@@ -34,6 +35,7 @@ const advance = (ms: number) =>
 const mediaCard = () => screen.queryByRole('button', { expanded: false, name: /Media/ })
 
 beforeEach(() => {
+  useStore.setState({ addedPackages: [], enabledRepos: [] })
   vi.useFakeTimers()
   vi.resetAllMocks()
   mockApi.listPackageRepos.mockResolvedValue({
@@ -110,6 +112,62 @@ describe('PackagesStep Edge Pack', () => {
     unmount()
     await advance(30000)
     expect(mockApi.getEdgePack).toHaveBeenCalledTimes(1)
+  })
+
+  it('lists what the chosen runtime includes, collapsed and read-only', async () => {
+    const p = pack('7.1')
+    p.baseRuntimes[0].includes = [
+      {
+        name: 'gfx-core',
+        version: '1.0',
+        description: 'graphics core',
+        includes: [{ name: 'libmesa' }, { name: 'edge-gfx-dkms', version: '7.0' }],
+      },
+      { name: 'media-core', includes: [{ name: 'gfx-core' }, { name: 'libva2' }] },
+    ]
+    mockApi.getEdgePack.mockResolvedValue(p)
+
+    render(<PackagesStep os="ubuntu24" active basePackages={[]} />)
+    await advance(0)
+    // Nothing is listed until the runtime is actually chosen.
+    expect(screen.queryByRole('button', { name: /Included with Standard/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Standard' }))
+    // gfx-core appears twice in the tree but is counted once.
+    const toggle = screen.getByRole('button', { name: 'Included with Standard (5 packages)' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('checkbox', { name: 'gfx-core' })).toBeNull()
+
+    fireEvent.click(toggle)
+    const row = screen.getByRole('checkbox', { name: 'gfx-core' }) as HTMLInputElement
+    expect(row.checked).toBe(true)
+    expect(row.disabled).toBe(true)
+    expect(screen.queryByRole('checkbox', { name: 'libmesa' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand gfx-core' }))
+    expect(screen.getByRole('checkbox', { name: 'libmesa' })).toBeTruthy()
+    expect(screen.getByText('7.0')).toBeTruthy()
+  })
+
+  it('labels the included list when the runtime is pinned to another version', async () => {
+    const p = pack('7.1')
+    p.baseRuntimes[0].package.version = '1.1'
+    p.baseRuntimes[0].includes = [{ name: 'gfx-core' }]
+    mockApi.getEdgePack.mockResolvedValue(p)
+
+    render(<PackagesStep os="ubuntu24" active basePackages={[]} />)
+    await advance(0)
+    act(() => {
+      useStore.getState().setPackage({ name: 'base-standard', version: '1.0', repo: 'intel-eci' })
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Included with Standard/ }))
+    expect(screen.getByText(/pinned to 1\.0, which may include a different set/)).toBeTruthy()
+
+    // Pinned to the newest version, or unpinned, the list is exact — no note.
+    act(() => {
+      useStore.getState().setPackage({ name: 'base-standard', version: '1.1', repo: 'intel-eci' })
+    })
+    expect(screen.queryByText(/which may include a different set/)).toBeNull()
   })
 
   it('reports Edge Pack unavailable when the first request fails', async () => {

@@ -332,6 +332,46 @@ describe('BuildView template row', () => {
     expect(screen.queryByText('Template')).toBeNull()
     expect(screen.getAllByText(DETAILS.template)).toHaveLength(1)
   })
+
+  it('lists each Advanced-tab change by name, capping long lists behind Show more', async () => {
+    const packages = Array.from({ length: 11 }, (_, i) => `pkg-${i}`)
+    buildDetails.mockResolvedValue({
+      ...DETAILS,
+      summary: {
+        ...SUMMARY,
+        advanced: {
+          imageName: 'my-image',
+          packages,
+          repos: ['intel-gpu'],
+          disk: { size: '32GiB', partitionTable: 'gpt', partitions: [{ id: 'root', fsType: 'ext4', mountPoint: '/' }] },
+          newUsers: ['alice'],
+        },
+      },
+    })
+    await renderBuildView(false)
+    await screen.findByText(DETAILS.template)
+    await act(async () => {
+      screen.getByRole('button', { name: /Compose details/ }).click()
+    })
+    const toggle = screen.getByRole('button', { name: /Your changes/ })
+    expect(toggle.textContent).toContain('image name, 11 packages, 1 repo, disk layout, 1 new user')
+    await act(async () => {
+      toggle.click()
+    })
+
+    expect(screen.getByText('my-image')).toBeTruthy()
+    expect(screen.getByText('intel-gpu')).toBeTruthy()
+    expect(screen.getByText('alice')).toBeTruthy()
+    expect(screen.getByText('root · ext4 · /')).toBeTruthy()
+    expect(screen.getByText('pkg-7')).toBeTruthy()
+    expect(screen.queryByText('pkg-8')).toBeNull()
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Show 3 more' }).click()
+    })
+    expect(screen.getByText('pkg-10')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeTruthy()
+  })
 })
 
 // An Advanced-mode build runs against a generated `extends` delta in the

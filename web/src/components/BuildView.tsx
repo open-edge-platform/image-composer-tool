@@ -7,6 +7,7 @@ import type {
   ResidualIssue,
 } from '../api/types'
 import { artifactTypeLabel } from '../api/types'
+import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
@@ -488,6 +489,11 @@ export function BuildView({
                   </div>
                 </div>
               )}
+
+              {/* Advanced-tab changes: the delta this build layered onto the
+                  matched template. Collapsed by default; absent when the build
+                  overrode nothing. */}
+              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} />}
 
             </div>
           )}
