@@ -24,9 +24,10 @@ keeps its key names. The changes requested from `openedge-cli` are:
 
 1. Accept `--os-release <file>` so the output describes the target image,
    not the build host (A.1).
-2. Exit non-zero, with a message on stderr, for an unknown profile (A.3).
-3. Print a header document with `schema-version`, `cli-version`, and
-   `profile` first (A.5).
+2. Exit non-zero, with a message on stderr, if any requested profile is
+   unknown (A.3).
+3. Print a header document with `schema-version`, `cli-version`, and the
+   `profiles` list first (A.5).
 4. In the `docker_ce` handler, rename `apt-entry` to `apt-source` and
    `apt-file` to `apt-list-file` (A.6).
 5. For packages pinned with `Pin: version`, also list the exact version in
@@ -35,6 +36,9 @@ keeps its key names. The changes requested from `openedge-cli` are:
 6. Validate the `list --sbom` output of every profile against the JSON Schema
    in the appendix, ideally in CI. This catches problems like item 4 before
    ICT sees them.
+7. In the kernel handlers (`linux_image_6.18_intel`,
+   `linux_image_generic_7.0`), also print the kernel parameters they set, as
+   `kernel-cmdline` (A.6).
 
 The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 
@@ -45,12 +49,12 @@ The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 ### A.1 Command
 
 ```text
-openedge-cli list --sbom --os-release <file> <profile>
+openedge-cli list --sbom --os-release <file> <profile> [<profile>...]
 ```
 
 | Input | Meaning |
 | --- | --- |
-| `<profile>` | Exactly one profile identifier, as listed by `openedge-cli list`. |
+| `<profile>...` | One or more profile identifiers, as accepted by `openedge-cli install`. |
 | `--os-release <file>` | An `os-release(5)` file describing the **target image**. The CLI MUST read it instead of the host's `/etc/os-release`. |
 
 ICT runs the query on the build host, which is often a different Ubuntu
@@ -121,7 +125,7 @@ documents are allowed and ignored.
 | --- | --- | --- | --- |
 | `schema-version` | string | yes | `"1"` for this specification. ICT rejects versions it does not support. |
 | `cli-version` | string | yes | Released version of `openedge-cli` (for example `"v2026.3.0"`). |
-| `profile` | string | yes | The profile the output was produced for. |
+| `profiles` | array of string | yes | The profiles the output was produced for, in the order requested. |
 
 ### A.6 Component documents
 
@@ -134,7 +138,8 @@ it.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `pkg-list` | array of string | Packages the profile requires. Each entry is one of: a package name; `name=version`, where `version` is an exact Debian version string; a glob over package names (`*`, `?`, `[...]`); or an `https://` URL of an artifact that is not in an apt repository. |
+| `pkg-list` | array of string | Packages the profile requires. Each entry is one of: a package name; `name=version`, where `version` is an exact Debian version string; a glob over package names (`*`, `?`, `[...]`); an `https://` URL of an artifact that is not in an apt repository; or `-name`, meaning the profile needs the package not to be installed. |
+| `kernel-cmdline` | array of string | Optional. Kernel command-line parameters the module needs (for example `"xe.max_vfs=7"`), as the kernel handlers set them in `GRUB_CMDLINE_LINUX` today. |
 | `component` | string | Optional. Module name (for example `"docker_io"`), shown in ICT error messages. |
 | `apt-repository` | string | Optional. An Ubuntu archive component (`universe`, `multiverse`, `restricted`). ICT images already enable all of them, so ICT ignores this key. |
 
@@ -149,7 +154,18 @@ ICT handles `pkg-list` entries as follows:
 | Package name or `name=version` | Resolved from the template's repositories plus the repositories in the output, and installed. A package that no configured repository provides fails the build. Two `name=version` entries for the same package with different versions fail the build. |
 | Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: repository priority first (including `Pin: origin` priorities from the output), then the newest version. A glob that matches nothing fails the build. |
 | `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
-| Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Skipped with a warning. The image template selects the kernel. |
+| Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Must be one of the kernel packages the template installs (`systemConfig.kernel`, after its globs are resolved). Otherwise the build fails. ICT does not add or replace a kernel. |
+| `-name` (for example `"-ubuntu-desktop"`) | If the template's package list contains `name`, the build fails. Otherwise the entry is ignored. |
+
+Each `kernel-cmdline` entry must appear, exactly, as a parameter in the
+template's `systemConfig.kernel.cmdline`. Otherwise the build fails. The
+template may set other parameters as well.
+
+These checks keep the template in charge of the kernel and still give the
+profile the kernel it expects. The kernel handlers skip their installation
+step when the running kernel already matches (they check `uname -r`). Their
+kernel parameters are only applied in that installation step, so on an ICT
+image they must already be in the template's command line.
 
 #### Repository group
 
@@ -200,7 +216,7 @@ They MUST be `apt-source` and `apt-list-file`.
 ```yaml
 "schema-version": "1"
 "cli-version": "v2026.3.0"
-"profile": "handheld_multi_modal"
+"profiles": ["handheld_multi_modal"]
 ---
 "pkg-list": ["curl","ca-certificates"]
 ---
@@ -227,18 +243,20 @@ ICT runs the query on the build host before it resolves packages:
    generates the target `os-release` file (A.1), and runs the query. A
    non-zero exit fails the build and shows stderr.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
-   - the header's `schema-version` is supported and its `profile` is the one
-     requested
+   - the header's `schema-version` is supported and its `profiles` are the
+     ones requested
    - every document matches the JSON Schema in the appendix
    - the rules the schema cannot express hold: `signed-by` in `apt-source`
-     equals `key-file`, and every non-URL, non-kernel `pkg-list` entry
+     equals `key-file`, and every package name or glob in `pkg-list`
      resolves from a configured repository
+   - kernel packages and `kernel-cmdline` entries match the template, and no
+     `-name` entry names a package in the template's package list (A.6)
 
    Any failure stops the build with an error naming the failing document.
 3. **Convert packages.** `pkg-list` entries are added to the image's package
    list as described in A.6: names and globs as given, `name=version`
-   converted to ICT's `name_version` form, URLs and kernel packages skipped,
-   duplicates removed.
+   converted to ICT's `name_version` form, duplicates removed. URLs, kernel
+   packages, and `-name` entries are not added.
 4. **Convert repositories.** Each repository group becomes an ICT package
    repository used for resolution: URL, suite, and component from
    `apt-source`, the key from `gpg-key`, and the priority from a
@@ -277,7 +295,7 @@ ICT runs the installer from a first-boot provisioning unit, after the network
 is online, as the template-defined user:
 
 ```text
-openedge-cli install <profile> [<template-provided arguments>...]
+openedge-cli install <profile> [<profile>...] [<template-provided arguments>...]
 ```
 
 - **Sudo.** ICT gives the user passwordless sudo only while the unit runs,
@@ -297,7 +315,7 @@ This relies on behavior `openedge-cli` already has. Please confirm:
 
 1. With no TTY and passwordless sudo, `install` never prompts or waits for
    input.
-2. Running `install <profile>` again after a reboot or a failure continues the
+2. Running the same `install` command again after a reboot or a failure continues the
    installation, as `resume` does. Steps already done are skipped, including
    packages and repositories ICT installed.
 
@@ -324,16 +342,17 @@ match `header`, and every other non-empty document must match `component`.
       "anyOf": [
         { "pattern": "^[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9.+~:-]+)?$" },
         { "pattern": "^[a-z0-9*?\\[][a-z0-9+.*?\\[\\]-]*$" },
-        { "pattern": "^https://\\S+$" }
+        { "pattern": "^https://\\S+$" },
+        { "pattern": "^-[a-z0-9][a-z0-9+.-]+$" }
       ]
     },
     "header": {
       "type": "object",
-      "required": ["schema-version", "cli-version", "profile"],
+      "required": ["schema-version", "cli-version", "profiles"],
       "properties": {
         "schema-version": { "const": "1" },
         "cli-version": { "$ref": "#/$defs/nonEmpty" },
-        "profile": { "$ref": "#/$defs/nonEmpty" }
+        "profiles": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
       }
     },
     "component": {
@@ -342,6 +361,7 @@ match `header`, and every other non-empty document must match `component`.
       "properties": {
         "component": { "$ref": "#/$defs/nonEmpty" },
         "pkg-list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/pkg" } },
+        "kernel-cmdline": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^\\S+$" } },
         "apt-repository": { "enum": ["universe", "multiverse", "restricted"] },
         "name": { "$ref": "#/$defs/nonEmpty" },
         "gpg-key": { "type": "string", "pattern": "^https://" },
@@ -365,6 +385,7 @@ match `header`, and every other non-empty document must match `component`.
       },
       "anyOf": [
         { "required": ["pkg-list"] },
+        { "required": ["kernel-cmdline"] },
         { "required": ["apt-source"] },
         { "required": ["apt-repository"] }
       ]
@@ -373,6 +394,7 @@ match `header`, and every other non-empty document must match `component`.
 }
 ```
 
-ICT also checks that `signed-by` in `apt-source` equals `key-file`, and that
-every non-URL, non-kernel `pkg-list` entry resolves from a configured
-repository.
+ICT also checks the rules in A.8 that the schema cannot express: `signed-by`
+in `apt-source` equals `key-file`, package names and globs resolve, kernel
+packages and `kernel-cmdline` match the template, and `-name` entries do not
+name template packages.
