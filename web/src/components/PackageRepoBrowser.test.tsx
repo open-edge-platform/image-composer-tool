@@ -327,4 +327,25 @@ describe('selected-count badge', () => {
 
     expect((await screen.findByRole('button', { name: '0 of 250 selected' }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('still shows zero when the full catalog size never arrives', async () => {
+    // The full-catalog request is cancelled by ticking "Show frequently used"
+    // before it lands, and a curated response never reports the full size.
+    const curatedRepos = repos.map((r) => (r.id === 'base' ? { ...r, hasCuratedPackages: true } : r))
+    useStore.setState({ addedPackages: [{ name: 'docker-ce', version: '', repo: 'docker' }] })
+    mockApi.searchPackages.mockImplementation(({ curated }: { curated?: boolean }) =>
+      curated
+        ? Promise.resolve({
+            packages: [{ name: 'zebra', version: '1.0', repository: 'base', versions: [{ version: '1.0', repository: 'base' }] }],
+            total: 1,
+          })
+        : new Promise(() => {}),
+    )
+    render(<Browser repos={curatedRepos} os="ubuntu" baseLock={noLock} />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show frequently used' }))
+    await screen.findByText('zebra')
+
+    expect((screen.getByRole('button', { name: '0 selected' }) as HTMLButtonElement).disabled).toBe(true)
+  })
 })
