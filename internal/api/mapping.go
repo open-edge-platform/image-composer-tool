@@ -283,6 +283,7 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 			Available:         r.Available,
 			UnavailableReason: optStr(r.UnavailableReason),
 			RequiresRepos:     optStrs(r.RequiresRepos),
+			Includes:          fromEdgePackIncluded(r.Includes),
 		}
 	}
 	for i, d := range p.Domains {
@@ -297,6 +298,24 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 		}
 	}
 	return out
+}
+
+// fromEdgePackIncluded maps a runtime's dependency tree, returning nil for an
+// empty level so `includes` is omitted rather than emitted as `[]`.
+func fromEdgePackIncluded(inc []service.EdgePackIncluded) *[]httpapi.EdgePackIncludedPackage {
+	if len(inc) == 0 {
+		return nil
+	}
+	out := make([]httpapi.EdgePackIncludedPackage, len(inc))
+	for i, p := range inc {
+		out[i] = httpapi.EdgePackIncludedPackage{
+			Name:        p.Name,
+			Description: optStr(p.Description),
+			Version:     optStr(p.Version),
+			Includes:    fromEdgePackIncluded(p.Includes),
+		}
+	}
+	return &out
 }
 
 func fromEdgePackPackages(pkgs []service.EdgePackPackage) []httpapi.EdgePackPackage {

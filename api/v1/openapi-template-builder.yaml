@@ -960,6 +960,15 @@ components:
           items:
             type: string
           example: [intel-graphics]
+        includes:
+          type: array
+          description: |
+            What the runtime's metapackage installs, read from its `Depends` in
+            the pack repository's index. Display-only: these are not selectable,
+            since the runtime installs them regardless. Absent when the index
+            was unreachable or still loading (see `EdgePack.versionsPending`).
+          items:
+            $ref: "#/components/schemas/EdgePackIncludedPackage"
 
     EdgePackDomain:
       type: object
@@ -1036,6 +1045,32 @@ components:
             exactly as a searched one does. Empty when no index answered.
           items:
             $ref: "#/components/schemas/PackageVersion"
+
+    EdgePackIncludedPackage:
+      type: object
+      description: |
+        One package a base runtime installs by dependency. A dependency that is
+        itself a metapackage in the pack repository carries its own `includes`;
+        one already expanded elsewhere in the tree is listed without them.
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: intel-edge-graphics-core
+        description:
+          type: string
+          example: Intel Edge graphics core runtime metapackage
+        version:
+          type: string
+          example: "1.0~noble11"
+          description: |
+            The newest version in the pack repository. Empty for a package the
+            pack repository does not publish, such as one from the base
+            distribution.
+        includes:
+          type: array
+          items:
+            $ref: "#/components/schemas/EdgePackIncludedPackage"
 
     PackageSearchResult:
       type: object
