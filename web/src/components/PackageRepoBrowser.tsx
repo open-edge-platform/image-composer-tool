@@ -340,11 +340,8 @@ function MergedPane({
   // The page number only makes sense against whatever's currently fetched,
   // so switching which repo is browsed starts back on page 1 rather than
   // carrying a now-possibly-out-of-range page over.
-  // fullTotal is cleared too: under "Show frequently used" the new repo's
-  // full count isn't fetched, and the old repo's would be wrong.
   useEffect(() => {
     setPage(0)
-    setFullTotal(0)
   }, [fetchIdsKey])
 
   // The page-number input is free text while being edited (jumpToPage parses
@@ -520,16 +517,12 @@ function MergedPane({
           Show only selected{' '}
           {/* How much of the browsed repo is already picked — otherwise only
               discoverable by checking this box, since picks are scattered
-              across catalog pages. The "of N" is the full catalog, not the
-              curated subset, and is left off until a full-catalog fetch has
-              reported it — which under "Show frequently used" may be never.
-              Always shown, even at zero, so a repo whose picks all live
-              elsewhere — e.g. an Edge Pack template's base packages — reads
-              as "none from here" rather than as a missing count. */}
+              across catalog pages. Always shown, even at zero, so a repo
+              whose picks all live elsewhere — e.g. an Edge Pack template's
+              base packages — reads as "none from here" rather than as a
+              missing count. */}
           <span className="text-slate-500">
-            ({fullTotal > 0
-              ? `${selectedRows.length} of ${fullTotal} selected`
-              : `${selectedRows.length} selected`})
+            ({selectedRows.length} selected)
           </span>
         </label>
         {!selectedOnly && hits.length > 0 && (

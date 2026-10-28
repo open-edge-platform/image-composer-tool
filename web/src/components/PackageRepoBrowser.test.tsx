@@ -298,7 +298,7 @@ describe('"Show only selected"', () => {
 })
 
 describe('selected count', () => {
-  it('counts picks from the browsed repo out of its catalog, in the "Show only selected" label', async () => {
+  it('counts picks from the browsed repo in the "Show only selected" label', async () => {
     useStore.setState({
       addedPackages: [
         { name: 'curl', version: '', repo: 'base' },
@@ -311,7 +311,7 @@ describe('selected count', () => {
     })
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    await screen.findByRole('checkbox', { name: 'Show only selected (1 of 250 selected)' })
+    await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' })
   })
 
   it('shows zero when nothing is picked from the browsed repo', async () => {
@@ -322,27 +322,7 @@ describe('selected count', () => {
     })
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    await screen.findByRole('checkbox', { name: 'Show only selected (0 of 250 selected)' })
+    await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
   })
 
-  it('still shows zero when the full catalog size never arrives', async () => {
-    // The full-catalog request is cancelled by ticking "Show frequently used"
-    // before it lands, and a curated response never reports the full size.
-    const curatedRepos = repos.map((r) => (r.id === 'base' ? { ...r, hasCuratedPackages: true } : r))
-    useStore.setState({ addedPackages: [{ name: 'docker-ce', version: '', repo: 'docker' }] })
-    mockApi.searchPackages.mockImplementation(({ curated }: { curated?: boolean }) =>
-      curated
-        ? Promise.resolve({
-            packages: [{ name: 'zebra', version: '1.0', repository: 'base', versions: [{ version: '1.0', repository: 'base' }] }],
-            total: 1,
-          })
-        : new Promise(() => {}),
-    )
-    render(<Browser repos={curatedRepos} os="ubuntu" baseLock={noLock} />)
-
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Show frequently used' }))
-    await screen.findByText('zebra')
-
-    screen.getByRole('checkbox', { name: 'Show only selected (0 selected)' })
-  })
 })
