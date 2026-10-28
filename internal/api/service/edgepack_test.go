@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -923,4 +924,41 @@ func domainByID(t *testing.T, p *EdgePack, id string) EdgePackDomain {
 	}
 	t.Fatalf("pack has no domain %q", id)
 	return EdgePackDomain{}
+}
+
+// A runtime's Includes is its metapackage's Depends from the pack index,
+// expanded through nested metapackages, with a metapackage reached twice listed
+// but not expanded again and the newest version's Depends winning.
+func TestEdgePackBaseRuntimeIncludes(t *testing.T) {
+	body := gzipPackages(t, ""+
+		"Package: base-standard\nVersion: 1.0\nSection: metapackages\nDepends: old-dep\n\n"+
+		"Package: base-standard\nVersion: 1.1\nSection: metapackages\n"+
+		"Depends: gfx-core, media-core, linux-firmware\n\n"+
+		"Package: gfx-core\nVersion: 2.0\nSection: metapackages\nDescription: graphics core\n"+
+		"Depends: libmesa (>= 24), edge-gfx-dkms\n\n"+
+		"Package: media-core\nVersion: 3.0\nSection: metapackages\nDepends: gfx-core, libva2\n\n"+
+		"Package: edge-gfx-dkms\nVersion: 7.0\nSection: kernel\nDescription: DKMS\nDepends: dkms\n\n")
+	svc := indexedPackService(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	setEdgePackVersionWait(t, 5*time.Second)
+	pack, err := svc.EdgePack(context.Background(), "ubuntu24")
+	if err != nil {
+		t.Fatalf("EdgePack: %v", err)
+	}
+	want := []EdgePackIncluded{
+		{Name: "gfx-core", Version: "2.0", Description: "graphics core", Includes: []EdgePackIncluded{
+			{Name: "libmesa"},
+			{Name: "edge-gfx-dkms", Version: "7.0", Description: "DKMS"},
+		}},
+		{Name: "media-core", Version: "3.0", Includes: []EdgePackIncluded{
+			{Name: "gfx-core", Version: "2.0", Description: "graphics core"},
+			{Name: "libva2"},
+		}},
+		{Name: "linux-firmware"},
+	}
+	if got := pack.BaseRuntimes[0].Includes; !reflect.DeepEqual(got, want) {
+		t.Errorf("standard Includes:\n got %+v\nwant %+v", got, want)
+	}
+	if got := pack.BaseRuntimes[1].Includes; len(got) != 0 {
+		t.Errorf("realtime, absent from the index, has Includes %+v", got)
+	}
 }
