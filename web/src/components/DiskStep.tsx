@@ -111,6 +111,7 @@ export function DiskStep() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [rowUnits, setRowUnits] = useState<Record<string, SizeUnit>>({})
   const [showYaml, setShowYaml] = useState(false)
+  const [showPartitions, setShowPartitions] = useState(false)
 
   const offsets = useMemo(() => (disk ? computeOffsets(disk) : []), [disk])
   const issues = useMemo(() => (disk ? validateDisk(disk, { imageType }) : null), [disk, imageType])
@@ -307,97 +308,109 @@ export function DiskStep() {
 
       <div className="mb-4">
         <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-          <span className={LABEL}>Partitions</span>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400">Edit by</span>
-            {(Object.keys(MODE_LABELS) as LayoutMode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={disk.layoutMode === m}
-                onClick={() => setDisk(setLayoutMode(disk, m))}
-                className={`cursor-pointer select-none rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-                  disk.layoutMode === m ? CHIP_ON : CHIP_OFF
-                }`}
-              >
-                {MODE_LABELS[m]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-          {disk.partitions.length === 0 ? (
-            <p className="py-2 text-center text-sm text-slate-400">No partitions defined.</p>
-          ) : (
-            <>
-              <div className={`${ROW_GRID} border border-transparent p-2 pb-1`}>
-                <span className={COL_HEAD}>Name</span>
-                <span className={COL_HEAD}>Label</span>
-                <span className={COL_HEAD}>FS</span>
-                <span className={COL_HEAD}>
-                  Size{disk.layoutMode === 'offset' && <em className="font-normal"> (derived)</em>}
-                </span>
-                <span className={COL_HEAD}>Mount Point</span>
-                <span className={COL_HEAD}>
-                  Start{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
-                </span>
-                <span className={COL_HEAD}>
-                  End{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
-                </span>
-                <span className={COL_HEAD} />
-              </div>
-              {disk.partitions.map((p, i) => (
-                <PartitionRow
-                  key={p.key}
-                  partition={p}
-                  index={i}
-                  count={disk.partitions.length}
-                  mode={disk.layoutMode}
-                  offsets={offsets[i]}
-                  sizeMiB={partitionSizeMiB(disk, i)}
-                  unit={rowUnits[p.key] ?? defaultRowUnit(p)}
-                  rest={isRest(disk, i)}
-                  restForced={i === disk.partitions.length - 1 && disk.extendLastPartitionToFillDisk}
-                  restIsLast={restIsLast}
-                  expanded={!!expanded[p.key]}
-                  onToggleExpand={() => setExpanded((s) => ({ ...s, [p.key]: !s[p.key] }))}
-                  onUnitChange={(u) => setRowUnits((s) => ({ ...s, [p.key]: u }))}
-                  onChange={(next) => patchPart(i, next)}
-                  onMove={(delta) => movePart(i, delta)}
-                  onRemove={() => patch({ partitions: disk.partitions.filter((_, j) => j !== i) })}
-                />
-              ))}
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => patch({ partitions: appendPartition(disk) })}
-            className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
+          <SectionToggle
+            open={showPartitions}
+            onToggle={() => setShowPartitions((v) => !v)}
+            summary={disk.partitions.map((p) => p.name || p.label || '?').join(' · ') || 'none'}
           >
-            + Add Partition
-          </button>
+            Partitions
+          </SectionToggle>
+          {showPartitions && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400">Edit by</span>
+              {(Object.keys(MODE_LABELS) as LayoutMode[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={disk.layoutMode === m}
+                  onClick={() => setDisk(setLayoutMode(disk, m))}
+                  className={`cursor-pointer select-none rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    disk.layoutMode === m ? CHIP_ON : CHIP_OFF
+                  }`}
+                >
+                  {MODE_LABELS[m]}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        <p className="mt-1 text-xs text-slate-400">
-          {disk.layoutMode === 'size'
-            ? `The schema stores start/end offsets, not sizes. Partitions are laid out contiguously from the first start offset, so Start and End are calculated for you.${restAt >= 0 && restAt < disk.partitions.length - 1 ? ' Partitions after the one using the remaining space are placed back from the end of the disk.' : ''}`
-            : 'Start and End are written to the template exactly as typed. Gaps and overlaps are reported but not corrected.'}
-        </p>
+        {showPartitions && (
+          <>
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              {disk.partitions.length === 0 ? (
+                <p className="py-2 text-center text-sm text-slate-400">No partitions defined.</p>
+              ) : (
+                <>
+                  <div className={`${ROW_GRID} border border-transparent p-2 pb-1`}>
+                    <span className={COL_HEAD}>Name</span>
+                    <span className={COL_HEAD}>Label</span>
+                    <span className={COL_HEAD}>FS</span>
+                    <span className={COL_HEAD}>
+                      Size{disk.layoutMode === 'offset' && <em className="font-normal"> (derived)</em>}
+                    </span>
+                    <span className={COL_HEAD}>Mount Point</span>
+                    <span className={COL_HEAD}>
+                      Start{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
+                    </span>
+                    <span className={COL_HEAD}>
+                      End{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
+                    </span>
+                    <span className={COL_HEAD} />
+                  </div>
+                  {disk.partitions.map((p, i) => (
+                    <PartitionRow
+                      key={p.key}
+                      partition={p}
+                      index={i}
+                      count={disk.partitions.length}
+                      mode={disk.layoutMode}
+                      offsets={offsets[i]}
+                      sizeMiB={partitionSizeMiB(disk, i)}
+                      unit={rowUnits[p.key] ?? defaultRowUnit(p)}
+                      rest={isRest(disk, i)}
+                      restForced={i === disk.partitions.length - 1 && disk.extendLastPartitionToFillDisk}
+                      restIsLast={restIsLast}
+                      expanded={!!expanded[p.key]}
+                      onToggleExpand={() => setExpanded((s) => ({ ...s, [p.key]: !s[p.key] }))}
+                      onUnitChange={(u) => setRowUnits((s) => ({ ...s, [p.key]: u }))}
+                      onChange={(next) => patchPart(i, next)}
+                      onMove={(delta) => movePart(i, delta)}
+                      onRemove={() => patch({ partitions: disk.partitions.filter((_, j) => j !== i) })}
+                    />
+                  ))}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => patch({ partitions: appendPartition(disk) })}
+                className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
+              >
+                + Add Partition
+              </button>
+            </div>
 
-        {/* The template loader rejects this for ISO and, for RAW, unless the
-            last partition is the rootfs (internal/config/validate/validate.go).
-            The checkbox stays enabled so a template that arrives with it set can
-            still be unset; validateDisk reports the violation. */}
-        <label className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-          <input
-            type="checkbox"
-            checked={disk.extendLastPartitionToFillDisk}
-            onChange={(e) => patch({ extendLastPartitionToFillDisk: e.target.checked })}
-          />
-          Force the last partition to fill the remaining disk space
-          {isIso && <span className="text-slate-400">— not supported for ISO images</span>}
-        </label>
+            <p className="mt-1 text-xs text-slate-400">
+              {disk.layoutMode === 'size'
+                ? `The schema stores start/end offsets, not sizes. Partitions are laid out contiguously from the first start offset, so Start and End are calculated for you.${restAt >= 0 && restAt < disk.partitions.length - 1 ? ' Partitions after the one using the remaining space are placed back from the end of the disk.' : ''}`
+                : 'Start and End are written to the template exactly as typed. Gaps and overlaps are reported but not corrected.'}
+            </p>
+
+            {/* The template loader rejects this for ISO and, for RAW, unless the
+                last partition is the rootfs (internal/config/validate/validate.go).
+                The checkbox stays enabled so a template that arrives with it set can
+                still be unset; validateDisk reports the violation. */}
+            <label className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+              <input
+                type="checkbox"
+                checked={disk.extendLastPartitionToFillDisk}
+                onChange={(e) => patch({ extendLastPartitionToFillDisk: e.target.checked })}
+              />
+              Force the last partition to fill the remaining disk space
+              {isIso && <span className="text-slate-400">— not supported for ISO images</span>}
+            </label>
+          </>
+        )}
       </div>
 
       <ArtifactsSection
@@ -827,88 +840,132 @@ function ArtifactsSection({
   const support = artifactSupport(imageType)
   const { types, compressions, compressionRequired } = artifactOptions(imageType)
 
+  const [open, setOpen] = useState(false)
+
   const patch = (i: number, next: Partial<DiskModel['artifacts'][number]>) =>
     onChange(artifacts.map((x, j) => (j === i ? { ...x, ...next } : x)))
 
+  const summary =
+    support === 'ignored'
+      ? 'not used for this image type'
+      : artifacts.map((a) => (a.compression ? `${a.type}.${a.compression}` : a.type) || '?').join(' · ') ||
+        'none'
+
   return (
     <div className="mb-4">
-      <span className={LABEL}>Output Artefacts</span>
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-        {support === 'ignored' ? (
-          <p className="py-2 text-center text-sm text-slate-400">
-            {imageType.toUpperCase()} images do not run the artefact pipeline — the image type
-            writes its own output.
-          </p>
-        ) : (
-          <>
-            {artifacts.length > 0 && (
-              <div className="flex gap-2 px-1 pb-1">
-                <span className={`${COL_HEAD} w-[140px]`}>Format</span>
-                <span className={`${COL_HEAD} w-[160px]`}>Compression</span>
-              </div>
-            )}
-            {artifacts.length === 0 ? (
+      <div className="mb-1">
+        <SectionToggle open={open} onToggle={() => setOpen((v) => !v)} summary={summary}>
+          Output Artefacts
+        </SectionToggle>
+      </div>
+      {open && (
+        <>
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            {support === 'ignored' ? (
               <p className="py-2 text-center text-sm text-slate-400">
-                {compressionRequired
-                  ? 'None yet — a WSL2 image needs one tar artefact with gz compression.'
-                  : 'No output artefacts — the builder writes its default format.'}
+                {imageType.toUpperCase()} images do not run the artefact pipeline — the image type
+                writes its own output.
               </p>
             ) : (
-              artifacts.map((a, i) => (
-                <div key={a.key} className="mb-2 flex items-center gap-2">
-                  <div className="w-[140px]">
-                    <Choice
-                      ariaLabel={`Artefact ${i + 1} format`}
-                      value={a.type}
-                      options={types}
-                      placeholder="select…"
-                      onChange={(v) => patch(i, { type: v })}
-                    />
+              <>
+                {artifacts.length > 0 && (
+                  <div className="flex gap-2 px-1 pb-1">
+                    <span className={`${COL_HEAD} w-[140px]`}>Format</span>
+                    <span className={`${COL_HEAD} w-[160px]`}>Compression</span>
                   </div>
-                  <div className="w-[160px]">
-                    <Choice
-                      ariaLabel={`Artefact ${i + 1} compression`}
-                      value={a.compression}
-                      options={compressions}
-                      placeholder={compressionRequired ? 'required' : 'none'}
-                      // Only the disk path treats compression as optional; wsl2
-                      // rejects an artifact without it.
-                      allowEmpty={!compressionRequired}
-                      emptyLabel="no compression"
-                      onChange={(v) => patch(i, { compression: v })}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    className={ICON_BTN}
-                    title="Remove artefact"
-                    onClick={() => onChange(artifacts.filter((_, j) => j !== i))}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))
+                )}
+                {artifacts.length === 0 ? (
+                  <p className="py-2 text-center text-sm text-slate-400">
+                    {compressionRequired
+                      ? 'None yet — a WSL2 image needs one tar artefact with gz compression.'
+                      : 'No output artefacts — the builder writes its default format.'}
+                  </p>
+                ) : (
+                  artifacts.map((a, i) => (
+                    <div key={a.key} className="mb-2 flex items-center gap-2">
+                      <div className="w-[140px]">
+                        <Choice
+                          ariaLabel={`Artefact ${i + 1} format`}
+                          value={a.type}
+                          options={types}
+                          placeholder="select…"
+                          onChange={(v) => patch(i, { type: v })}
+                        />
+                      </div>
+                      <div className="w-[160px]">
+                        <Choice
+                          ariaLabel={`Artefact ${i + 1} compression`}
+                          value={a.compression}
+                          options={compressions}
+                          placeholder={compressionRequired ? 'required' : 'none'}
+                          // Only the disk path treats compression as optional; wsl2
+                          // rejects an artifact without it.
+                          allowEmpty={!compressionRequired}
+                          emptyLabel="no compression"
+                          onChange={(v) => patch(i, { compression: v })}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className={ICON_BTN}
+                        title="Remove artefact"
+                        onClick={() => onChange(artifacts.filter((_, j) => j !== i))}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange([
+                      ...artifacts,
+                      { ...newArtifact(), type: types[0], compression: compressionRequired ? compressions[0] : '' },
+                    ])
+                  }
+                  className="mt-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
+                >
+                  + Add Artefact
+                </button>
+              </>
             )}
-            <button
-              type="button"
-              onClick={() =>
-                onChange([
-                  ...artifacts,
-                  { ...newArtifact(), type: types[0], compression: compressionRequired ? compressions[0] : '' },
-                ])
-              }
-              className="mt-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
-            >
-              + Add Artefact
-            </button>
-          </>
-        )}
-      </div>
-      <p className="mt-1 text-xs text-slate-400">
-        Converts the finished image to another container format. QCOW2, VHD, VMDK and the rest
-        live here, not in the image type. Only the formats and compressions this image type can
-        actually produce are offered.
-      </p>
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Converts the finished image to another container format. QCOW2, VHD, VMDK and the rest
+            live here, not in the image type. Only the formats and compressions this image type can
+            actually produce are offered.
+          </p>
+        </>
+      )}
     </div>
+  )
+}
+
+// Header for a collapsible section. While closed, `summary` stands in for the
+// body so the section's contents are still visible at a glance.
+function SectionToggle({
+  open,
+  onToggle,
+  summary,
+  children,
+}: {
+  open: boolean
+  onToggle: () => void
+  summary: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onToggle}
+      className="flex cursor-pointer items-baseline gap-2 text-left"
+    >
+      <span className={`${LABEL} mb-0`}>
+        {open ? '▾' : '▸'} {children}
+      </span>
+      {!open && <span className="truncate text-xs text-slate-400">{summary}</span>}
+    </button>
   )
 }
