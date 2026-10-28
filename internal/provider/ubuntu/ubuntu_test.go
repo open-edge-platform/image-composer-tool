@@ -2581,3 +2581,17 @@ func TestUbuntuOverlayCapable(t *testing.T) {
 		t.Error("Expected ubuntu provider to report overlay support")
 	}
 }
+
+// TestUbuntuPreProcessRejectsOEPInstaller checks that a template with
+// systemConfig.oepInstaller fails until the integration is implemented,
+// rather than building an image without the requested modules.
+func TestUbuntuPreProcessRejectsOEPInstaller(t *testing.T) {
+	ubuntu := &ubuntu{chrootEnv: &mockChrootEnv{}}
+	template := createTestImageTemplate()
+	template.SystemConfig.OEPInstaller = config.OEPInstallerConfig{Modules: []string{"handheld_multi_modal"}}
+
+	err := ubuntu.PreProcess(template)
+	if err == nil || !strings.Contains(err.Error(), "systemConfig.oepInstaller is not supported yet") {
+		t.Fatalf("PreProcess err = %v, want the not-supported error", err)
+	}
+}

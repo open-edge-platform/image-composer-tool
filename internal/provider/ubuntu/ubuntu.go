@@ -97,6 +97,10 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 		return p.overlayPreProcess(template)
 	}
 
+	if !template.SystemConfig.OEPInstaller.IsEmpty() {
+		return fmt.Errorf("systemConfig.oepInstaller is not supported yet")
+	}
+
 	// Generate apt sources file from packageRepositories
 	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
 		return fmt.Errorf("failed to generate apt sources from repositories: %w", err)

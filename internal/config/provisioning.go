@@ -180,7 +180,8 @@ func (t *ImageTemplate) SortedProvisioningScripts() []ProvisioningScript {
 
 func hasProvisioningSections(sc SystemConfig) bool {
 	return sc.Proxy.wasProvided || !sc.Proxy.IsEmpty() || len(sc.Provisioning.Scripts) > 0 ||
-		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
+		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty() ||
+		!sc.OEPInstaller.IsEmpty()
 }
 
 // mergeProvisioningSections applies child-wins merging: a section set by the
@@ -202,6 +203,9 @@ func mergeProvisioningSections(merged *SystemConfig, defaultConfig, userConfig S
 	}
 	if !userConfig.AptPolicy.isEmpty() {
 		merged.AptPolicy = userConfig.AptPolicy
+	}
+	if !userConfig.OEPInstaller.IsEmpty() {
+		merged.OEPInstaller = userConfig.OEPInstaller
 	}
 }
 
@@ -652,6 +656,9 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 			t.Target.OS)
 	}
 	if err := checkRebootAfterIsLast(t.SortedProvisioningScripts()); err != nil {
+		return err
+	}
+	if err := t.validateOEPInstaller(); err != nil {
 		return err
 	}
 	if t.SystemConfig.Provisioning.RunsBeforeLogin() &&

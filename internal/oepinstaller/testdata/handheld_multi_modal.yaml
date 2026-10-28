@@ -1,0 +1,26 @@
+"schema-version": "1"
+"cli-version": "main"
+"module-list": ["handheld_multi_modal"]
+---
+"pkg-list": ["curl","ca-certificates"]
+---
+"pkg-list": ["https://github.com/oneapi-src/level-zero/releases/download/v1.32.0/libze1_1.32.0+u24.04_amd64.deb"]
+---
+"pkg-list": ["docker.io","docker-buildx","docker-compose-v2"]
+---
+"repo-name": "repositories.intel.com"
+"gpg-key": "https://repositories.intel.com/gpu/intel-graphics.key"
+"key-file": "/usr/share/keyrings/intel-graphics.gpg"
+"apt-source": "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu noble unified"
+"apt-list-file": "/etc/apt/sources.list.d/intel-graphics.list"
+"apt-pref": ["Package: *","Pin: origin repositories.intel.com","Pin-Priority: 1001"]
+"apt-pref-file": "/etc/apt/preferences.d/intel-graphics.pref"
+"pkg-list": ["clinfo","libze-intel-gpu1","intel-media-va-driver-non-free","intel-opencl-icd"]
+---
+"pkg-list": ["intel-edge-base-standard=2026.3*","libtbb12=2021.11.0-2ubuntu2","intel-oneapi-runtime-*"]
+---
+"pkg-list": ["linux-image-6.18-intel"]
+"kernel-cmdline": ["xe.max_vfs=7","xe.force_probe=*","modprobe.blacklist=i915","udmabuf.list_limit=8192"]
+---
+"pkg-list": ["ubuntu-server","-ubuntu-desktop"]
+---
