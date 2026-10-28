@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -106,14 +107,29 @@ func TestProbeURLExistence_DoesNotRetryDefiniteAnswers(t *testing.T) {
 }
 
 func TestProbeURLExistence_GivesUpWhenStillUnavailable(t *testing.T) {
-	srv, base := newScriptedServer(t, map[string][]int{"/f": {http.StatusServiceUnavailable}})
+	for _, status := range []int{
+		http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv, base := newScriptedServer(t, map[string][]int{"/f": {status}})
 
-	found, _, err := probeURLExistence(base + "/f")
-	if found || !errors.Is(err, errRepoUnavailable) {
-		t.Fatalf("probeURLExistence = (%v, %v), want (false, errRepoUnavailable)", found, err)
-	}
-	if n := srv.count("/f"); n != probeUnavailableAttempts {
-		t.Errorf("requests = %d, want %d", n, probeUnavailableAttempts)
+			found, _, err := probeURLExistence(base + "/f")
+			if found || !errors.Is(err, errRepoUnavailable) {
+				t.Fatalf("probeURLExistence = (%v, %v), want (false, errRepoUnavailable)", found, err)
+			}
+			if n := srv.count("/f"); n != probeUnavailableAttempts {
+				t.Errorf("requests = %d, want %d", n, probeUnavailableAttempts)
+			}
+			// A 429 reaches here with no error from probeURL; the message must
+			// still say which URL refused and with what status.
+			msg := err.Error()
+			if !strings.Contains(msg, base+"/f") || !strings.Contains(msg, strconv.Itoa(status)) || strings.Contains(msg, "%!") {
+				t.Errorf("error should name the URL and status %d, got: %s", status, msg)
+			}
+		})
 	}
 }
 
