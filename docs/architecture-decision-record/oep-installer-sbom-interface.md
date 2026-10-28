@@ -125,7 +125,7 @@ documents are allowed and ignored.
 | Key | Type | Required | Description |
 | --- | --- | --- | --- |
 | `schema-version` | string | yes | `"1"` for this specification. ICT rejects versions it does not support. |
-| `cli-version` | string | yes | The `openedge-cli` branch the CLI was built from: `"main"` today, and the release branch (for example `"release-2026.3.0"`) during and after a release. ICT records it; reproducibility comes from the commit and SHA-256 ICT pins (A.8). |
+| `cli-version` | string | yes | The `openedge-cli` version: the release version (for example `"v2026.3.0"`), which changes with each release, or `"main"` for builds before the first release. ICT records it; reproducibility comes from the commit and SHA-256 ICT pins (A.8). |
 | `module-list` | array of string | yes | The profiles or modules the output was produced for, in the order requested. |
 
 ### A.6 Component documents
@@ -227,7 +227,7 @@ whatever the stanzas say.
 
 ```yaml
 "schema-version": "1"
-"cli-version": "main"
+"cli-version": "v2026.3.0"
 "module-list": ["handheld_multi_modal"]
 ---
 "pkg-list": ["curl","ca-certificates"]
