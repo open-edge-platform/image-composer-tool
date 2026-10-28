@@ -1022,6 +1022,11 @@ func probeURLExistence(url string) (bool, int, error) {
 	wait := probeUnavailableBackoff
 	for attempt := 1; probeUnavailableStatus(status); attempt++ {
 		if attempt == probeUnavailableAttempts {
+			// probeURL reports a 429 like any other 4xx, with no error of its
+			// own, so name the URL and status here.
+			if err == nil {
+				err = fmt.Errorf("checking file at %s: status %d %s", url, status, http.StatusText(status))
+			}
 			return false, status, fmt.Errorf("%w after %d attempts: %w", errRepoUnavailable, attempt, err)
 		}
 		logger.Logger().Warnf("%s answered %d (attempt %d/%d); retrying in %s",
