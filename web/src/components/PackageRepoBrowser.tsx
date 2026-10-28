@@ -517,34 +517,21 @@ function MergedPane({
             onChange={(e) => setSelectedOnly(e.target.checked)}
             className="h-[13px] w-[13px] accent-[#0071c5]"
           />
-          Show only selected
+          Show only selected{' '}
+          {/* How much of the browsed repo is already picked — otherwise only
+              discoverable by checking this box, since picks are scattered
+              across catalog pages. The "of N" is the full catalog, not the
+              curated subset, and is left off until a full-catalog fetch has
+              reported it — which under "Show frequently used" may be never.
+              Always shown, even at zero, so a repo whose picks all live
+              elsewhere — e.g. an Edge Pack template's base packages — reads
+              as "none from here" rather than as a missing count. */}
+          <span className="text-slate-500">
+            ({fullTotal > 0
+              ? `${selectedRows.length} of ${fullTotal} selected`
+              : `${selectedRows.length} selected`})
+          </span>
         </label>
-        {/* How much of the browsed repo is already picked — otherwise only
-            discoverable by checking "Show only selected", since picks are
-            scattered across catalog pages. Clicking it does just that. The
-            "of N" is the full catalog, not the curated subset, and is left
-            off until a full-catalog fetch has reported it — which under
-            "Show frequently used" may be never. Always shown, even at zero
-            (disabled, nothing to review), so a repo whose picks all live
-            elsewhere — e.g. an Edge Pack template's base packages — reads as
-            "none from here" rather than as a missing count. */}
-        <button
-          type="button"
-          onClick={() => setSelectedOnly(!selectedOnly)}
-          disabled={selectedRows.length === 0}
-          title={
-            selectedRows.length === 0
-              ? 'Nothing selected from this repository'
-              : selectedOnly
-                ? 'Back to browsing all packages'
-                : 'Review just these'
-          }
-          className="rounded-full bg-[#0071c5]/10 px-2 py-0.5 font-medium text-[#0071c5] hover:bg-[#0071c5]/20 disabled:cursor-default disabled:bg-slate-100 disabled:text-slate-600"
-        >
-          {fullTotal > 0
-            ? `${selectedRows.length} of ${fullTotal} selected`
-            : `${selectedRows.length} selected`}
-        </button>
         {!selectedOnly && hits.length > 0 && (
           <label className="flex items-center gap-1.5 font-medium">
             <input

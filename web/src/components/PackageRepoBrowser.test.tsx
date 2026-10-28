@@ -273,11 +273,11 @@ describe('"Show only selected"', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Next' })[0])
     await waitFor(() => expect(mockApi.searchPackages).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 100 })))
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Show only selected' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Show only selected/ }))
     await screen.findByText('curl')
 
     mockApi.searchPackages.mockClear()
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Show only selected' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Show only selected/ }))
 
     await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 })))
   })
@@ -291,14 +291,14 @@ describe('"Show only selected"', () => {
     mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
     render(<Browser repos={repos} os="ubuntu" baseLock={baseLockWithCurl} />)
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Show only selected' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Show only selected/ }))
 
     await screen.findByText('curl')
   })
 })
 
-describe('selected-count badge', () => {
-  it('counts picks from the browsed repo out of its catalog, and opens the review on click', async () => {
+describe('selected count', () => {
+  it('counts picks from the browsed repo out of its catalog, in the "Show only selected" label', async () => {
     useStore.setState({
       addedPackages: [
         { name: 'curl', version: '', repo: 'base' },
@@ -311,13 +311,10 @@ describe('selected-count badge', () => {
     })
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '1 of 250 selected' }))
-
-    expect((screen.getByRole('checkbox', { name: 'Show only selected' }) as HTMLInputElement).checked).toBe(true)
-    await screen.findByText('curl')
+    await screen.findByRole('checkbox', { name: 'Show only selected (1 of 250 selected)' })
   })
 
-  it('shows zero, disabled, when nothing is picked from the browsed repo', async () => {
+  it('shows zero when nothing is picked from the browsed repo', async () => {
     useStore.setState({ addedPackages: [{ name: 'docker-ce', version: '', repo: 'docker' }] })
     mockApi.searchPackages.mockResolvedValue({
       packages: [{ name: 'zebra', version: '1.0', repository: 'base', versions: [{ version: '1.0', repository: 'base' }] }],
@@ -325,7 +322,7 @@ describe('selected-count badge', () => {
     })
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    expect((await screen.findByRole('button', { name: '0 of 250 selected' }) as HTMLButtonElement).disabled).toBe(true)
+    await screen.findByRole('checkbox', { name: 'Show only selected (0 of 250 selected)' })
   })
 
   it('still shows zero when the full catalog size never arrives', async () => {
@@ -346,6 +343,6 @@ describe('selected-count badge', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Show frequently used' }))
     await screen.findByText('zebra')
 
-    expect((screen.getByRole('button', { name: '0 selected' }) as HTMLButtonElement).disabled).toBe(true)
+    screen.getByRole('checkbox', { name: 'Show only selected (0 selected)' })
   })
 })
