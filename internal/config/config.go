@@ -445,6 +445,7 @@ type SystemConfig struct {
 	Provisioning    ProvisioningConfig   `yaml:"provisioning,omitempty"`
 	CloudInit       CloudInitConfig      `yaml:"cloudInit,omitempty"`
 	AptPolicy       AptPolicy            `yaml:"aptPolicy,omitempty"`
+	OEPInstaller    OEPInstallerConfig   `yaml:"oepInstaller,omitempty"`
 }
 
 // AdditionalFile stage markers control WHEN an overlay build copies an
@@ -1723,6 +1724,9 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	}
 	if !sc.AptPolicy.isEmpty() {
 		offending = append(offending, "aptPolicy")
+	}
+	if !sc.OEPInstaller.IsEmpty() {
+		offending = append(offending, "oepInstaller")
 	}
 
 	if len(offending) == 0 {
