@@ -28,12 +28,12 @@ keeps its key names. The changes requested from `openedge-cli` are:
    unknown (A.3).
 3. Print a header document with `schema-version`, `cli-version`, and the
    `profiles` list first (A.5).
-4. In the `docker_ce` handler, rename `apt-entry` to `apt-source` and
-   `apt-file` to `apt-list-file` (A.6).
-5. Validate the `list --sbom` output of every profile against the JSON Schema
-   in the appendix, ideally in CI. This catches problems like item 4 before
-   ICT sees them.
-6. In the kernel handlers (`linux_image_6.18_intel`,
+4. Validate the `list --sbom` output of every profile against the JSON Schema
+   in the appendix, ideally in CI, so problems are caught before ICT sees
+   them. For example, the current `docker_ce` handler prints its repository
+   line under key names the output helper rejects, and the schema rejects
+   the resulting block.
+5. In the kernel handlers (`linux_image_6.18_intel`,
    `linux_image_generic_7.0`), also print the kernel parameters they set, as
    `kernel-cmdline` (A.6).
 
@@ -210,12 +210,6 @@ newest version wins. A negative priority excludes the version. Any other
 
 A `name=version` entry in `pkg-list` still selects that exact version,
 whatever the stanzas say.
-
-#### Fix in the current CLI
-
-The `docker_ce` handler prints `apt-entry` and `apt-file`. The emitter
-rejects both as unsupported keys, so that block loses its repository today.
-They MUST be `apt-source` and `apt-list-file`.
 
 ### A.7 Example
 
