@@ -348,6 +348,67 @@ type ComposeSummary struct {
 
 	// Overlay-mode only: the baseline image the packages are layered onto.
 	BaseImage string
+
+	// Advanced-tab changes layered onto the matched template. Nil when the
+	// selection overrode nothing.
+	Advanced *AdvancedChanges `json:",omitempty"`
+}
+
+// AdvancedChanges records what an Advanced-tab selection changed relative to
+// the matched template, so a build's details can show the delta and not just
+// the merged result. Logins are reduced to account names: no password or key
+// is ever kept here.
+type AdvancedChanges struct {
+	ImageName      string             `json:",omitempty"`
+	Packages       []string           `json:",omitempty"`
+	Repos          []string           `json:",omitempty"`
+	Disk           *DiskChangeSummary `json:",omitempty"`
+	NewUsers       []string           `json:",omitempty"`
+	CredentialsFor []string           `json:",omitempty"`
+}
+
+// DiskChangeSummary is the display-relevant part of a disk override.
+type DiskChangeSummary struct {
+	Size           string                 `json:",omitempty"`
+	PartitionTable string                 `json:",omitempty"`
+	Partitions     []DiskPartitionSummary `json:",omitempty"`
+}
+
+// DiskPartitionSummary is one partition of a disk override, for display.
+type DiskPartitionSummary struct {
+	ID         string `json:",omitempty"`
+	FsType     string `json:",omitempty"`
+	MountPoint string `json:",omitempty"`
+	Start      string `json:",omitempty"`
+	End        string `json:",omitempty"`
+}
+
+// advancedChanges summarises a selection's overrides, or nil when it has none.
+func advancedChanges(sel Selection) *AdvancedChanges {
+	if !sel.hasOverrides() {
+		return nil
+	}
+	a := &AdvancedChanges{
+		ImageName: sel.ImageName,
+		Packages:  sel.Packages,
+		Repos:     sel.Repos,
+	}
+	if d := sel.Disk; d != nil {
+		ds := &DiskChangeSummary{Size: d.Size, PartitionTable: d.PartitionTableType}
+		for _, p := range d.Partitions {
+			ds.Partitions = append(ds.Partitions, DiskPartitionSummary{
+				ID: p.ID, FsType: p.FsType, MountPoint: p.MountPoint, Start: p.Start, End: p.End,
+			})
+		}
+		a.Disk = ds
+	}
+	for _, u := range sel.NewUsers {
+		a.NewUsers = append(a.NewUsers, u.User)
+	}
+	for _, c := range sel.Credentials {
+		a.CredentialsFor = append(a.CredentialsFor, c.User)
+	}
+	return a
 }
 
 // ComposeResult is the outcome of resolving a Selection to a template.
@@ -627,5 +688,7 @@ func buildComposeSummary(sel Selection, merged *config.ImageTemplate) ComposeSum
 		PartitionTable: merged.Disk.PartitionTableType,
 		Hostname:       merged.SystemConfig.HostName,
 		BaseImage:      baseImage,
+
+		Advanced: advancedChanges(sel),
 	}
 }

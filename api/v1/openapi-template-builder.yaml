@@ -1599,6 +1599,68 @@ components:
         baseImage:
           type: string
           description: Overlay-mode only — the baseline image packages are layered onto.
+        advanced:
+          $ref: "#/components/schemas/AdvancedChanges"
+
+    AdvancedChanges:
+      type: object
+      description: |
+        What an Advanced-tab selection changed relative to the matched
+        template. Absent when nothing was overridden. Logins are reduced to
+        account names — no password or key is ever included.
+      properties:
+        imageName:
+          type: string
+          description: The image name that overrode the template's.
+        packages:
+          type: array
+          description: Packages added (a `name_version` entry is a pinned version).
+          items:
+            type: string
+        repos:
+          type: array
+          description: Repository ids enabled.
+          items:
+            type: string
+        disk:
+          $ref: "#/components/schemas/DiskChangeSummary"
+        newUsers:
+          type: array
+          description: Accounts created that the template does not declare.
+          items:
+            type: string
+        credentialsFor:
+          type: array
+          description: Template accounts a login was supplied for.
+          items:
+            type: string
+
+    DiskChangeSummary:
+      type: object
+      description: The display-relevant part of a disk override.
+      properties:
+        size:
+          type: string
+        partitionTable:
+          type: string
+        partitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiskPartitionSummary"
+
+    DiskPartitionSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        fsType:
+          type: string
+        mountPoint:
+          type: string
+        start:
+          type: string
+        end:
+          type: string
 
     ComposeResponse:
       type: object
