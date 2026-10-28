@@ -70,7 +70,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
-  const [yamlOpen, setYamlOpen] = useState(false)
   // Logins for accounts the resolved template leaves without one. Component
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
@@ -318,8 +317,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // generated, and the build runs the curated template unchanged.
   const deltaYaml = composed?.deltaYaml ?? ''
 
-  const copyYaml = () => deltaYaml && navigator.clipboard.writeText(deltaYaml)
-
   const exportYaml = () => {
     if (!composed || !deltaYaml) return
     const blob = new Blob([deltaYaml], { type: 'text/yaml' })
@@ -430,7 +427,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
                 {/* What this selection changes relative to the template, item
                     by item — open here, since reviewing it is the point. */}
-                {composed.summary.advanced && (
+                {composed.summary.advanced ? (
                   <div className="mb-4">
                     <AdvancedChangesCard
                       changes={composed.summary.advanced}
@@ -438,11 +435,17 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                       frame="rounded-lg border border-slate-200 bg-white p-4"
                     />
                   </div>
+                ) : (
+                  <p className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
+                    No changes yet — this build runs {composed.template} as-is.
+                    Edit the image name, packages, repositories, or disk layout
+                    and your changes appear here.
+                  </p>
                 )}
 
                 {/* Pinned a version for a package the curated template already
                     lists? Both entries survive the merge, so say so rather than
-                    letting the resolved YAML look like a duplicate bug. */}
+                    letting the resolved template look like a duplicate bug. */}
                 {composed.pinConflicts && composed.pinConflicts.length > 0 && (
                   <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                     <span className="font-semibold">
@@ -459,52 +462,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                     template&apos;s entry to decide.
                   </div>
                 )}
-
-                {/* Section 2: the delta alone — only what Advanced mode
-                    contributed. The curated parent it extends and the merge of
-                    the two are deliberately not shown. */}
-                {/* Collapsed by default: the Advanced changes card above already
-                    lists the same changes readably; this is the raw file. */}
-                <div className="rounded-lg border border-slate-200 bg-white">
-                  <div className={`flex items-center justify-between gap-3 px-4 py-2 ${yamlOpen ? 'border-b border-slate-200' : ''}`}>
-                    <button
-                      type="button"
-                      onClick={() => setYamlOpen((o) => !o)}
-                      aria-expanded={yamlOpen}
-                      className="flex items-center gap-2 text-left text-sm font-semibold text-[#00285a]"
-                    >
-                      <span className="text-xs text-slate-400">{yamlOpen ? '▼' : '▶'}</span>
-                      Your changes (YAML)
-                    </button>
-                    {deltaYaml && (
-                      <button
-                        type="button"
-                        onClick={copyYaml}
-                        title="Copy YAML to clipboard"
-                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                      >
-                        Copy
-                      </button>
-                    )}
-                  </div>
-                  {!yamlOpen ? null : deltaYaml ? (
-                    <>
-                      <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[11px] text-slate-500">
-                        Only what Advanced mode adds, as a template extending{' '}
-                        {composed.template}. This is the file the build resolves.
-                      </p>
-                      <pre className="max-h-[60vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
-                        {deltaYaml}
-                      </pre>
-                    </>
-                  ) : (
-                    <p className="px-4 py-3 text-xs text-slate-500">
-                      No changes yet — this build runs {composed.template} as-is.
-                      Edit the image name, packages, repositories, or disk layout
-                      and your delta appears here.
-                    </p>
-                  )}
-                </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button

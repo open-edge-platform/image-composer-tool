@@ -353,7 +353,7 @@ describe('BuildView template row', () => {
     await act(async () => {
       screen.getByRole('button', { name: /Compose details/ }).click()
     })
-    const toggle = screen.getByRole('button', { name: /Advanced changes/ })
+    const toggle = screen.getByRole('button', { name: /Your changes/ })
     expect(toggle.textContent).toContain('image name, 11 packages, 1 repo, disk layout, 1 new user')
     await act(async () => {
       toggle.click()

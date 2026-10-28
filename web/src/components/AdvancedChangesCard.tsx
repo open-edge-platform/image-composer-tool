@@ -26,7 +26,7 @@ export function AdvancedChangesCard({
         aria-expanded={open}
       >
         <span className="text-[10px] text-slate-600">{open ? '▼' : '▶'}</span>
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Advanced changes</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Your changes</span>
         <span className="text-[11px] text-slate-600">— {advancedHeadline(changes)}</span>
       </button>
       {open && <AdvancedChangesList changes={changes} />}

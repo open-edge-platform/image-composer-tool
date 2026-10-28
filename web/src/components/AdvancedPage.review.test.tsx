@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// The review step lists what this selection changes, open by default, and keeps
-// the raw delta YAML behind a collapsed toggle.
+// The review step lists what this selection changes, open by default, and does
+// not show the raw delta YAML.
 
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -58,20 +58,15 @@ beforeEach(() => {
 })
 
 describe('AdvancedPage review', () => {
-  it('shows the Advanced changes open and the delta YAML collapsed', async () => {
+  it('shows Your changes open and no delta YAML', async () => {
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
-    const changes = await screen.findByRole('button', { name: /Advanced changes/ })
+    const changes = await screen.findByRole('button', { name: /Your changes/ })
     expect(changes.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('vim')).toBeTruthy()
     expect(screen.getByText('intel-graphics')).toBeTruthy()
 
-    const yaml = screen.getByRole('button', { name: /Your changes/ })
-    expect(yaml.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByText(/^extends:/)).toBeNull()
-
-    fireEvent.click(yaml)
-    expect(screen.getByText(/^extends:/)).toBeTruthy()
   })
 })
