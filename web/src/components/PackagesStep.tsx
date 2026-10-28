@@ -28,7 +28,7 @@ interface PackagesStepProps {
 // picked on either is picked on both, because both write into the same
 // addedPackages list.
 const TABS = [
-  { id: 'edge-pack', label: 'Edge Pack' },
+  { id: 'edge-pack', label: 'Edge Packs' },
   { id: 'repos', label: 'Repositories' },
 ] as const
 
