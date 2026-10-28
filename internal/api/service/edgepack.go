@@ -12,6 +12,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"sigs.k8s.io/yaml"
 )
@@ -203,6 +205,26 @@ type EdgePackBaseRuntime struct {
 	// runtime is selected, published to the browser for the same reason the
 	// domains' are: enabling a repository is a client-side action here.
 	RequiresRepos []string
+	// Includes is what the runtime's metapackage installs, read from its
+	// Depends in the pack repository's index rather than restated in the
+	// catalog, so it cannot drift from what a build actually pulls in. Empty
+	// when the index was unreachable or still loading.
+	Includes []EdgePackIncluded
+}
+
+// EdgePackIncluded is one package a base runtime installs by dependency. It is
+// display-only: nothing selects it, because the runtime's metapackage installs
+// it regardless.
+type EdgePackIncluded struct {
+	Name        string
+	Description string
+	Version     string
+	// Includes is this package's own dependencies when it is itself a
+	// metapackage in the pack repository — intel-edge-graphics-core, say,
+	// rather than a leaf such as mesa. Empty for a leaf, and for a metapackage
+	// already expanded earlier in the tree, which is listed again but not
+	// repeated in full.
+	Includes []EdgePackIncluded
 }
 
 // EdgePackDomain is one capability group.
@@ -261,7 +283,7 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 	offered := s.PackageRepos(osID)
 	repos := filterReposByID(offered, []string{repoID})
 	offeredIDs := repoIDSet(offered)
-	meta, pending := s.edgePackMetadata(ctx, osID, repos)
+	meta, deps, pending := s.edgePackMetadata(ctx, osID, repos)
 
 	out := &EdgePack{
 		ID:              spec.ID,
@@ -281,6 +303,7 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 			Available:         available,
 			UnavailableReason: reason,
 			RequiresRepos:     needed,
+			Includes:          deps.includes(r.Package),
 		})
 	}
 	for _, d := range spec.Domains {
@@ -420,7 +443,8 @@ func (ix edgePackIndex) packageFor(name string) EdgePackPackage {
 }
 
 // edgePackMetadata reads the pack repository's indexes and keeps only the
-// packages the pack names.
+// packages the pack names, plus every package in that repository as a
+// dependency index for expanding the base runtimes' Includes.
 //
 // This is SearchPackages' body minus pagination, which is why it calls the same
 // unexported helpers rather than the exported method: the pack's packages are a
@@ -431,10 +455,11 @@ func (ix edgePackIndex) packageFor(name string) EdgePackPackage {
 // pending reports that the wait hit edgePackVersionWait before every index
 // arrived. Cache.Lookup runs the fetch detached from this deadline, so it
 // carries on and warms the cache for the next request.
-func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []PackageRepo) (ix edgePackIndex, pending bool) {
+func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []PackageRepo) (ix edgePackIndex, deps edgePackDeps, pending bool) {
 	ix = edgePackIndex{}
+	deps = edgePackDeps{}
 	if len(repos) == 0 {
-		return ix, false
+		return ix, deps, false
 	}
 	want := s.edgePackNameSet()
 	lookups := s.planLookups(osID, repos)
@@ -446,7 +471,54 @@ func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []Pac
 			ix[hit.Name] = hit
 		}
 	}
-	return ix, errors.Is(waitCtx.Err(), context.DeadlineExceeded)
+	for _, res := range results {
+		for _, e := range res.entries {
+			deps.add(e)
+		}
+	}
+	return ix, deps, errors.Is(waitCtx.Err(), context.DeadlineExceeded)
+}
+
+// edgePackDeps is the pack repository's index keyed by package name, holding
+// the newest entry seen for each — the one apt would install, and so the one
+// whose Depends a build actually follows.
+type edgePackDeps map[string]pkgindex.Entry
+
+func (d edgePackDeps) add(e pkgindex.Entry) {
+	if prev, ok := d[e.Name]; ok {
+		if cmp, _ := debutils.CompareDebianVersions(e.Version, prev.Version); cmp <= 0 {
+			return
+		}
+	}
+	d[e.Name] = e
+}
+
+// includes expands name's Depends into a tree, descending into each dependency
+// that is itself a metapackage the index carries. Anything else — a library
+// from the base distribution, a DKMS source package — is a leaf, with whatever
+// description and version the pack repository knows for it.
+//
+// A metapackage reached a second time is listed but not expanded again: the
+// Edge Pack metapackages depend on one another (media-core on graphics-core,
+// graphics-display on graphics-core), and repeating each subtree in full would
+// bury the list in duplicates. The same set also breaks any dependency cycle.
+func (d edgePackDeps) includes(name string) []EdgePackIncluded {
+	expanded := map[string]bool{name: true}
+	var walk func(names []string) []EdgePackIncluded
+	walk = func(names []string) []EdgePackIncluded {
+		var out []EdgePackIncluded
+		for _, n := range names {
+			e := d[n]
+			inc := EdgePackIncluded{Name: n, Description: e.Description, Version: e.Version}
+			if len(e.Depends) > 0 && !expanded[n] {
+				expanded[n] = true
+				inc.Includes = walk(e.Depends)
+			}
+			out = append(out, inc)
+		}
+		return out
+	}
+	return walk(d[name].Depends)
 }
 
 // edgePackNameSet is every package name the pack references, base runtimes
