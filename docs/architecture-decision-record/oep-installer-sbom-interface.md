@@ -155,11 +155,12 @@ ICT handles `pkg-list` entries as follows:
 | Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: repository priority first (including `Pin: origin` priorities from the output), then the newest version. A glob that matches nothing fails the build. |
 | `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
 | Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Must be one of the kernel packages the template installs (`systemConfig.kernel`, after its globs are resolved). Otherwise the build fails. ICT does not add or replace a kernel. |
-| `-name` (for example `"-ubuntu-desktop"`) | If the template's package list contains `name`, the build fails. Otherwise the entry is ignored. |
+| `-name` (for example `"-ubuntu-desktop"`) | If the template's package list contains `name`, the build fails. Otherwise the entry is ignored. The template's package list is the merged `systemConfig.packages`, after `extends`. It does not include packages installed only as dependencies. |
 
-Each `kernel-cmdline` entry must appear, exactly, as a parameter in the
-template's `systemConfig.kernel.cmdline`. Otherwise the build fails. The
-template may set other parameters as well.
+The `kernel-cmdline` entries must be a subset of the parameters in the
+template's `systemConfig.kernel.cmdline`: each entry must appear there
+exactly, for example `xe.max_vfs=7`. Otherwise the build fails. The template
+may set other parameters as well, such as `console=` or `quiet`.
 
 These checks keep the template in charge of the kernel and still give the
 profile the kernel it expects. The kernel handlers skip their installation
