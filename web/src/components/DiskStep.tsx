@@ -311,7 +311,9 @@ export function DiskStep() {
           <SectionToggle
             open={showPartitions}
             onToggle={() => setShowPartitions((v) => !v)}
-            summary={disk.partitions.map((p) => p.name || p.label || '?').join(' · ') || 'none'}
+            summary={
+              disk.partitions.map((p, i) => p.name || p.id || `#${i + 1}`).join(' · ') || 'none'
+            }
           >
             Partitions
           </SectionToggle>
@@ -960,12 +962,15 @@ function SectionToggle({
       type="button"
       aria-expanded={open}
       onClick={onToggle}
-      className="flex cursor-pointer items-baseline gap-2 text-left"
+      className="flex min-w-0 cursor-pointer items-baseline gap-2 text-left"
     >
-      <span className={`${LABEL} mb-0`}>
+      {/* LABEL minus its bottom margin; the wrapper owns the spacing. */}
+      <span className="shrink-0 text-sm font-semibold text-[#00285a]">
         {open ? '▾' : '▸'} {children}
       </span>
-      {!open && <span className="truncate text-xs text-slate-400">{summary}</span>}
+      {/* Darker than the step's other helper text: while collapsed this is the
+          only visible description of the section. */}
+      {!open && <span className="min-w-0 truncate text-xs text-slate-600">{summary}</span>}
     </button>
   )
 }
