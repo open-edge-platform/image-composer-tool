@@ -296,3 +296,35 @@ describe('"Show only selected"', () => {
     await screen.findByText('curl')
   })
 })
+
+describe('selected-count badge', () => {
+  it('counts picks from the browsed repo out of its catalog, and opens the review on click', async () => {
+    useStore.setState({
+      addedPackages: [
+        { name: 'curl', version: '', repo: 'base' },
+        { name: 'docker-ce', version: '', repo: 'docker' },
+      ],
+    })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'zebra', version: '1.0', repository: 'base', versions: [{ version: '1.0', repository: 'base' }] }],
+      total: 250,
+    })
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '1 of 250 selected' }))
+
+    expect((screen.getByRole('checkbox', { name: 'Show only selected' }) as HTMLInputElement).checked).toBe(true)
+    await screen.findByText('curl')
+  })
+
+  it('shows zero, disabled, when nothing is picked from the browsed repo', async () => {
+    useStore.setState({ addedPackages: [{ name: 'docker-ce', version: '', repo: 'docker' }] })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'zebra', version: '1.0', repository: 'base', versions: [{ version: '1.0', repository: 'base' }] }],
+      total: 250,
+    })
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+
+    expect((await screen.findByRole('button', { name: '0 of 250 selected' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
