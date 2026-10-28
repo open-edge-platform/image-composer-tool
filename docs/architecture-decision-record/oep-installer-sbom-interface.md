@@ -244,7 +244,10 @@ ICT runs the query on the build host before it resolves packages:
 
 1. **Run.** ICT downloads the pinned `openedge-cli`, verifies its SHA-256,
    generates the target `os-release` file (A.1), and runs the query. A
-   non-zero exit fails the build and shows stderr.
+   non-zero exit fails the build and shows stderr. The OEP Installer team will
+   publish `openedge-cli` as GitHub releases. Until the first release, ICT
+   uses the rendered CLI from the `develop` branch, pinned to a specific
+   commit and its SHA-256 so builds stay reproducible.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
    - the header's `schema-version` is supported and its `profiles` are the
      ones requested
@@ -283,8 +286,6 @@ ICT runs the query on the build host before it resolves packages:
 3. **`ros2-apt-source`.** This module installs a `.deb` that configures an apt
    repository, and looks up the latest release online. Profiles that use it
    are out of scope until it has a repository group with a pinned version.
-4. **Distribution.** Where will tagged releases of `openedge-cli` be published
-   (stable URL plus SHA-256)? ICT pins both in the image template.
 
 ---
 
