@@ -65,6 +65,14 @@ type Entry struct {
 	Version     string
 	Description string // short synopsis; the first Description/summary line only
 	Arch        string
+	// Depends is the package names a metapackage pulls in, in control-file
+	// order, with version constraints dropped and only the first of any
+	// "a | b" alternatives kept — the one apt installs by default. Populated
+	// for deb metapackages only (Section: metapackages): a metapackage's whole
+	// purpose is its dependency list, so it is the one kind of package whose
+	// Depends a user needs to see, and keeping every package's would put the
+	// dependency graph of a full distribution archive on the heap for nothing.
+	Depends []string
 }
 
 // ErrUnsupportedType is returned for a Repo whose Type is neither deb nor rpm.
