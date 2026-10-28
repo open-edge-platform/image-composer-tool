@@ -51,7 +51,11 @@ export function HistorySidebar({
     if (followKey) setPage(Math.floor(selectedIndex / HISTORY_PAGE_SIZE))
   }
   // Clamp rather than reset: the list only shrinks if build dirs are deleted.
+  // The clamp is persisted, not just rendered — otherwise the stale page comes
+  // back as soon as the list grows again. Functional, so it applies on top of a
+  // follow update queued above instead of overwriting it with the stale page.
   const current = Math.min(page, pageCount - 1)
+  if (page !== current) setPage((p) => Math.min(p, pageCount - 1))
   const start = current * HISTORY_PAGE_SIZE
   const visible = items.slice(start, start + HISTORY_PAGE_SIZE)
 

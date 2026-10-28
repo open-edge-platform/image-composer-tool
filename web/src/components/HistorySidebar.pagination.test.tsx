@@ -126,4 +126,17 @@ describe('history paging', () => {
     expect(rowTemplates()).toEqual(['build-10.yml', 'build-11.yml'])
     expect(screen.getByText('11–12 of 12')).toBeTruthy()
   })
+
+  // The clamp must stick: rendering the last page while remembering the old one
+  // made the list jump back to it, unprompted, once it grew again.
+  it('keeps the clamped page when the list grows again', () => {
+    const { rerender } = show(items(25))
+    fireEvent.click(older())
+    fireEvent.click(older())
+
+    rerender(<HistorySidebar items={items(12)} selectedId="b0" onSelect={() => {}} />)
+    rerender(<HistorySidebar items={items(21)} selectedId="b0" onSelect={() => {}} />)
+
+    expect(screen.getByText('11–20 of 21')).toBeTruthy()
+  })
 })
