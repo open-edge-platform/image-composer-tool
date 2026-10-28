@@ -324,5 +324,4 @@ describe('selected count', () => {
 
     await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
   })
-
 })
