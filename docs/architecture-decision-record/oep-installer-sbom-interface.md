@@ -19,15 +19,16 @@ OEP Installer remains the source of truth for each profile. ICT installs the
 repository-installable packages before first boot. `openedge-cli` installs
 everything else on first boot.
 
-The contract builds on the current `openedge-cli list --sbom` output and
-keeps its key names. The changes requested from `openedge-cli` are:
+The contract builds on the existing `openedge-cli list --sbom` output. The
+following changes were requested from `openedge-cli`; items 1, 2, 3, 4, and
+6 are implemented on its `main` branch:
 
 1. Accept `--os-release <file>` so the output describes the target image,
    not the build host (A.1).
 2. Exit non-zero, with a message on stderr, if any requested profile is
    unknown (A.3).
-3. Print a header document with `schema-version`, `cli-version`, and the
-   `profiles` list first (A.5).
+3. Print a header document with `schema-version`, `cli-version`, and
+   `module-list` first (A.5).
 4. Validate the `list --sbom` output of every profile against the JSON Schema
    in the appendix, ideally in CI, so problems are caught before ICT sees
    them. For example, the current `docker_ce` handler prints its repository
@@ -46,12 +47,12 @@ The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 ### A.1 Command
 
 ```text
-openedge-cli list --sbom --os-release <file> <profile> [<profile>...]
+openedge-cli list --sbom --os-release <file> <module> [<module>...]
 ```
 
 | Input | Meaning |
 | --- | --- |
-| `<profile>...` | One or more profile identifiers, as accepted by `openedge-cli install`. |
+| `<module>...` | One or more profile or module names, as accepted by `openedge-cli install`. An unknown name fails with exit code `3`. |
 | `--os-release <file>` | An `os-release(5)` file describing the **target image**. The CLI MUST read it instead of the host's `/etc/os-release`. |
 
 ICT runs the query on the build host, which is often a different Ubuntu
@@ -61,13 +62,16 @@ out for the build host instead of the target. For example, an Ubuntu 22.04
 build host gets `jammy` repositories for a `noble` image.
 
 ICT generates the file from the template's target in a temporary directory.
-It is not copied into the image. The file sets these fields, and the CLI MUST
-NOT rely on any others: `NAME`, `PRETTY_NAME`, `ID`, `ID_LIKE`, `VERSION_ID`,
-`VERSION_CODENAME`, and `UBUNTU_CODENAME`. For an Ubuntu 24.04 target:
+It is not copied into the image. The file sets every field the CLI reads,
+because the CLI falls back to the host's value for a field the file omits:
+`NAME`, `PRETTY_NAME`, `VERSION`, `ID`, `ID_LIKE`, `VERSION_ID`,
+`VERSION_CODENAME`, and `UBUNTU_CODENAME`. The CLI MUST NOT rely on any other
+host OS fields. For an Ubuntu 24.04 target:
 
 ```ini
 NAME="Ubuntu"
 PRETTY_NAME="Ubuntu 24.04 LTS"
+VERSION="24.04 LTS (Noble Numbat)"
 ID=ubuntu
 ID_LIKE=debian
 VERSION_ID="24.04"
@@ -121,8 +125,8 @@ documents are allowed and ignored.
 | Key | Type | Required | Description |
 | --- | --- | --- | --- |
 | `schema-version` | string | yes | `"1"` for this specification. ICT rejects versions it does not support. |
-| `cli-version` | string | yes | Released version of `openedge-cli` (for example `"v2026.3.0"`). |
-| `profiles` | array of string | yes | The profiles the output was produced for, in the order requested. |
+| `cli-version` | string | yes | The `openedge-cli` branch the CLI was built from: `"main"` today, and the release branch (for example `"release-2026.3.0"`) during and after a release. ICT records it; reproducibility comes from the commit and SHA-256 ICT pins (A.8). |
+| `module-list` | array of string | yes | The profiles or modules the output was produced for, in the order requested. |
 
 ### A.6 Component documents
 
@@ -135,7 +139,7 @@ it.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `pkg-list` | array of string | Packages the profile requires. Each entry is one of: a package name; `name=version`, where `version` is an exact Debian version string; a glob over package names (`*`, `?`, `[...]`); an `https://` URL of an artifact that is not in an apt repository; or `-name`, meaning the profile needs the package not to be installed. |
+| `pkg-list` | array of string | Packages the profile requires. Each entry is one of: a package name; `name=version`, where `version` is an exact Debian version string; `name=version*`, meaning the newest version that starts with `version`; a glob over package names (`*`, `?`, `[...]`); an `http://` or `https://` URL of an artifact that is not in an apt repository; or `-name`, meaning the profile needs the package not to be installed. |
 | `kernel-cmdline` | array of string | Optional. Kernel command-line parameters the module needs (for example `"xe.max_vfs=7"`), as the kernel handlers set them in `GRUB_CMDLINE_LINUX` today. |
 | `component` | string | Optional. Module name (for example `"docker_io"`), shown in ICT error messages. |
 | `apt-repository` | string | Optional. An Ubuntu archive component (`universe`, `multiverse`, `restricted`). ICT images already enable all of them, so ICT ignores this key. |
@@ -148,9 +152,9 @@ ICT handles `pkg-list` entries as follows:
 
 | Entry | ICT behavior |
 | --- | --- |
-| Package name or `name=version` | Resolved from the template's repositories plus the repositories in the output, and installed. A package that no configured repository provides fails the build. Two `name=version` entries for the same package with different versions fail the build. |
-| Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: highest priority first (repository priority and the `apt-pref` stanzas from the output), then the newest version. A glob that matches nothing fails the build. |
-| `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
+| Package name, `name=version`, or `name=version*` | Resolved from the template's repositories plus the repositories in the output, and installed. For `name=version*` (for example `"intel-edge-base-standard=2026.3*"`), ICT installs the newest version that starts with `2026.3`. A package that no configured repository provides, or no version that matches, fails the build. Two entries for the same package with versions that cannot both be satisfied fail the build. |
+| Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` or `name=version*` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: highest priority first (repository priority and the `apt-pref` stanzas from the output), then the newest version. A glob that matches nothing fails the build. |
+| `http://` or `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
 | Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Must be one of the kernel packages the template installs (`systemConfig.kernel`, after its globs are resolved). Otherwise the build fails. ICT does not add or replace a kernel. |
 | `-name` (for example `"-ubuntu-desktop"`) | If the template's package list contains `name`, the build fails. Otherwise the entry is ignored. The template's package list is the merged `systemConfig.packages`, after `extends`. It does not include packages installed only as dependencies. |
 
@@ -172,8 +176,8 @@ keys is present, all of them MUST be.
 
 | Key | Type | Required | Description |
 | --- | --- | --- | --- |
-| `name` | string | no | Repository host or label (for example `"repositories.intel.com"`), shown in ICT messages. |
-| `gpg-key` | string | yes | HTTPS URL of the signing key. |
+| `repo-name` | string | no | Repository host or label (for example `"repositories.intel.com"`), shown in ICT messages. |
+| `gpg-key` | string | yes | `https://` URL of the signing key. `http://` is accepted for internal repositories; see below. |
 | `key-file` | string | yes | Absolute path of the dearmored keyring in the image. |
 | `apt-source` | string | yes | One one-line `deb` entry: `deb [options] <uri> <suite> <component>`, with exactly one component. ICT takes the repository URL, suite (codename), and component from this line. The suite is usually the release codename, but may be a fixed value the repository uses (for example `all` or `ubuntu24`). |
 | `apt-list-file` | string | yes | Absolute path of the list file under `/etc/apt/sources.list.d/`. |
@@ -181,6 +185,11 @@ keys is present, all of them MUST be.
 | `apt-pref` | array of string | no | Lines of an `apt_preferences(5)` file. A new stanza starts at each `Package:` line. Requires `apt-pref-file`. |
 | `apt-pref-file` | string | with `apt-pref` | Absolute path under `/etc/apt/preferences.d/`. |
 | `gpg-key-fingerprint` | string | no | Full 40-hex-digit OpenPGP fingerprint. When present, ICT verifies the downloaded key against it. |
+
+A signing key fetched over `http://` is not protected in transit, and the
+key decides which packages apt trusts from that repository. For an `http://`
+key, `gpg-key-fingerprint` SHOULD be provided. ICT verifies the key against
+it when present and logs a warning when it is absent.
 
 ICT writes `apt-list-file`, `key-file`, and `apt-pref-file` into the image at
 these exact paths, with the content `openedge-cli install` would write. When
@@ -214,12 +223,12 @@ whatever the stanzas say.
 ### A.7 Example
 
 `openedge-cli list --sbom --os-release ./os-release-noble handheld_multi_modal`
-(abridged):
+(abridged, illustrative):
 
 ```yaml
 "schema-version": "1"
-"cli-version": "v2026.3.0"
-"profiles": ["handheld_multi_modal"]
+"cli-version": "main"
+"module-list": ["handheld_multi_modal"]
 ---
 "pkg-list": ["curl","ca-certificates"]
 ---
@@ -227,7 +236,7 @@ whatever the stanzas say.
 ---
 "pkg-list": ["docker.io","docker-buildx","docker-compose-v2"]
 ---
-"name": "repositories.intel.com"
+"repo-name": "repositories.intel.com"
 "apt-source": "deb [signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu noble unified"
 "apt-list-file": "/etc/apt/sources.list.d/intel-graphics.list"
 "gpg-key": "https://repositories.intel.com/gpu/intel-graphics.key"
@@ -246,11 +255,11 @@ ICT runs the query on the build host before it resolves packages:
    generates the target `os-release` file (A.1), and runs the query. A
    non-zero exit fails the build and shows stderr. The OEP Installer team will
    publish `openedge-cli` as GitHub releases. Until the first release, ICT
-   uses the rendered CLI from the `develop` branch, pinned to a specific
-   commit and its SHA-256 so builds stay reproducible.
+   uses the rendered CLI from the `main` branch, pinned to a specific commit
+   and its SHA-256 so builds stay reproducible.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
-   - the header's `schema-version` is supported and its `profiles` are the
-     ones requested
+   - the first document is the header, its `schema-version` is supported,
+     and its `module-list` is the list requested
    - every document matches the JSON Schema in the appendix
    - the rules the schema cannot express hold: `signed-by` in `apt-source`
      equals `key-file`, and every package name or glob in `pkg-list`
@@ -332,6 +341,9 @@ are out of scope for version 1.
 
 Validate each document in the stream on its own. The first document must
 match `header`, and every other non-empty document must match `component`.
+The OEP Installer validator, `scripts/validate-sbom.py` in the
+`oep-installer-cli` repository, uses the same schema; keep the two
+identical.
 
 ```json
 {
@@ -344,20 +356,28 @@ match `header`, and every other non-empty document must match `component`.
     "pkg": {
       "type": "string",
       "anyOf": [
-        { "pattern": "^[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9.+~:-]+)?$" },
+        { "pattern": "^[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9.+~:-]+)?[*]?$" },
         { "pattern": "^[a-z0-9*?\\[][a-z0-9+.*?\\[\\]-]*$" },
         { "pattern": "^https://\\S+$" },
+        { "pattern": "^http://\\S+$" },
         { "pattern": "^-[a-z0-9][a-z0-9+.-]+$" }
       ]
     },
     "header": {
       "type": "object",
-      "required": ["schema-version", "cli-version", "profiles"],
+      "required": ["schema-version", "cli-version", "module-list"],
       "properties": {
         "schema-version": { "const": "1" },
         "cli-version": { "$ref": "#/$defs/nonEmpty" },
-        "profiles": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
+        "module-list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
       }
+    },
+    "url": {
+      "type": "string",
+      "anyOf": [
+        { "pattern": "^https://\\S+$" },
+        { "pattern": "^http://\\S+$" }
+      ]
     },
     "component": {
       "type": "object",
@@ -367,8 +387,8 @@ match `header`, and every other non-empty document must match `component`.
         "pkg-list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/pkg" } },
         "kernel-cmdline": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^\\S+$" } },
         "apt-repository": { "enum": ["universe", "multiverse", "restricted"] },
-        "name": { "$ref": "#/$defs/nonEmpty" },
-        "gpg-key": { "type": "string", "pattern": "^https://" },
+        "repo-name": { "$ref": "#/$defs/nonEmpty" },
+        "gpg-key": { "$ref": "#/$defs/url" },
         "gpg-key-fingerprint": { "type": "string", "pattern": "^[0-9A-F]{40}$" },
         "key-file": { "type": "string", "pattern": "^/[^\\s]+$" },
         "apt-source": { "type": "string", "pattern": "^deb (\\[[^\\]]*\\] )?https?://\\S+ \\S+ \\S+$" },
@@ -378,7 +398,7 @@ match `header`, and every other non-empty document must match `component`.
         "apt-pref-file": { "type": "string", "pattern": "^/etc/apt/preferences\\.d/[^/\\s]+$" }
       },
       "dependentRequired": {
-        "name": ["gpg-key", "key-file", "apt-source", "apt-list-file"],
+        "repo-name": ["gpg-key", "key-file", "apt-source", "apt-list-file"],
         "gpg-key": ["key-file", "apt-source", "apt-list-file"],
         "key-file": ["gpg-key", "apt-source", "apt-list-file"],
         "apt-source": ["gpg-key", "key-file", "apt-list-file"],
