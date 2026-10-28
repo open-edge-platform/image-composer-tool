@@ -253,10 +253,12 @@ ICT runs the query on the build host before it resolves packages:
 
 1. **Run.** ICT downloads the pinned `openedge-cli`, verifies its SHA-256,
    generates the target `os-release` file (A.1), and runs the query. A
-   non-zero exit fails the build and shows stderr. The OEP Installer team will
-   publish `openedge-cli` as GitHub releases. Until the first release, ICT
-   uses the rendered CLI from the `main` branch, pinned to a specific commit
-   and its SHA-256 so builds stay reproducible.
+   non-zero exit fails the build and shows stderr. `openedge-cli` is
+   developed in the `oep-installer-cli` sandbox repository, and ICT uses the
+   rendered CLI from its `main` branch for now. It will later be published in
+   the `open-edge-platform/edge-ai-libraries` repository, with a branch per
+   release (for example `release-2026.3.0`). In both cases, ICT pins a
+   specific commit and its SHA-256 so builds stay reproducible.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
    - the first document is the header, its `schema-version` is supported,
      and its `module-list` is the list requested
