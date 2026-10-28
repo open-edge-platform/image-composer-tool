@@ -14,6 +14,7 @@ func TestEmbeddedSchemasNonEmpty(t *testing.T) {
 		{"ConfigSchema", ConfigSchema},
 		{"ChrootenvSchema", ChrootenvSchema},
 		{"OsConfigSchema", OsConfigSchema},
+		{"OEPInstallerSBOMSchema", OEPInstallerSBOMSchema},
 	}
 
 	for _, tt := range tests {
@@ -34,6 +35,7 @@ func TestEmbeddedSchemasValidJSON(t *testing.T) {
 		{"ConfigSchema", ConfigSchema},
 		{"ChrootenvSchema", ChrootenvSchema},
 		{"OsConfigSchema", OsConfigSchema},
+		{"OEPInstallerSBOMSchema", OEPInstallerSBOMSchema},
 	}
 
 	for _, tt := range tests {
@@ -76,6 +78,12 @@ func TestEmbeddedSchemasHaveMetadataFields(t *testing.T) {
 			schema:     OsConfigSchema,
 			wantSchema: "https://json-schema.org/draft/2020-12/schema",
 			wantID:     "os-config.schema.json",
+		},
+		{
+			name:       "OEPInstallerSBOMSchema",
+			schema:     OEPInstallerSBOMSchema,
+			wantSchema: "https://json-schema.org/draft/2020-12/schema",
+			wantID:     "https://open-edge-platform.github.io/image-composer-tool/oep-sbom-v1.schema.json",
 		},
 	}
 
