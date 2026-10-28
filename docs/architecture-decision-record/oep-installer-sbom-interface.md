@@ -30,13 +30,10 @@ keeps its key names. The changes requested from `openedge-cli` are:
    `profiles` list first (A.5).
 4. In the `docker_ce` handler, rename `apt-entry` to `apt-source` and
    `apt-file` to `apt-list-file` (A.6).
-5. For packages pinned with `Pin: version`, also list the exact version in
-   `pkg-list` (A.6). The first profile, `handheld_multi_modal`, has no such
-   pins.
-6. Validate the `list --sbom` output of every profile against the JSON Schema
+5. Validate the `list --sbom` output of every profile against the JSON Schema
    in the appendix, ideally in CI. This catches problems like item 4 before
    ICT sees them.
-7. In the kernel handlers (`linux_image_6.18_intel`,
+6. In the kernel handlers (`linux_image_6.18_intel`,
    `linux_image_generic_7.0`), also print the kernel parameters they set, as
    `kernel-cmdline` (A.6).
 
@@ -152,7 +149,7 @@ ICT handles `pkg-list` entries as follows:
 | Entry | ICT behavior |
 | --- | --- |
 | Package name or `name=version` | Resolved from the template's repositories plus the repositories in the output, and installed. A package that no configured repository provides fails the build. Two `name=version` entries for the same package with different versions fail the build. |
-| Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: repository priority first (including `Pin: origin` priorities from the output), then the newest version. A glob that matches nothing fails the build. |
+| Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: highest priority first (repository priority and the `apt-pref` stanzas from the output), then the newest version. A glob that matches nothing fails the build. |
 | `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
 | Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Must be one of the kernel packages the template installs (`systemConfig.kernel`, after its globs are resolved). Otherwise the build fails. ICT does not add or replace a kernel. |
 | `-name` (for example `"-ubuntu-desktop"`) | If the template's package list contains `name`, the build fails. Otherwise the entry is ignored. The template's package list is the merged `systemConfig.packages`, after `extends`. It does not include packages installed only as dependencies. |
@@ -193,15 +190,26 @@ see the same source twice with different `Signed-By` values, and
 `apt-get update` could fail with "Conflicting values set for option
 Signed-By".
 
-At compose time, ICT's dependency resolution uses only one form of `apt-pref`
-stanza: `Package: *` with `Pin: origin <host>`, taken as the priority of that
-repository. ICT does not use `Pin: version` stanzas. A package the profile
-needs at a pinned version MUST therefore also appear in `pkg-list` as
-`name=version`, with the exact version the pin selects. For example, a stanza
-pinning `intel-oneapi-runtime-*` to `2025.3.*` comes with exact entries such
-as `"intel-oneapi-runtime-dpcpp-cpp=2025.3.1-123"` (illustrative version).
-Without them, ICT installs the newest version in the repository, and
-`openedge-cli` finds a different version from the one it pins.
+ICT also applies the `apt-pref` stanzas when it resolves packages at compose
+time, so it selects the same versions apt selects on the deployed system.
+Version 1 supports stanzas of this form:
+
+```text
+Package: <names or globs, separated by spaces>
+Pin: origin <host>  |  Pin: version <version or glob>
+Pin-Priority: <integer>
+```
+
+For example, the oneAPI module pins `intel-oneapi-runtime-*` to
+`Pin: version 2025.3.*` with priority `1001`, so ICT installs the newest
+2025.3 release of those packages, not a newer major release. ICT follows
+`apt_preferences(5)`: each candidate version gets the priority of the stanza
+that applies to it, the highest priority wins, and among equal priorities the
+newest version wins. A negative priority excludes the version. Any other
+`Pin:` form fails the build rather than being ignored.
+
+A `name=version` entry in `pkg-list` still selects that exact version,
+whatever the stanzas say.
 
 #### Fix in the current CLI
 
@@ -260,8 +268,8 @@ ICT runs the query on the build host before it resolves packages:
    packages, and `-name` entries are not added.
 4. **Convert repositories.** Each repository group becomes an ICT package
    repository used for resolution: URL, suite, and component from
-   `apt-source`, the key from `gpg-key`, and the priority from a
-   `Package: *` / `Pin: origin` stanza in `apt-pref`, if present. For the
+   `apt-source`, and the key from `gpg-key`. The `apt-pref` stanzas set
+   package and repository priorities for resolution (A.6). For the
    image, ICT writes `apt-list-file`, `key-file`, and `apt-pref-file` at the
    installer's paths (A.6) instead of its own generated repository files. If
    the template already defines a repository with the same URL and suite,
