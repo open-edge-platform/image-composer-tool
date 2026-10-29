@@ -47,13 +47,17 @@ The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 ### A.1 Command
 
 ```text
-openedge-cli list --sbom --os-release <file> <module> [<module>...]
+openedge-cli list --sbom --os-release <file> <module> [<module>...] [<argument>...]
 ```
 
 | Input | Meaning |
 | --- | --- |
 | `<module>...` | One or more profile or module names, as accepted by `openedge-cli install`. An unknown name fails with exit code `3`. |
 | `--os-release <file>` | An `os-release(5)` file describing the **target image**. The CLI MUST read it instead of the host's `/etc/os-release`. |
+| `<argument>...` | Optional arguments from the image template (for example `--k3s`). Some profiles choose different modules depending on them, so ICT passes the same arguments here as to `install` on first boot (Part B). |
+
+ICT runs the query with `HOME` set to a temporary directory, so it never
+reads or changes state in the build user's home.
 
 ICT runs the query on the build host, which is often a different Ubuntu
 release, or a different distribution, than the image it builds. Today the CLI
@@ -254,11 +258,14 @@ ICT runs the query on the build host before it resolves packages:
 1. **Run.** ICT downloads the pinned `openedge-cli`, verifies its SHA-256,
    generates the target `os-release` file (A.1), and runs the query. A
    non-zero exit fails the build and shows stderr. `openedge-cli` is
-   developed in the `oep-installer-cli` sandbox repository, and ICT uses the
-   rendered CLI from its `main` branch for now. It will later be published in
-   the `open-edge-platform/edge-ai-libraries` repository, with a branch per
-   release (for example `release-2026.3.0`). In both cases, ICT pins a
-   specific commit and its SHA-256 so builds stay reproducible.
+   developed in the `intel-sandbox/oep-installer-cli` repository, which also
+   renders variants for specific solutions, such as
+   `openedge-cli-federal-aerospace` for the Federal and Aerospace
+   blueprints. ICT uses a rendered CLI from the `main` branch for now, and
+   release tags (for example `v2026.3.0-rc1`) once they exist. ICT downloads
+   the raw file (`raw.githubusercontent.com`), not the GitHub web page, and
+   pins a specific commit or tag and its SHA-256 so builds stay
+   reproducible.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
    - the first document is the header, its `schema-version` is supported,
      and its `module-list` is the list requested
@@ -302,16 +309,21 @@ ICT runs the query on the build host before it resolves packages:
 
 ## Part B: First-boot execution
 
-ICT copies the pinned `openedge-cli` it used for the compose-time query into
-the image. The query and the first-boot install therefore use the same CLI
+ICT copies the pinned CLI file it used for the compose-time query into the
+image. The query and the first-boot install therefore use the same CLI
 version, and first boot does not need to download the installer.
 
 ICT runs the installer from a first-boot provisioning unit, after the network
-is online, as the template-defined user:
+is online, as the template-defined user. It first runs the copied file's
+`setup` command, which saves the CLI as `~/.local/bin/openedge-cli` and adds
+bash completion and an agent skill file, then runs the installation:
 
 ```text
-openedge-cli install <profile> [<profile>...] [<template-provided arguments>...]
+<copied CLI file> setup
+openedge-cli install <module> [<module>...] [<argument>...]
 ```
+
+The modules and arguments are the same ones ICT passed to the query (A.1).
 
 - **Sudo.** ICT gives the user passwordless sudo only while the unit runs,
   so `ensure_sudo` takes its `sudo -n` path. The grant is a separate
