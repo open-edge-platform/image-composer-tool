@@ -2,17 +2,20 @@
 # SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-# build-in-container.sh — build a template with the ICT image instead of a
-# host toolchain, and receive the image in a host directory.
+# build-in-container.sh: build an OS image from a template inside the ICT
+# container image and receive the result in a host directory, without
+# installing ICT or the programs it runs on the host.
 #
-# The template's directory (or --context) is mounted read-only at /input, the
-# output directory at --mount-point, and the container runs
-# scripts/container-build.sh with both paths as arguments. Named volumes keep
-# the package cache and the build workspace between runs.
+# It starts one privileged `docker run` that mounts the template's directory
+# (or --context) read-only at /input and OUTPUT_DIR at --mount-point, keeps
+# downloaded packages and the build's work tree in named volumes, passes on the
+# host's proxy variables, and runs scripts/container-build.sh in the container.
 #
 # SECURITY: the container runs privileged with the host's /dev mounted
-# (builds create loop devices, mount filesystems and chroot), so it is
-# root-equivalent on the host.
+# (building an OS image creates loop devices, mounts filesystems and chroots
+# into them), so it is root-equivalent on the host.
+#
+# Guide: docs/user-guide/get-started/cli-docker-quick-start.md
 
 set -euo pipefail
 
@@ -26,22 +29,28 @@ usage() {
     cat <<'EOF'
 Usage: build-in-container.sh [options] TEMPLATE OUTPUT_DIR [-- BUILD_FLAGS...]
 
-Build TEMPLATE inside the ICT image and copy the artifacts into OUTPUT_DIR
-(created if missing) as OUTPUT_DIR/<system-config-name>/<file>.
+Build TEMPLATE, an image template on this host, inside the ICT container image,
+and copy what the build produced (the OS image, its SBOM and any other build
+outputs) into OUTPUT_DIR as OUTPUT_DIR/<systemConfig name>/<file>. OUTPUT_DIR is
+created if missing.
 
 Options:
-  --mount-point DIR       Where OUTPUT_DIR is mounted inside the container
-                          (default: /output).
-  --context DIR           Directory mounted read-only at /input (default: the
-                          template's directory). It must contain the template
-                          and everything it references: extends parents,
-                          additional files, scripts.
-  --image NAME            ICT image to run (default: ict).
-  --cache-volume NAME     Named volume for the package cache (default: ict-cache).
-  --workspace-volume NAME Named volume for the build workspace (default: ict-workspace).
+  --mount-point DIR       Path inside the container where OUTPUT_DIR is
+                          mounted (default: /output).
+  --context DIR           Host directory mounted read-only at /input (default:
+                          the template's directory). It must contain the
+                          template and every file the template references:
+                          an `extends` parent, additional files, scripts.
+  --image NAME            Container image to run (default: ict).
+  --cache-volume NAME     Named volume for downloaded packages
+                          (default: ict-cache).
+  --workspace-volume NAME Named volume for the build's work tree
+                          (default: ict-workspace).
   -h, --help              Show this help.
 
-Arguments after -- are passed to `image-composer-tool build`.
+Arguments after -- go to `image-composer-tool build`, for example
+`-- --log-level debug`. A file path among them must be a path inside the
+container: a file under the context directory is at /input/<path>.
 EOF
 }
 
@@ -81,11 +90,12 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
         "or pass the one 'docker compose build' made with --image"
 fi
 
-# Create the output directory as the invoking user; left to docker, it would
-# be created owned by root.
+# Create the output directory as the user running this script. If it were left
+# to `docker run -v`, Docker would create it owned by root.
 mkdir -p "${positional[1]}"
 output="$(realpath "${positional[1]}")"
 
+# `-e NAME` without a value passes the host's value of NAME into the container.
 proxy_env=()
 for name in http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY; do
     [[ -z "${!name:-}" ]] || proxy_env+=(-e "$name")

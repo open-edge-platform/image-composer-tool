@@ -58,13 +58,16 @@ jobs:
       - name: Load ICT image into Docker
         run: earthly +ict-image
 
-      # The image, Earthly's cache, a raw build and its copied artifacts all
-      # share the runner's disk; drop preinstalled SDKs this job never uses.
+      # The container image, Earthly's cache, an OS image build and the copied
+      # outputs all share the runner's disk. Delete preinstalled SDKs this job
+      # never uses to make room.
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
 
-      # Builds through scripts/build-in-container.sh, the path users take, so the
-      # mounts and the artifact copy are exercised along with the build.
+      # Build the smallest shipped template the way a user would, through
+      # scripts/build-in-container.sh, so the mounts and the copy back to the
+      # host are tested along with the build. Pass if the build reports success
+      # and a RAW image reached the output directory.
       - name: Smoke build inside the ICT image
         shell: bash
         run: |

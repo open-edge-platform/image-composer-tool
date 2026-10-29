@@ -2,14 +2,17 @@
 # SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-# container-build.sh — build one template inside the ICT image and copy the
-# resulting artifacts into a directory mounted from the host.
+# container-build.sh: build one template inside the ICT container image, then
+# copy what the build produced into a directory mounted from the host.
 #
-# Runs inside the container (scripts/build-in-container.sh starts it from the
-# host). The build itself uses the image's work and cache directories; only
-# the files this run produced under <work-dir>/*/imagebuild/ are copied, into
-# <output>/<system-config-name>/, so the host directory never receives the
-# root-owned chroot trees a build leaves behind.
+# Runs inside the container; on the host, scripts/build-in-container.sh starts
+# the container and passes it the template's path and the output mount point.
+# The build itself works in the image's work directory (/opt/ict/workspace,
+# unless --work-dir is passed through), which holds the root-owned chroot trees
+# of every build. Only the files this run wrote under
+# <work-dir>/<os>-<dist>-<arch>/imagebuild/ are copied, keeping the path they
+# had there, so the host receives <output>/<systemConfig name>/<file> and none
+# of those trees.
 
 set -euo pipefail
 
@@ -24,10 +27,10 @@ Usage: container-build.sh --template FILE --output DIR [--owner UID:GID] [-- BUI
 
 Options:
   --template FILE   Template to build (a path inside the container).
-  --output DIR      Directory, on a volume mounted from the host, that receives
-                    the artifacts as DIR/<system-config-name>/<file>.
-  --owner UID:GID   Give the copied artifacts to this user and group, so the
-                    host user owns them instead of root.
+  --output DIR      Directory, mounted from the host, that receives the
+                    build's outputs as DIR/<systemConfig name>/<file>.
+  --owner UID:GID   Give the copied files to this numeric user and group, so
+                    they belong to the host user instead of root.
   -h, --help        Show this help.
 
 Arguments after -- are passed to `image-composer-tool build`.
@@ -56,14 +59,15 @@ build_flags=("$@")
 [[ -f "$template" ]] || die "template not found in the container: $template"
 [[ -z "$owner" || "$owner" =~ ^[0-9]+:[0-9]+$ ]] || die "--owner must be numeric UID:GID, got: $owner"
 
-# Refuse an output directory on the container's own filesystem: the artifacts
-# would be deleted with the container instead of reaching the host.
+# Refuse an output directory on the container's own filesystem (findmnt then
+# reports / as the mount it is on): the files would be deleted with the
+# container instead of reaching the host.
 mkdir -p "$output"
 if [[ "$(findmnt --noheadings --output TARGET --target "$output")" == "/" ]]; then
     die "$output is not on a mounted volume; mount a host directory there (docker run -v HOST_DIR:$output)"
 fi
 
-# Honour a --work-dir passed through to the build when collecting artifacts.
+# If the build was told to use another work directory, collect from there.
 for ((i = 0; i < ${#build_flags[@]}; i++)); do
     case "${build_flags[$i]}" in
         --work-dir) work_dir="${build_flags[$((i + 1))]:-$work_dir}" ;;
@@ -71,11 +75,15 @@ for ((i = 0; i < ${#build_flags[@]}; i++)); do
     esac
 done
 
+# Files newer than this marker were written by this run, not by an earlier
+# build that left its outputs in the same work directory.
 marker="$(mktemp)"
 trap 'rm -f "$marker"' EXIT
 
-# Run the build as a child and forward SIGINT/SIGTERM to it, so stopping the
-# container lets ICT unmount its filesystems and detach its loop devices.
+# Run the build in the background and pass SIGINT and SIGTERM (Ctrl+C, docker
+# stop) on to it, so ICT can unmount its filesystems and detach its loop
+# devices before it exits. `wait` returns early when a signal arrives, so keep
+# waiting until the build has really exited.
 image-composer-tool build "${build_flags[@]}" "$template" &
 build_pid=$!
 trap 'kill -TERM "$build_pid" 2>/dev/null || true' INT TERM

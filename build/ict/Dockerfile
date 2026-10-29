@@ -23,6 +23,8 @@
 # loop devices, mounts filesystems and chroots into them, none of which an
 # unprivileged container may do:
 #   docker run --rm --privileged -v /dev:/dev ict image-composer-tool --help
+# scripts/build-in-container.sh (build a template from the command line) and
+# docker-compose.yml (serve the web UI) run it that way for you.
 #
 # Behind a proxy, add --build-arg http_proxy=... (and https_proxy, no_proxy).
 # These are Docker's predefined proxy build arguments: RUN steps use them, but
@@ -226,8 +228,8 @@ COPY image-composer-tool.yml ./
 COPY config/ config/
 COPY image-templates/ image-templates/
 COPY scripts/preflight.sh scripts/preflight.sh
-# Builds one template from the CLI into a host-mounted directory; see
-# scripts/build-in-container.sh.
+# Builds one template and copies the OS image into a directory mounted from
+# the host. scripts/build-in-container.sh runs it from the host.
 COPY scripts/container-build.sh scripts/container-build.sh
 # preflight.sh reads the allowlist from this copy of shell.go.
 COPY internal/utils/shell/shell.go internal/utils/shell/shell.go
