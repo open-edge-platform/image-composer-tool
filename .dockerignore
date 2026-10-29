@@ -1,10 +1,12 @@
-# Keep the build context to the sources build/ict/Dockerfile copies. A checkout
-# that has run native builds or `serve` holds large, often root-owned trees
-# (cache/, workspace/, webui-workspace/) that would otherwise be sent to the
-# Docker daemon on every build, or fail it outright when unreadable.
+# Paths Docker leaves out of the build context, the files it sends to the
+# image build. build/ict/Dockerfile copies only sources, so leave out the rest.
+# A checkout where ICT has run holds large build trees (cache/, workspace/,
+# webui-workspace/), often owned by root: sending them would slow every image
+# build, and an unreadable file would fail it.
 .git
 .github
 .vscode
+# local binaries; build/ict/ holds the Dockerfile
 build
 !build/ict
 builds
