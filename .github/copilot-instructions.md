@@ -82,7 +82,7 @@ Always use **Earthly** when available. Fallback to plain Go if Earthly is missin
 | Test (fast) | `earthly +test-quick` | `go test ./...` |
 | Test (coverage) | `earthly +test` | `go test -coverprofile=coverage.out ./...` |
 | Lint | `earthly +lint` | `golangci-lint run` |
-| ICT image (CLI + web UI + toolchain) | `earthly +ict-image` | `docker compose build` |
+| ICT container image (CLI, web UI, build toolchain) | `earthly +ict-image` | `docker build -f build/ict/Dockerfile --target ict -t ict .` |
 
 CI runs Earthly, so verify with `earthly +test` and `earthly +lint` before opening a PR.
 
