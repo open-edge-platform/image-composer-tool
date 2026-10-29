@@ -309,20 +309,25 @@ deb:
     SAVE ARTIFACT /tmp/dist/ict_*_${ARCH}.deb AS LOCAL dist/
     SAVE ARTIFACT /tmp/dist/image-composer-tool.version AS LOCAL dist/image-composer-tool.version
 
-# ── ICT image ─────────────────────────────────────────────────────────────────
-# Thin wrappers around build/ict/Dockerfile, the one ICT image definition: the
-# image-composer-tool binary (CLI + web UI), live-installer, config/,
-# image-templates/ and the build toolchain. docker-compose.yml builds the same
-# Dockerfile; these targets add the version and commit stamp.
+# ── ICT container image ───────────────────────────────────────────────────────
+# Builds the ICT container image from build/ict/Dockerfile, the only definition
+# of it: the image-composer-tool binary (CLI and web UI), live-installer,
+# config/, image-templates/ and every program a build runs. docker-compose.yml
+# builds the same Dockerfile; these targets add the version and git commit to
+# the binary and the image labels, and run the toolchain check.
 #
-# Build locally:
-#   earthly +ict-image --VERSION=<tag>
-# Validate that every shell.go commandMap tool resolves in the image:
-#   earthly +ict-image-preflight
+#   earthly +ict-image                       # loads ict:dev and ict:latest into Docker
+#   earthly +ict-image --VERSION=1.2.3       # loads ict:1.2.3 and ict:latest
+#   earthly +ict-image --ICT_IMAGE_NAME=foo  # loads foo:dev and foo:latest
+#   earthly +ict-image-preflight             # checks every allowlisted program exists
+#
+# The host's proxy variables are passed to the Dockerfile as build arguments,
+# which Docker does not store in the image.
 
 ict-image:
     ARG VERSION="dev"
     ARG ICT_IMAGE_NAME="ict"
+    # Set by Earthly to the checkout's short commit hash.
     ARG EARTHLY_GIT_SHORT_HASH
 
     FROM DOCKERFILE \
@@ -340,6 +345,10 @@ ict-image:
     SAVE IMAGE ${ICT_IMAGE_NAME}:${VERSION}
     SAVE IMAGE ${ICT_IMAGE_NAME}:latest
 
+# ICT runs external programs only through the allowlist in
+# internal/utils/shell/shell.go (commandMap). Fail if any of them is missing
+# from the image, listing the missing ones. CI runs this whenever one of the
+# image's inputs changes.
 ict-image-preflight:
     FROM +ict-image
     RUN /opt/ict/scripts/preflight.sh --check-only \
