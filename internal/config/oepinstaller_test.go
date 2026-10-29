@@ -90,6 +90,15 @@ func TestValidateOEPInstaller(t *testing.T) {
 		{"http url", "ubuntu", func(o *OEPInstallerConfig) { o.URL = "http://example.com/cli" }, "https:// URL"},
 		{"url with credentials", "ubuntu", func(o *OEPInstallerConfig) { o.URL = "https://u:p@example.com/cli" },
 			"credentials"},
+		{"github blob page", "ubuntu", func(o *OEPInstallerConfig) {
+			o.URL = "https://github.com/intel-sandbox/oep-installer-cli/blob/main/rendered/openedge-cli-federal-aerospace"
+		}, "https://raw.githubusercontent.com/intel-sandbox/oep-installer-cli/main/rendered/openedge-cli-federal-aerospace"},
+		{"github tree page", "ubuntu", func(o *OEPInstallerConfig) {
+			o.URL = "https://github.com/intel-sandbox/oep-installer-cli/tree/v2026.3.0-rc1/rendered/openedge-cli"
+		}, "GitHub web page"},
+		{"github release download", "ubuntu", func(o *OEPInstallerConfig) {
+			o.URL = "https://github.com/intel-sandbox/oep-installer-cli/releases/download/v2026.3.0/openedge-cli"
+		}, ""},
 		{"bad sha256", "ubuntu", func(o *OEPInstallerConfig) { o.SHA256 = "xyz" }, "sha256"},
 		{"no modules", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = nil }, "at least one"},
 		{"duplicate module", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = []string{"a", "a"} }, "duplicate"},
