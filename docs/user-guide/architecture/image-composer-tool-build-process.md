@@ -106,7 +106,6 @@ image-composer-tool validate my-image-template.yml
 The package cache stores downloaded packages (.rpm or .deb files) in `cache/pkgCache/{provider-id}/`. This cache:
 - Dramatically reduces build time for similar images
 - Decreases network bandwidth usage
-- Enables offline builds if packages were previously cached
 - Works even when templates change (shared packages are reused)
 
 See [Understanding Caching](./image-composer-tool-caching.md#how-package-caching-works) for detailed information about how the package cache works.
