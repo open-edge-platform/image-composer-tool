@@ -10,6 +10,7 @@ command reference, see the
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
+  - [Building an Image in a Docker Container](#building-an-image-in-a-docker-container)
   - [Comparing Overlay Outputs](#comparing-overlay-outputs)
     - [Baseline RAW vs Overlay RAW](#baseline-raw-vs-overlay-raw)
     - [SBOM Comparison (Complete SBOM)](#sbom-comparison-complete-sbom)
@@ -21,7 +22,6 @@ command reference, see the
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Running the Web UI](#running-the-web-ui)
     - [Running the Web UI With Docker Compose](#running-the-web-ui-with-docker-compose)
-    - [Building an Image From the CLI in a Container](#building-an-image-from-the-cli-in-a-container)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
     - [Minimal Edge Device](#minimal-edge-device)
@@ -131,6 +131,38 @@ An ISO build also leaves the SPDX SBOM of the installed system
 (`<image-name>-<version>.composition.json`), and the merged template
 (`template-dump.yaml`) in this directory. See the
 [Unattended ISO Installer Tutorial](./unattended-iso-provisioning.md).
+
+## Building an Image in a Docker Container
+
+Instead of installing the tool and running builds with `sudo`, you can build
+inside the ICT container image, which carries `image-composer-tool` and every
+program a build runs:
+
+```bash
+docker build -f build/ict/Dockerfile --target ict -t ict .
+scripts/build-in-container.sh my-template.yml ./out
+```
+
+The OS image and its SBOM land in `./out/<system-config-name>/`, owned by you.
+The container runs privileged with the host's `/dev` mounted, so it is
+root-equivalent on the host. The
+[CLI Quick Start (Docker)](./cli-docker-quick-start.md) covers writing a
+template, the mounts, and every option of the script.
+
+The script wraps one `docker run`, which runs
+`/opt/ict/scripts/container-build.sh` inside the container. To run that
+yourself, mount the template's directory and your output directory, and pass
+the output's mount point as `--output`; it must be a mounted volume, or the
+files would disappear with the container. Create the output directory first,
+so it is not owned by root:
+
+```bash
+mkdir -p out
+docker run --rm --init --privileged -v /dev:/dev \
+  -v "$PWD:/input:ro" -v "$PWD/out:/artifacts" \
+  ict /opt/ict/scripts/container-build.sh \
+    --template /input/my-template.yml --output /artifacts --owner "$(id -u):$(id -g)"
+```
 
 ## Comparing Overlay Outputs
 
@@ -444,87 +476,15 @@ The container also has the `image-composer-tool` CLI. Its working directory,
 docker compose exec ict image-composer-tool validate image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
 ```
 
+To build OS images from the command line without the web UI, see
+[Building an Image in a Docker Container](#building-an-image-in-a-docker-container).
+
 To build the container image without Compose, run
 `docker build -f build/ict/Dockerfile --target ict -t ict .`, or
 `earthly +ict-image`, which also records the version and git commit in it
 (`--VERSION=<tag>` sets the version and the image tag, `--ICT_IMAGE_NAME=<name>`
 the image name). `earthly +ict-image-preflight` also checks that every program
 ICT may run is present in the image.
-
-### Building an Image From the CLI in a Container
-
-The ICT image also builds a template you author on the host, from the command
-line and without the web UI. Build the image once, then pass your template and
-an output directory to `scripts/build-in-container.sh`:
-
-```bash
-# Build the ICT image (or use earthly +ict-image). Behind a proxy, add
-# --build-arg http_proxy --build-arg https_proxy --build-arg no_proxy.
-docker build -f build/ict/Dockerfile --target ict -t ict .
-
-# Build your template; the artifacts land in ./out
-scripts/build-in-container.sh my-template.yml ./out
-```
-
-The script starts the container with these mounts:
-
-| Host | Inside the container |
-|------|----------------------|
-| The template's directory, or `--context DIR` (read-only) | `/input` |
-| The output directory, created if missing | `--mount-point DIR` (default `/output`) |
-| Named volume `ict-cache` (`--cache-volume`) | `/opt/ict/cache` |
-| Named volume `ict-workspace` (`--workspace-volume`) | `/opt/ict/workspace` |
-
-Inside the container it runs `/opt/ict/scripts/container-build.sh`, passing the
-template's path and the mount point as arguments. That script runs
-`image-composer-tool build` and then copies only the files this run produced
-into `<mount point>/<system-config-name>/`, owned by you rather than by root.
-For example, `out/minimal/minimal-os-image-ubuntu-24.04.raw.gz`. The build's
-chroot trees stay in the workspace volume. Arguments after `--` go to
-`image-composer-tool build`:
-
-```bash
-scripts/build-in-container.sh \
-  --mount-point /artifacts \
-  --context ~/templates \
-  ~/templates/edge/my-template.yml ./out \
-  -- --log-level debug
-```
-
-Keep in mind:
-
-- **Only the template's directory is mounted.** Relative paths in the template
-  resolve from its directory, exactly as in a native build, but nothing outside
-  the mounted directory is visible. An `extends` parent, additional files, and
-  scripts must therefore sit in that directory or below it. To build a template
-  that references `../` paths, such as many under `image-templates/`, pass a
-  `--context` that contains everything, for example
-  `--context image-templates image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml`.
-- **Repeat builds are faster.** The two named volumes keep the downloaded
-  packages and the chroot environment between runs. Reclaim the space with
-  `docker volume rm ict-cache ict-workspace`.
-- **Ctrl+C stops cleanly.** It stops the build, lets ICT unmount its filesystems
-  and detach its loop devices, and copies nothing.
-- **Pick the image.** The script runs the image named `ict` by default. To use
-  the one `docker compose build` made instead, pass `--image <project>-ict`,
-  for example `--image image-composer-tool-ict`.
-- **The container is privileged.** As with the web UI container, it runs with
-  the host's `/dev` mounted, so it is root-equivalent on the host.
-
-Without the script, the equivalent `docker run` mounts the output directory and
-passes its mount point to `container-build.sh` as `--output`. Create the output
-directory first, so it is not owned by root:
-
-```bash
-mkdir -p out
-docker run --rm --init --privileged -v /dev:/dev \
-  -v "$PWD:/input:ro" -v "$PWD/out:/artifacts" \
-  ict /opt/ict/scripts/container-build.sh \
-    --template /input/my-template.yml --output /artifacts --owner "$(id -u):$(id -g)"
-```
-
-`container-build.sh` refuses an `--output` that is not on a mounted volume,
-because the artifacts would otherwise disappear with the container.
 
 ## Shell Completion
 
