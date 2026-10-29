@@ -201,9 +201,12 @@ COPY image-composer-tool.yml ./
 COPY config/ config/
 COPY image-templates/ image-templates/
 COPY scripts/preflight.sh scripts/preflight.sh
+# Builds one template from the CLI into a host-mounted directory; see
+# scripts/build-in-container.sh.
+COPY scripts/container-build.sh scripts/container-build.sh
 # preflight.sh reads the required tool list from shell.go's commandMap.
 COPY internal/utils/shell/shell.go internal/utils/shell/shell.go
-RUN chmod +x scripts/preflight.sh
+RUN chmod +x scripts/preflight.sh scripts/container-build.sh
 
 ENV PATH=/opt/ict/build:$PATH
 
