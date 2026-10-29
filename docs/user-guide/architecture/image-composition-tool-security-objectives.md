@@ -47,12 +47,13 @@ configured at all.
 ## 6. Containerized Web UI
 
 `docker compose up` runs the web UI in a container that is privileged and has
-the host's `/dev` mounted, because image builds create loop devices, mount
-filesystems, and chroot. The container is therefore root-equivalent on the host,
-and the web UI has no authentication of its own. The compose file publishes the
-port on `127.0.0.1` only, so only users of the host itself can reach it. The
-image takes proxy settings from the environment at run time rather than baking
-the build host's into its configuration.
+the host's `/dev` mounted, because building an OS image creates loop devices,
+mounts filesystems, and chroots into them. The container is therefore
+root-equivalent on the host, and the web UI has no authentication of its own.
+The compose file publishes the port on `127.0.0.1` only, so only users of the
+host itself can reach it. The container image does not store the proxy
+settings of the host that built it; the proxy comes from the environment each
+time the container starts.
 
 ## 7. Deployed-System Provisioning
 
