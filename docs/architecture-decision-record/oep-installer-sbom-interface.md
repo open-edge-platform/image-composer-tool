@@ -20,8 +20,8 @@ repository-installable packages before first boot. `openedge-cli` installs
 everything else on first boot.
 
 The contract builds on the existing `openedge-cli list --sbom` output. The
-following changes were requested from `openedge-cli`; items 1, 2, 3, 4, and
-6 are implemented on its `main` branch:
+following changes were requested from `openedge-cli`. Items 1 to 5 are
+implemented on its `main` branch:
 
 1. Accept `--os-release <file>` so the output describes the target image,
    not the build host (A.1).
@@ -37,6 +37,8 @@ following changes were requested from `openedge-cli`; items 1, 2, 3, 4, and
 5. In the kernel handlers (`linux_image_6.18_intel`,
    `linux_image_generic_7.0`), also print the kernel parameters they set, as
    `kernel-cmdline` (A.6).
+6. Accept `--kernel-release <release>` so that nothing in the output depends
+   on the kernel the build host is running (A.1). Not yet implemented.
 
 The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 
@@ -47,17 +49,29 @@ The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 ### A.1 Command
 
 ```text
-openedge-cli list --sbom --os-release <file> <module> [<module>...] [<argument>...]
+openedge-cli list --sbom --os-release <file> --kernel-release <release> \
+    <module> [<module>...] [<argument>...]
 ```
 
 | Input | Meaning |
 | --- | --- |
 | `<module>...` | One or more profile or module names, as accepted by `openedge-cli install`. An unknown name fails with exit code `3`. |
 | `--os-release <file>` | An `os-release(5)` file describing the **target image**. The CLI MUST read it instead of the host's `/etc/os-release`. |
+| `--kernel-release <release>` | The kernel release of the **target image**, as `uname -r` reports it on the deployed system (for example `7.0.0-14-generic`). The CLI MUST use it instead of the build host's running kernel. |
 | `<argument>...` | Optional arguments from the image template (for example `--k3s`). Some profiles choose different modules depending on them, so ICT passes the same arguments here as to `install` on first boot (Part B). |
 
 ICT runs the query with `HOME` set to a temporary directory, so it never
 reads or changes state in the build user's home.
+
+ICT builds images on any Ubuntu 24.04 host, and in containers, which share the
+host's kernel. The build host's kernel is therefore unrelated to the image's
+kernel. Today several modules read it: `kernel_module_essential` prints
+`linux-headers-$(uname -r)` and chooses `gcc-N` from
+`/boot/config-$(uname -r)`, and `linux_tools` prints
+`linux-tools-$(uname -r)`. In `list --sbom`, these values MUST come from
+`--kernel-release` instead, including the compiler version, which must be the
+one the target kernel needs rather than the one the build host's kernel was
+built with.
 
 ICT runs the query on the build host, which is often a different Ubuntu
 release, or a different distribution, than the image it builds. Today the CLI
@@ -91,9 +105,10 @@ The query MUST:
 
 1. **Have no side effects.** It must not use `sudo`, install packages, or
    change apt configuration.
-2. **Be reproducible.** The same CLI version, profile, and `--os-release`
-   contents produce the same output. Values must not come from online
-   "latest release" lookups.
+2. **Be reproducible.** The same CLI version, profile, `--os-release`
+   contents, and `--kernel-release` produce the same output. Values must not
+   come from online "latest release" lookups, or from the build host's
+   running kernel or its files under `/boot`, `/proc`, or `/lib/modules`.
 3. **Use the same definitions as `install`.** The packages and repositories
    reported for a profile must be the ones `install` would set up for it.
 4. **Keep stdout clean.** Only the YAML stream (A.4) goes to stdout.
@@ -159,7 +174,8 @@ ICT handles `pkg-list` entries as follows:
 | Package name, `name=version`, or `name=version*` | Resolved from the template's repositories plus the repositories in the output, and installed. For `name=version*` (for example `"intel-edge-base-standard=2026.3*"`), ICT installs the newest version that starts with `2026.3`. A package that no configured repository provides, or no version that matches, fails the build. Two entries for the same package with versions that cannot both be satisfied fail the build. |
 | Glob (for example `intel-oneapi-runtime-*`) | Expanded to **every** matching package name in the configured repositories. For each name, a `name=version` or `name=version*` entry anywhere in the stream decides the version. Otherwise ICT chooses the version as for a plain package name: highest priority first (repository priority and the `apt-pref` stanzas from the output), then the newest version. A glob that matches nothing fails the build. |
 | `http://` or `https://` URL (for example the `libze1` `.deb` or the `linux-npu-driver` `.tar.gz`) | Skipped. `openedge-cli` installs it on first boot, so it is not in the ICT-generated SBOM, even when it is a `.deb`. |
-| Kernel package (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-generic*`) | Must be one of the kernel packages the template installs (`systemConfig.kernel`, after its globs are resolved). Otherwise the build fails. ICT does not add or replace a kernel. |
+| Kernel image (`linux-image-*`, `linux-generic*`) | Must be one of the kernel packages the template installs (`systemConfig.kernel`, after its globs are resolved). Otherwise the build fails. ICT does not add or replace a kernel. |
+| Kernel headers, modules, or tools for a release (`linux-headers-<release>`, `linux-modules-<release>`, `linux-tools-<release>`) | Installed when `<release>` is the template's kernel release. Any other release fails the build. |
 | `-name` (for example `"-ubuntu-desktop"`) | If the template's package list contains `name`, the build fails. Otherwise the entry is ignored. The template's package list is the merged `systemConfig.packages`, after `extends`. It does not include packages installed only as dependencies. |
 
 The `kernel-cmdline` entries must be a subset of the parameters in the
@@ -256,7 +272,8 @@ whatever the stanzas say.
 ICT runs the query on the build host before it resolves packages:
 
 1. **Run.** ICT downloads the pinned `openedge-cli`, verifies its SHA-256,
-   generates the target `os-release` file (A.1), and runs the query. A
+   generates the target `os-release` file (A.1), resolves the template's
+   kernel to pass its release as `--kernel-release`, and runs the query. A
    non-zero exit fails the build and shows stderr. `openedge-cli` is
    developed in the `intel-sandbox/oep-installer-cli` repository, which also
    renders variants for specific solutions, such as
