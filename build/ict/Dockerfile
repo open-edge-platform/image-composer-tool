@@ -1,28 +1,45 @@
 # SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-# ICT image: the image-composer-tool binary (the CLI, with the web UI embedded
-# in `serve`), live-installer, config/, image-templates/ and the complete build
-# toolchain on Ubuntu 24.04. Everything sits under /opt/ict in the repository
-# layout, so the tool resolves config/ and image-templates/ exactly as it does
-# from a checkout.
-#
-# Stages:
-#   web        node:22       builds the web UI bundle (web/dist)
-#   bin        golang:1.26   embeds the bundle, builds both binaries
-#   toolchain  ubuntu:24.04  build toolchain; cached until the package list changes
-#   ict        final         toolchain + binaries + runtime files
+# ICT container image: Image Composer Tool (ICT) together with everything it
+# needs to build OS images, so the host needs only Docker. It contains:
+#   - image-composer-tool, the CLI. Its `serve` command runs the web UI, whose
+#     frontend is compiled into the binary.
+#   - live-installer, the program that ISO images boot into to install the OS
+#     onto a disk. ISO builds copy it into the image.
+#   - config/ (per-OS defaults) and image-templates/ (the shipped templates).
+#   - Every external program a build runs (debootstrap, mkfs, grub and so on),
+#     installed on Ubuntu 24.04.
+# Everything sits under /opt/ict in the same layout as a checkout of this
+# repository, and /opt/ict is the working directory, because ICT finds config/
+# and image-templates/ relative to the directory it runs in.
 #
 # Build it with any of:
-#   docker compose build                     (docker-compose.yml at the repo root)
-#   earthly +ict-image                       (stamps VERSION and COMMIT_SHA)
+#   docker compose build          # uses docker-compose.yml at the repository root
+#   earthly +ict-image            # also stamps the version and git commit
 #   docker build -f build/ict/Dockerfile --target ict -t ict .
 #
-# Behind a proxy, pass --build-arg http_proxy=... (and https_proxy, no_proxy).
-# These are Docker's predefined proxy args: RUN steps see them, but they are
-# not recorded in the image.
+# Run it privileged, with the host's /dev mounted. Building an OS image creates
+# loop devices, mounts filesystems and chroots into them, none of which an
+# unprivileged container may do:
+#   docker run --rm --privileged -v /dev:/dev ict image-composer-tool --help
+#
+# Behind a proxy, add --build-arg http_proxy=... (and https_proxy, no_proxy).
+# These are Docker's predefined proxy build arguments: RUN steps use them, but
+# Docker does not store them in the image, so the image never carries the build
+# host's proxy. Pass a proxy at run time instead (docker run -e http_proxy ...).
+#
+# Each FROM below starts a stage; only the last one becomes the image:
+#   web        node:22       compiles the web UI frontend into web/dist
+#   bin        golang:1.26   builds image-composer-tool, with the frontend
+#                            embedded, and live-installer
+#   toolchain  ubuntu:24.04  installs the external programs. This is the slow
+#                            step; Docker reuses its cached result until the
+#                            package list changes.
+#   ict        final image   toolchain + binaries + config, templates, scripts
 
-# ── web: frontend bundle ─────────────────────────────────────────────────────
+# ── web: compile the web UI frontend ─────────────────────────────────────────
+# A React app built with Vite (see web/README.md); the output is static files.
 FROM node:22 AS web
 
 WORKDIR /src/web
@@ -31,7 +48,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-# ── bin: image-composer-tool + live-installer ────────────────────────────────
+# ── bin: build image-composer-tool and live-installer ────────────────────────
 FROM golang:1.26 AS bin
 
 ARG VERSION=dev
@@ -43,12 +60,14 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-# Replace the committed placeholder page with the real UI bundle, so `serve`
-# embeds the SPA instead of deferring to a dev server.
+# The binary embeds whatever internal/webui/dist holds (see embed.go there).
+# The repository commits only a placeholder page in it, so that Go builds work
+# without Node.js; replace it with the frontend the web stage compiled.
 RUN rm -rf internal/webui/dist
 COPY --from=web /src/web/dist internal/webui/dist
 
-# Same -ldflags as the Earthfile's +build target.
+# -X sets the details `image-composer-tool version` prints, and -s -w strip
+# debug symbols. Keep these flags the same as the Earthfile's +build target.
 RUN BUILD_DATE=$(date -u '+%Y-%m-%d') && \
     LDFLAGS="-s -w \
         -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=${VERSION}' \
@@ -61,17 +80,20 @@ RUN BUILD_DATE=$(date -u '+%Y-%m-%d') && \
     CGO_ENABLED=0 go build -trimpath -buildmode=pie -ldflags "$LDFLAGS" \
         -o build/image-composer-tool ./cmd/image-composer-tool
 
-# ── toolchain: Ubuntu 24.04 + every tool ICT shells out to ───────────────────
-# Every command in internal/utils/shell/shell.go commandMap must resolve here;
-# scripts/preflight.sh checks that on every container start.
+# ── toolchain: Ubuntu 24.04 + every program ICT runs ─────────────────────────
+# ICT runs external programs only through an allowlist: commandMap in
+# internal/utils/shell/shell.go, which names each command and the paths it may
+# run from. Every command in that list must exist in this image.
+# scripts/preflight.sh checks that each time the container starts, and
+# `earthly +ict-image-preflight` checks it in CI. A new command added to
+# commandMap therefore needs its package added here.
 FROM ubuntu:24.04 AS toolchain
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Packages are grouped by the functional area they cover.
-# Special tools: tdnf (Azure-Linux-only), yum/opkg (non-Ubuntu package managers),
-# snap (needs snapd), and run (legacy allowlist entry) are handled after the main
-# install block.
+# Packages are grouped by what they are for. Five allowlisted commands have no
+# Ubuntu package (tdnf, yum, opkg, snap, run); the step after this one gives
+# them stubs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     \
     # core OS utilities (coreutils, util-linux, procps, etc.)
@@ -111,7 +133,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fdisk \
     eject \
     \
-    # crypto / integrity (ca-certificates: TLS trust for ICT's own downloads)
+    # crypto / integrity. ca-certificates holds the CA bundle that ICT's own
+    # HTTPS downloads (package indexes, signing keys) are verified against.
     ca-certificates \
     cryptsetup-bin \
     openssl \
@@ -149,9 +172,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     createrepo-c \
     dnf \
     \
-    # provider host dependencies the toolchain above does not cover. Each
-    # provider's installHostDependency() apt-installs missing ones at build
-    # time, which fails here because the image ships no apt lists.
+    # Before each build, the OS providers (internal/provider/<os>/) apt-install
+    # these on the host unless they are already present. That install fails in
+    # this image, which deletes its apt package lists (last line of this step),
+    # so install them here instead.
     arch-test \
     debian-archive-keyring \
     qemu-user-static \
@@ -161,10 +185,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     \
     && rm -rf /var/lib/apt/lists/*
 
-# tdnf/yum/opkg/snap are distro-specific and not installable on Ubuntu.
-# run is a legacy allowlist entry and may be absent in Ubuntu.
-# Create explicit stubs at the allowlist path (/usr/bin/<cmd>) so commandMap
-# entries resolve and fail clearly when invoked.
+# tdnf, yum, opkg and snap belong to other distributions and cannot be
+# installed on Ubuntu; run is a legacy allowlist entry with no package. Give
+# each a stub at /usr/bin/<cmd>, the path commandMap allows, so the allowlist
+# check passes and a build that does call one fails with a clear message.
 RUN for cmd in tdnf yum opkg snap run; do \
       if [ ! -e /usr/bin/$cmd ]; then \
         printf '#!/bin/sh\necho "ERROR: %s is not available in the ICT image (distro-specific tool)" >&2\nexit 127\n' "$cmd" \
@@ -173,7 +197,8 @@ RUN for cmd in tdnf yum opkg snap run; do \
       fi; \
     done
 
-# Compatibility aliases for distro naming differences referenced by commandMap.
+# commandMap uses the RPM-family name grub2-mkconfig; Ubuntu calls it
+# grub-mkconfig.
 RUN if [ ! -e /usr/sbin/grub2-mkconfig ] && [ -e /usr/sbin/grub-mkconfig ]; then \
       ln -s /usr/sbin/grub-mkconfig /usr/sbin/grub2-mkconfig; \
     fi
@@ -193,9 +218,9 @@ LABEL org.opencontainers.image.title="Image Composer Tool" \
 
 WORKDIR /opt/ict
 
-# The binaries go in build/, where `earthly +build` puts them: the ISO initrd
-# configs reference live-installer as <repo>/build/live-installer, and `serve`
-# finds ./build/image-composer-tool on its own.
+# The binaries go in build/, where `earthly +build` puts them in a checkout.
+# ISO builds look for live-installer at <repository>/build/live-installer, and
+# `serve` runs each build with ./build/image-composer-tool.
 COPY --from=bin /src/build/image-composer-tool /src/build/live-installer build/
 COPY image-composer-tool.yml ./
 COPY config/ config/
@@ -204,11 +229,14 @@ COPY scripts/preflight.sh scripts/preflight.sh
 # Builds one template from the CLI into a host-mounted directory; see
 # scripts/build-in-container.sh.
 COPY scripts/container-build.sh scripts/container-build.sh
-# preflight.sh reads the required tool list from shell.go's commandMap.
+# preflight.sh reads the allowlist from this copy of shell.go.
 COPY internal/utils/shell/shell.go internal/utils/shell/shell.go
 RUN chmod +x scripts/preflight.sh scripts/container-build.sh
 
 ENV PATH=/opt/ict/build:$PATH
 
+# Every container start runs preflight.sh first. If an allowlisted program is
+# missing, it lists what is missing and exits 1; otherwise it runs the
+# container's command, which defaults to the CLI's help.
 ENTRYPOINT ["/opt/ict/scripts/preflight.sh", "--command-map-file", "/opt/ict/internal/utils/shell/shell.go", "--"]
 CMD ["image-composer-tool", "--help"]

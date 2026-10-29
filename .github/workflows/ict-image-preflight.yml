@@ -1,3 +1,6 @@
+# Checks the ICT container image (build/ict/Dockerfile) whenever it or one of
+# its inputs changes: builds it, confirms every program ICT may run is in it,
+# then builds a small OS image inside it.
 name: ICT Image Preflight
 
 on:
@@ -48,8 +51,10 @@ jobs:
       - name: Build ICT image and run preflight
         run: earthly +ict-image-preflight
 
-      # +ict-image-preflight builds from +ict-image but does not export it;
-      # this reuses Earthly's cache and loads ict:latest into Docker.
+      # Earthly loads an image into Docker only for the target it is asked to
+      # build, so the image +ict-image-preflight built is not there yet. This
+      # rebuilds nothing (it comes from Earthly's cache); it only loads
+      # ict:latest into Docker for the next step.
       - name: Load ICT image into Docker
         run: earthly +ict-image
 

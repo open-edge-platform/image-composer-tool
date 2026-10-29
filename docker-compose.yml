@@ -1,15 +1,21 @@
 # SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-# Run the ICT web UI in a container. The host needs only Docker:
+# Runs the Image Composer Tool (ICT) web UI in a container, so the host needs
+# only Docker. From the root of a checkout:
 #
-#   docker compose up --build      # then open http://127.0.0.1:8080
+#   docker compose up --build    # build the image, start, open http://127.0.0.1:8080
+#   docker compose down          # stop; build history and OS images are kept
+#   docker compose down -v       # stop and delete the build history and OS images
 #
-# SECURITY: the service runs privileged with the host's /dev mounted, because
-# image builds create loop devices, mount filesystems and chroot. A privileged
-# container is root-equivalent on the host, and the web UI has no
-# authentication: anyone who can reach the port can run builds as root on this
-# machine. The port is therefore published on 127.0.0.1 only.
+# The container image is built from build/ict/Dockerfile. Step-by-step guide:
+# docs/user-guide/get-started/web-ui-quick-start.md
+#
+# SECURITY: the container is privileged and has the host's /dev mounted,
+# because building an OS image creates loop devices, mounts filesystems and
+# chroots into them. A privileged container is root-equivalent on the host, and
+# the web UI has no authentication: anyone who can reach its port can run builds
+# as root on this machine. The port is therefore published on 127.0.0.1 only.
 
 services:
   ict:
@@ -17,7 +23,9 @@ services:
       context: .
       dockerfile: build/ict/Dockerfile
       target: ict
-      # Proxy settings are passed through only when set on the host.
+      # A bare name passes the host's value of that variable, when it is set,
+      # so the image build can download through your proxy. Docker does not
+      # store these in the image.
       args:
         - http_proxy
         - https_proxy
@@ -25,16 +33,27 @@ services:
         - HTTP_PROXY
         - HTTPS_PROXY
         - NO_PROXY
+    # `serve` runs the web UI and the API behind it. Inside the container it
+    # must listen on every interface (0.0.0.0) for Docker's port forwarding to
+    # reach it; the ports entry below still limits it to the host's loopback.
     command: image-composer-tool serve --host 0.0.0.0
+    # Needed for loop devices, mounts and chroot; see SECURITY above.
     privileged: true
-    # Reaps helper processes a build leaves orphaned (for example gpg-agent).
+    # Runs a small init as process 1 to reap the helper processes a build
+    # leaves behind (for example gpg-agent), which would otherwise pile up as
+    # zombie processes.
     init: true
-    # On SIGTERM, serve cancels a running build and waits for its teardown
-    # (unmount, loop-device detach). Docker's default 10s would cut that short
-    # and leave mounts and loop devices behind on the host.
+    # On `docker compose down`, serve cancels a running build and waits for it
+    # to unmount its filesystems and detach its loop devices. Docker's default
+    # of 10 seconds would cut that short and leave them behind on the host.
     stop_grace_period: 60s
+    # HOST_ADDRESS:HOST_PORT:CONTAINER_PORT. Keep 127.0.0.1: without it, the UI,
+    # and root on this host with it, is open to the network. To use another
+    # port on the host, change only the middle number.
     ports:
       - "127.0.0.1:8080:8080"
+    # Proxy settings for the server and the builds it starts, passed from the
+    # host when set there.
     environment:
       - http_proxy
       - https_proxy
@@ -43,10 +62,18 @@ services:
       - HTTPS_PROXY
       - NO_PROXY
     volumes:
+      # A privileged container gets a copy of /dev taken when it starts. The
+      # loop devices a build creates later appear only in the host's /dev, so
+      # mount that instead.
       - /dev:/dev
-      # Build history, per-build work directories and artifacts.
+      # Named volumes keep their data when the container is removed, until
+      # `docker compose down -v`.
+      # Every build the UI starts: its history entry, log, work directory,
+      # downloaded packages and finished OS image.
       - webui-workspace:/opt/ict/webui-workspace
-      # Package cache for CLI builds run in the container (cache_dir).
+      # Downloaded packages for `image-composer-tool build` commands run inside
+      # the container with `docker compose exec` (cache_dir in
+      # image-composer-tool.yml). Builds the UI starts keep theirs above.
       - cache:/opt/ict/cache
 
 volumes:

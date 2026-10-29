@@ -20,7 +20,7 @@ command reference, see the
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Running the Web UI](#running-the-web-ui)
-    - [Running the Web UI in a Container](#running-the-web-ui-in-a-container)
+    - [Running the Web UI With Docker Compose](#running-the-web-ui-with-docker-compose)
     - [Building an Image From the CLI in a Container](#building-an-image-from-the-cli-in-a-container)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
@@ -384,72 +384,72 @@ the
 reference. For building the frontend bundle and the hot-reload development loop,
 see [`web/README.md`](../../../web/README.md).
 
-### Running the Web UI in a Container
+### Running the Web UI With Docker Compose
 
-To run the web UI without installing Go, Node.js, the image-build toolchain, or
-sudoers rules, start it with Docker Compose from a checkout. The host needs only
-Docker with the Compose plugin:
+Instead of building the binary and installing sudoers rules, you can run the
+web UI in a container. The host needs only Docker with the Compose plugin: the
+ICT container image, which Docker builds from your checkout, carries the
+binary, the web UI, and every program a build runs. From the root of a
+checkout:
 
 ```bash
-git clone https://github.com/open-edge-platform/image-composer-tool.git
-cd image-composer-tool
 docker compose up --build
 ```
 
-For a step-by-step walkthrough, see the [Web UI Quick Start](./web-ui-quick-start.md).
-
-Open <http://127.0.0.1:8080> once the log shows the server listening. The first
-run builds the ICT image from `build/ict/Dockerfile` (the web UI bundle, the
-`image-composer-tool` and `live-installer` binaries, and the Ubuntu 24.04
-toolchain), which takes several minutes; later runs reuse the cached layers.
-Keep passing `--build` after you pull new commits so the image picks them up.
+Then open <http://127.0.0.1:8080>. The
+[Web UI Quick Start](./web-ui-quick-start.md) walks through this step by step,
+including where to find the OS images you build.
 
 > **Warning: the container is privileged, and therefore root-equivalent on the
-> host.** Image builds create loop devices, mount filesystems, and chroot, so the
-> service runs with `privileged: true` and the host's `/dev` mounted. Every build
-> runs as root with access to all of the host's devices, and the web UI has no
-> authentication of its own: anyone who can reach the port can start one. The
-> port is published on `127.0.0.1` only. Do not change that binding to expose the
-> UI on a network, and run the container only on a machine where you would give
-> the UI's users root.
+> host.** Building an OS image creates loop devices, mounts filesystems, and
+> chroots into them, so the container runs with `privileged: true` and the
+> host's `/dev` mounted. Every build runs as root with access to all of the
+> host's devices, and the web UI has no authentication of its own: anyone who
+> can reach the port can start a build. The port is therefore published on the
+> host's `127.0.0.1` only. Do not change that binding to expose the UI on a
+> network, and run the container only on a machine where you would trust
+> everyone who can reach the UI with root.
 
-Two named volumes keep state across `docker compose down` and
-`docker compose up`:
+What `docker-compose.yml` sets up:
 
-| Volume | Mounted at | Holds |
-|--------|-----------|-------|
-| `webui-workspace` | `/opt/ict/webui-workspace` | Build history, per-build work directories, and artifacts |
-| `cache` | `/opt/ict/cache` | Package cache for CLI builds run inside the container |
+- **The container image.** The first `docker compose up --build` builds the ICT
+  container image from `build/ict/Dockerfile`, which takes several minutes;
+  later runs reuse Docker's cache. Keep passing `--build` after you pull new
+  commits, so the image picks them up.
+- **Two named volumes.** Docker stores them outside your checkout and keeps
+  them across `docker compose down` and `docker compose up`.
+  `docker compose down -v` deletes both, and with them every build's history
+  and images.
 
-To find a build's files on the host or copy them out, see
-[Where Your Files and Image Artifacts Are](./web-ui-quick-start.md#where-your-files-and-image-artifacts-are).
+  | Volume | Mounted at | Holds |
+  |--------|------------|-------|
+  | `webui-workspace` | `/opt/ict/webui-workspace` | Every build the UI starts: its history entry, log, work directory, downloaded packages, and finished OS image |
+  | `cache` | `/opt/ict/cache` | Downloaded packages for `image-composer-tool build` commands you run inside the container with `docker compose exec` |
 
-`docker compose down -v` deletes both volumes, and with them every build's
-history and artifacts.
+- **A clean stop.** `docker compose down`, or Ctrl+C, asks the server to stop.
+  It cancels a running build and waits for the build to unmount its
+  filesystems and detach its loop devices; the compose file allows 60 seconds
+  for that. As with an interrupted build outside a container, a build killed
+  without that cleanup, for example by `docker kill`, can leave mounts and
+  loop devices behind on the host.
+- **Your proxy.** If your shell sets `http_proxy`, `https_proxy`, or
+  `no_proxy` (or their uppercase forms), Compose passes them to the container
+  image build and to the server, which passes them on to every build.
 
-`docker compose down` (or Ctrl+C) stops the server with `SIGTERM`: it cancels a
-running build and waits for the build to unmount its filesystems and detach its
-loop devices, and the compose file allows 60 seconds for that. Like an
-interrupted native build, a build killed without that teardown (for example by
-`docker kill`) can leave mounts and loop devices behind on the host.
-
-If your shell sets `http_proxy`, `https_proxy`, or `no_proxy` (or their
-uppercase forms), Compose passes them to the image build and to the server,
-which forwards them to builds exactly as a native `serve` does.
-
-The same image carries the full CLI. Inside the container everything sits under
-`/opt/ict` in the repository layout, which is also the working directory:
+The container also has the `image-composer-tool` CLI. Its working directory,
+`/opt/ict`, is laid out like a checkout of this repository, so paths such as
+`image-templates/` work as they do in your checkout:
 
 ```bash
 docker compose exec ict image-composer-tool validate image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
 ```
 
-To build the image without Compose, use `earthly +ict-image` (which also stamps
-the version and commit, and accepts `--VERSION=<tag>` and
-`--ICT_IMAGE_NAME=<name>`) or
-`docker build -f build/ict/Dockerfile --target ict -t ict .`.
-`earthly +ict-image-preflight` additionally checks that every tool ICT runs
-resolves inside the image.
+To build the container image without Compose, run
+`docker build -f build/ict/Dockerfile --target ict -t ict .`, or
+`earthly +ict-image`, which also records the version and git commit in it
+(`--VERSION=<tag>` sets the version and the image tag, `--ICT_IMAGE_NAME=<name>`
+the image name). `earthly +ict-image-preflight` also checks that every program
+ICT may run is present in the image.
 
 ### Building an Image From the CLI in a Container
 

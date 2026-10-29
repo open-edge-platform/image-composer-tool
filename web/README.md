@@ -21,9 +21,10 @@ hosts both the static UI and the JSON/SSE API on one port.
 Real image composition needs root (chroot/mount), so the server runs builds
 under `sudo`. Run everything from the **repository root**.
 
-> To run the UI without installing Go, Node.js, the image-build toolchain, or
+> To run the UI without installing Go, Node.js, the programs a build runs, or
 > sudoers rules, run `docker compose up --build` from the repository root
-> instead. The container is privileged; see the
+> instead. The container runs privileged, which makes it root-equivalent on the
+> host; see the
 > [Web UI Quick Start](../docs/user-guide/get-started/web-ui-quick-start.md).
 
 ### 1. Build the binary first
