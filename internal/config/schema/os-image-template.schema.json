@@ -404,7 +404,7 @@
       "type": "object",
       "description": "Compose an OEP Installer (openedge-cli) profile or module into the image: ICT installs its Debian packages at build time and runs openedge-cli install on first boot (ubuntu targets)",
       "properties": {
-        "url": { "type": "string", "pattern": "^https://[^\\s@]+$", "description": "HTTPS URL of the rendered openedge-cli, pinned to a commit or release" },
+        "url": { "type": "string", "pattern": "^https://[^\\s@]+$", "description": "HTTPS URL of the rendered openedge-cli file (not a GitHub web page), pinned to a commit or tag" },
         "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$", "description": "Hex SHA-256 digest of the file at url" },
         "modules": {
           "type": "array",
@@ -417,7 +417,7 @@
         "args": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{1,256}$" },
-          "description": "Extra arguments passed to openedge-cli install (no spaces, quotes, $ or ;)"
+          "description": "Extra arguments passed to openedge-cli list --sbom and install (no spaces, quotes, $ or ;)"
         }
       },
       "required": ["url", "sha256", "modules", "user"],

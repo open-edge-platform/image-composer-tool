@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // OEPInstallerTargetOS lists the target OSes the OEP Installer integration
@@ -23,7 +24,7 @@ type OEPInstallerConfig struct {
 	SHA256  string   `yaml:"sha256,omitempty"`  // hex SHA-256 of the file at URL
 	Modules []string `yaml:"modules,omitempty"` // profiles or modules, as accepted by openedge-cli install
 	User    string   `yaml:"user,omitempty"`    // systemConfig.users entry that runs openedge-cli on first boot
-	Args    []string `yaml:"args,omitempty"`    // extra arguments passed to openedge-cli install
+	Args    []string `yaml:"args,omitempty"`    // extra arguments passed to openedge-cli list --sbom and install
 }
 
 // IsEmpty reports whether the section is absent.
@@ -73,7 +74,24 @@ func validateOEPInstallerURL(raw string) error {
 	if u.User != nil {
 		return fmt.Errorf("systemConfig.oepInstaller.url must not contain credentials")
 	}
+	if raw, ok := githubRawURL(u); ok {
+		return fmt.Errorf("systemConfig.oepInstaller.url %q is a GitHub web page, not the file; use %q", u, raw)
+	}
 	return nil
+}
+
+// githubRawURL returns the raw.githubusercontent.com URL for a github.com
+// blob or tree page URL (https://github.com/<owner>/<repo>/blob/<ref>/<path>),
+// which serves HTML rather than the file.
+func githubRawURL(u *url.URL) (string, bool) {
+	if !strings.EqualFold(u.Host, "github.com") {
+		return "", false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 4)
+	if len(parts) < 4 || (parts[2] != "blob" && parts[2] != "tree") {
+		return "", false
+	}
+	return "https://raw.githubusercontent.com/" + parts[0] + "/" + parts[1] + "/" + parts[3], true
 }
 
 func validateOEPInstallerModules(modules []string) error {
