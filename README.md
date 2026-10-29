@@ -29,6 +29,9 @@ combinations. The table below lists the OS and architecture combinations that ar
 > - **Web UI:** run `docker compose up --build` from a checkout and open
 >   <http://127.0.0.1:8080>. See the
 >   [Web UI Quick Start](./docs/user-guide/get-started/web-ui-quick-start.md).
+> - **CLI:** build the container image, then build your template into a host
+>   directory with `scripts/build-in-container.sh my-template.yml ./out`. See
+>   the [CLI Quick Start (Docker)](./docs/user-guide/get-started/cli-docker-quick-start.md).
 >
 > The container runs privileged, which makes it root-equivalent on the host.
 
