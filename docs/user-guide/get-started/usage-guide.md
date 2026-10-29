@@ -21,6 +21,7 @@ command reference, see the
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Running the Web UI](#running-the-web-ui)
     - [Running the Web UI in a Container](#running-the-web-ui-in-a-container)
+    - [Building an Image From the CLI in a Container](#building-an-image-from-the-cli-in-a-container)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
     - [Minimal Edge Device](#minimal-edge-device)
@@ -449,6 +450,81 @@ the version and commit, and accepts `--VERSION=<tag>` and
 `docker build -f build/ict/Dockerfile --target ict -t ict .`.
 `earthly +ict-image-preflight` additionally checks that every tool ICT runs
 resolves inside the image.
+
+### Building an Image From the CLI in a Container
+
+The ICT image also builds a template you author on the host, from the command
+line and without the web UI. Build the image once, then pass your template and
+an output directory to `scripts/build-in-container.sh`:
+
+```bash
+# Build the ICT image (or use earthly +ict-image). Behind a proxy, add
+# --build-arg http_proxy --build-arg https_proxy --build-arg no_proxy.
+docker build -f build/ict/Dockerfile --target ict -t ict .
+
+# Build your template; the artifacts land in ./out
+scripts/build-in-container.sh my-template.yml ./out
+```
+
+The script starts the container with these mounts:
+
+| Host | Inside the container |
+|------|----------------------|
+| The template's directory, or `--context DIR` (read-only) | `/input` |
+| The output directory, created if missing | `--mount-point DIR` (default `/output`) |
+| Named volume `ict-cache` (`--cache-volume`) | `/opt/ict/cache` |
+| Named volume `ict-workspace` (`--workspace-volume`) | `/opt/ict/workspace` |
+
+Inside the container it runs `/opt/ict/scripts/container-build.sh`, passing the
+template's path and the mount point as arguments. That script runs
+`image-composer-tool build` and then copies only the files this run produced
+into `<mount point>/<system-config-name>/`, owned by you rather than by root.
+For example, `out/minimal/minimal-os-image-ubuntu-24.04.raw.gz`. The build's
+chroot trees stay in the workspace volume. Arguments after `--` go to
+`image-composer-tool build`:
+
+```bash
+scripts/build-in-container.sh \
+  --mount-point /artifacts \
+  --context ~/templates \
+  ~/templates/edge/my-template.yml ./out \
+  -- --log-level debug
+```
+
+Keep in mind:
+
+- **Only the template's directory is mounted.** Relative paths in the template
+  resolve from its directory, exactly as in a native build, but nothing outside
+  the mounted directory is visible. An `extends` parent, additional files, and
+  scripts must therefore sit in that directory or below it. To build a template
+  that references `../` paths, such as many under `image-templates/`, pass a
+  `--context` that contains everything, for example
+  `--context image-templates image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml`.
+- **Repeat builds are faster.** The two named volumes keep the downloaded
+  packages and the chroot environment between runs. Reclaim the space with
+  `docker volume rm ict-cache ict-workspace`.
+- **Ctrl+C stops cleanly.** It stops the build, lets ICT unmount its filesystems
+  and detach its loop devices, and copies nothing.
+- **Pick the image.** The script runs the image named `ict` by default. To use
+  the one `docker compose build` made instead, pass `--image <project>-ict`,
+  for example `--image image-composer-tool-ict`.
+- **The container is privileged.** As with the web UI container, it runs with
+  the host's `/dev` mounted, so it is root-equivalent on the host.
+
+Without the script, the equivalent `docker run` mounts the output directory and
+passes its mount point to `container-build.sh` as `--output`. Create the output
+directory first, so it is not owned by root:
+
+```bash
+mkdir -p out
+docker run --rm --init --privileged -v /dev:/dev \
+  -v "$PWD:/input:ro" -v "$PWD/out:/artifacts" \
+  ict /opt/ict/scripts/container-build.sh \
+    --template /input/my-template.yml --output /artifacts --owner "$(id -u):$(id -g)"
+```
+
+`container-build.sh` refuses an `--output` that is not on a mounted volume,
+because the artifacts would otherwise disappear with the container.
 
 ## Shell Completion
 

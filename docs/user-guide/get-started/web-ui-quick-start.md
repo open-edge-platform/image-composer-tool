@@ -179,5 +179,8 @@ Set both forms if your tools disagree about which one they read.
   building the image with Earthly.
 - [Serve Command](../architecture/image-composer-tool-cli-specification.md#serve-command)
   documents every `serve` flag.
+- [Building an Image From the CLI in a Container](./usage-guide.md#building-an-image-from-the-cli-in-a-container)
+  builds a template you author on the host with the same image, without the
+  web UI, into an output directory you choose.
 - [Quick Start](./quick-start.md) builds an image with the CLI instead of the
   web UI.
