@@ -1328,11 +1328,11 @@ interface is described in the
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `url` | string | Yes | `https://` URL of the rendered `openedge-cli`, pinned to a commit or release |
+| `url` | string | Yes | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
 | `sha256` | string | Yes | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
 | `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install` |
 | `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
-| `args` | string[] | No | Extra arguments passed to `openedge-cli install` (no spaces, quotes, `$` or `;`) |
+| `args` | string[] | No | Extra arguments (for example `--k3s`) passed to both the build-time `openedge-cli list --sbom` query and the first-boot `openedge-cli install`, since some profiles choose modules based on them (no spaces, quotes, `$` or `;`) |
 
 A child template's `oepInstaller` section replaces an inherited one as a
 whole. The section is rejected in overlay mode.
@@ -1342,9 +1342,10 @@ systemConfig:
   users:
     - name: edge
   oepInstaller:
-    url: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/openedge-cli
+    url: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace
     sha256: <sha256 of the file>
     modules:
+      - handheld_blueprint
       - handheld_multi_modal
     user: edge
 ```
