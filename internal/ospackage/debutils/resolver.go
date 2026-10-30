@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -2491,4 +2492,56 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, depName string, can
 
 	// Fallback: return first candidate if no categorization worked
 	return candidates[0], nil
+}
+
+// versionPrefixRequestRe matches a "name_version*" request: the preferred
+// version of name that starts with version, as apt reads "name=version*".
+// Debian package names cannot contain "_", so the request is never a glob over
+// package names.
+var versionPrefixRequestRe = regexp.MustCompile(`^([a-z0-9][a-z0-9+.-]+)_([^*_]+)\*$`)
+
+// splitVersionPrefixRequest returns the package name and version prefix of a
+// "name_version*" request.
+func splitVersionPrefixRequest(want string) (string, string, bool) {
+	m := versionPrefixRequestRe.FindStringSubmatch(want)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// resolveVersionPrefix returns the preferred version of name whose version,
+// without its epoch, starts with prefix: highest priority first, then newest.
+func resolveVersionPrefix(name, prefix string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
+	var candidates []ospackage.PackageInfo
+	for _, pi := range all {
+		if pi.Name == name && strings.HasPrefix(stripEpoch(pi.Version), prefix) {
+			candidates = append(candidates, pi)
+		}
+	}
+	candidates = filterCandidatesByPriorityWithTarget(candidates, name)
+	if len(candidates) == 0 {
+		return ospackage.PackageInfo{}, false
+	}
+	return candidates[0], true
+}
+
+// PinVersionPrefixRequests replaces each "name_version*" entry of pkgs with
+// the exact "name_version" resolved for it, so the install step (and an
+// installer ISO, which installs from the saved template) installs that version
+// instead of matching the prefix again. Other entries are returned unchanged.
+func PinVersionPrefixRequests(pkgs []string, resolved []ospackage.PackageInfo) []string {
+	out := make([]string, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		name, prefix, ok := splitVersionPrefixRequest(pkg)
+		if !ok {
+			out = append(out, pkg)
+			continue
+		}
+		if pi, found := resolveVersionPrefix(name, prefix, resolved); found {
+			pkg = pi.Name + "_" + pi.Version
+		}
+		out = append(out, pkg)
+	}
+	return out
 }

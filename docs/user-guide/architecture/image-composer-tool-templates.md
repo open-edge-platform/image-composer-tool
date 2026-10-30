@@ -1315,9 +1315,10 @@ Check the result on a deployed system with `apt-cache policy <package>` and
 
 #### `systemConfig.oepInstaller`
 
-> **Under development.** The section is parsed and validated, but builds that
-> set it fail with "systemConfig.oepInstaller is not supported yet" until the
-> integration is complete.
+> **Under development.** ICT imports and checks the published output and
+> resolves its packages, but builds that set the section then stop with
+> "running openedge-cli on first boot is not supported yet" until the
+> first-boot installation is implemented.
 
 Composes OEP Installer (`openedge-cli`) profiles or modules into the image
 (`ubuntu` targets). The OEP Installer publishes, next to the CLI, the
@@ -1337,6 +1338,34 @@ described in the
 | `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install`. Must equal the `module-list` of the `sbomUrl` output |
 | `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
 | `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must equal the arguments in the `install-cmdline` of the `sbomUrl` output, since some profiles choose modules based on them; the build fails otherwise (no spaces, quotes, `$` or `;`) |
+
+At build time ICT downloads the file at `sbomUrl`, checks it against
+`sbomSha256`, and then:
+
+- Adds the packages it lists to `systemConfig.packages`. Versions written as
+  `name=version` or `name=version*` (the newest version starting with
+  `version`) are installed at exactly the version selected. Artifacts listed
+  by URL are left to `openedge-cli` on first boot.
+- Adds the apt repositories it lists, writing their sources list, keyring, and
+  preferences files at the paths `openedge-cli` uses. A `packageRepositories`
+  entry with the same URL and suite is replaced by the one from the file.
+- Fails the build when the file's `module-list` differs from `modules`, a
+  listed package conflicts with the template's version of it, a package the
+  file requires not to be installed is in `systemConfig.packages`, or a
+  kernel parameter it lists is missing from `systemConfig.kernel.cmdline`.
+- Fails the build when a kernel package it lists does not match the
+  template's kernel: a kernel image must be one of the template's kernel
+  packages, a meta-package such as `linux-image-generic-7.0` must name the
+  template kernel's series, and headers, modules, or tools must be for the
+  template kernel's release.
+
+To download from a private GitHub repository, set `ICT_OEP_INSTALLER_TOKEN`
+to a GitHub token with read access, for example the one the GitHub CLI stores
+(`gh config get -h github.com oauth_token`, or `gh auth token` on newer
+versions). ICT sends the token only to GitHub hosts. Behind a proxy that
+inspects TLS traffic, the build host must trust the proxy's root certificate
+(for example in `/usr/local/share/ca-certificates/`, followed by
+`update-ca-certificates`), or the download fails with a certificate error.
 
 A child template's `oepInstaller` section replaces an inherited one as a
 whole. The section is rejected in overlay mode.
