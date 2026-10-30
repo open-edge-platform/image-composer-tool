@@ -23,7 +23,7 @@ type document struct {
 	CLIVersion        string   `yaml:"cli-version"`
 	CLIURL            string   `yaml:"cli-url"`
 	ModuleList        []string `yaml:"module-list"`
-	Arguments         []string `yaml:"arguments"`
+	InstallCmdline    []string `yaml:"install-cmdline"`
 	PkgList           []string `yaml:"pkg-list"`
 	KernelCmdline     []string `yaml:"kernel-cmdline"`
 	RepoName          string   `yaml:"repo-name"`
@@ -40,8 +40,8 @@ type document struct {
 // Parse validates `openedge-cli list --sbom` output produced for modules and
 // args and returns its contents. Every document must match the embedded
 // schema, the first document must be the only header, the header's
-// module-list must equal modules, and its arguments, when present, must equal
-// args.
+// module-list must equal modules, and the arguments of its install-cmdline,
+// when present, must equal args.
 func Parse(data []byte, modules, args []string) (*Output, error) {
 	docs, err := decodeDocuments(data)
 	if err != nil {
@@ -50,23 +50,48 @@ func Parse(data []byte, modules, args []string) (*Output, error) {
 	if len(docs) == 0 || docs[0].SchemaVersion == "" {
 		return nil, fmt.Errorf("openedge-cli output: the first document must be the header")
 	}
-	header := docs[0]
-	if !slices.Equal(header.ModuleList, modules) {
-		return nil, fmt.Errorf("openedge-cli output: module-list %v does not match the requested modules %v",
-			header.ModuleList, modules)
+	out, err := newOutput(docs[0], modules, args)
+	if err != nil {
+		return nil, err
 	}
-	if header.Arguments != nil && !slices.Equal(header.Arguments, args) {
-		return nil, fmt.Errorf("openedge-cli output: arguments %v do not match the requested arguments %v",
-			header.Arguments, args)
-	}
-	out := &Output{CLIVersion: header.CLIVersion, CLIURL: header.CLIURL, Modules: header.ModuleList,
-		Arguments: header.Arguments}
 	for i, doc := range docs[1:] {
 		if err := out.add(doc); err != nil {
 			return nil, fmt.Errorf("openedge-cli output document %d: %w", i+1, err)
 		}
 	}
 	return out, nil
+}
+
+// newOutput checks the header against the requested modules and arguments.
+func newOutput(header document, modules, args []string) (*Output, error) {
+	if !slices.Equal(header.ModuleList, modules) {
+		return nil, fmt.Errorf("openedge-cli output: module-list %v does not match the requested modules %v",
+			header.ModuleList, modules)
+	}
+	installArgs, err := installArguments(header.InstallCmdline, header.ModuleList)
+	if err != nil {
+		return nil, err
+	}
+	if installArgs != nil && !slices.Equal(installArgs, args) {
+		return nil, fmt.Errorf("openedge-cli output: install-cmdline arguments %v do not match the requested "+
+			"arguments %v", installArgs, args)
+	}
+	return &Output{CLIVersion: header.CLIVersion, CLIURL: header.CLIURL, Modules: header.ModuleList,
+		InstallCmdline: header.InstallCmdline, Arguments: installArgs}, nil
+}
+
+// installArguments returns the arguments of an install-cmdline of the form
+// [<cli>, "install", <modules>..., <arguments>...], or nil when it is absent.
+func installArguments(cmdline, modules []string) ([]string, error) {
+	if cmdline == nil {
+		return nil, nil
+	}
+	n := len(modules)
+	if len(cmdline) < 2+n || cmdline[1] != "install" || !slices.Equal(cmdline[2:2+n], modules) {
+		return nil, fmt.Errorf("openedge-cli output: install-cmdline %q must be the CLI, \"install\", "+
+			"the module-list %v, then any arguments", cmdline, modules)
+	}
+	return append([]string{}, cmdline[2+n:]...), nil
 }
 
 // decodeDocuments splits the YAML stream, skips empty documents, and

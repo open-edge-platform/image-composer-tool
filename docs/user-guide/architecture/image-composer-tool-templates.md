@@ -1337,7 +1337,7 @@ described in the
 | `sbomSha256` | string | Yes | Hex SHA-256 digest of the file at `sbomUrl` |
 | `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install`. Must equal the `module-list` of the `sbomUrl` output |
 | `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
-| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must be the arguments the `sbomUrl` output was generated with, since some profiles choose modules based on them (no spaces, quotes, `$` or `;`) |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must equal the arguments in the `install-cmdline` of the `sbomUrl` output, since some profiles choose modules based on them; the build fails otherwise (no spaces, quotes, `$` or `;`) |
 
 At build time ICT downloads the file at `sbomUrl`, checks it against
 `sbomSha256`, and then:
