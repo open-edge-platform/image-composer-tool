@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -44,30 +45,21 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 
 	// Generate apt sources content
 	sourceContent := generateAptSourcesContent(normalizedRepos)
-	if sourceContent == "" {
+	hasOwnFiles := slices.ContainsFunc(normalizedRepos, PackageRepository.hasOwnFiles)
+	if sourceContent == "" && !hasOwnFiles {
 		log.Debug("No valid repositories to generate apt sources")
 		return nil
 	}
 
-	// Create temporary apt sources file
-	tempFile, err := createTempAptSourcesFile(sourceContent)
-	if err != nil {
-		return fmt.Errorf("failed to create temporary apt sources file: %w", err)
+	if sourceContent != "" {
+		if err := t.addAptSourcesFile(sourceContent); err != nil {
+			return err
+		}
 	}
 
-	// Add to additionalFiles so it gets copied to the image
-	aptSourcesFile := AdditionalFileInfo{
-		Local: tempFile,
-		Final: "/etc/apt/sources.list.d/package-repositories.list",
-	}
-
-	// Add to existing additionalFiles (avoiding duplicates by final path)
-	if err := t.addGeneratedAdditionalFile(aptSourcesFile); err != nil {
+	if err := t.addOwnSourcesListFiles(normalizedRepos); err != nil {
 		return err
 	}
-
-	log.Infof("Added apt sources file to additionalFiles: %s -> %s",
-		aptSourcesFile.Local, aptSourcesFile.Final)
 
 	// Download and add GPG keys to the image
 	if err := t.downloadAndAddGPGKeys(normalizedRepos); err != nil {
@@ -79,6 +71,43 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 		return fmt.Errorf("failed to generate apt preferences from repositories: %w", err)
 	}
 
+	return nil
+}
+
+// addAptSourcesFile adds the shared sources list of the template's
+// repositories to additionalFiles.
+func (t *ImageTemplate) addAptSourcesFile(content string) error {
+	tempFile, err := createTempAptSourcesFile(content)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary apt sources file: %w", err)
+	}
+	aptSourcesFile := AdditionalFileInfo{
+		Local: tempFile,
+		Final: "/etc/apt/sources.list.d/package-repositories.list",
+	}
+	if err := t.addGeneratedAdditionalFile(aptSourcesFile); err != nil {
+		return err
+	}
+	logger.Logger().Infof("Added apt sources file to additionalFiles: %s -> %s",
+		aptSourcesFile.Local, aptSourcesFile.Final)
+	return nil
+}
+
+// addOwnSourcesListFiles adds the sources list of each repository that names
+// its own list file.
+func (t *ImageTemplate) addOwnSourcesListFiles(repos []PackageRepository) error {
+	for _, repo := range repos {
+		if !repo.hasOwnFiles() {
+			continue
+		}
+		tempFile, err := createTempAptSourcesFile(strings.Join(repo.SourceLines, "\n") + "\n")
+		if err != nil {
+			return fmt.Errorf("failed to create sources list for %s: %w", getRepositoryName(repo), err)
+		}
+		if err := t.addGeneratedAdditionalFile(AdditionalFileInfo{Local: tempFile, Final: repo.ListFile}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -130,8 +159,8 @@ func generateAptSourcesContent(repos []PackageRepository) string {
 	var sources []string
 
 	for _, repo := range repos {
-		// Skip if essential fields are missing
-		if repo.URL == "" || repo.Codename == "" {
+		// Skip if essential fields are missing, or the repository has its own list file
+		if repo.URL == "" || repo.Codename == "" || repo.hasOwnFiles() {
 			continue
 		}
 
@@ -312,6 +341,12 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 	log.Infof("Generating apt preferences files for %d repositories", len(t.PackageRepositories))
 
 	for _, repo := range t.PackageRepositories {
+		if repo.hasOwnFiles() {
+			if err := t.addOwnPreferencesFile(repo); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Extract origin from URL
 		origin := extractOriginFromURL(repo.URL)
@@ -462,6 +497,19 @@ func sanitizeFilename(name string) string {
 	return name
 }
 
+// addOwnPreferencesFile adds the preferences of a repository that names its
+// own files, when it has any, instead of ICT's generated pin.
+func (t *ImageTemplate) addOwnPreferencesFile(repo PackageRepository) error {
+	if repo.Preferences == "" {
+		return nil
+	}
+	tempFile, err := createTempAptPreferencesFile(repo, repo.Preferences)
+	if err != nil {
+		return fmt.Errorf("failed to create apt preferences file for %s: %w", getRepositoryName(repo), err)
+	}
+	return t.addGeneratedAdditionalFile(AdditionalFileInfo{Local: tempFile, Final: repo.PreferencesFile})
+}
+
 // createTempAptPreferencesFile creates a temporary file with the preferences content
 func createTempAptPreferencesFile(repo PackageRepository, content string) (string, error) {
 	// Ensure temp directory exists
@@ -554,6 +602,9 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 
 		// Determine the final destination path in the image
 		keyFilename := extractGPGKeyFilename(repo.PKey)
+		if repo.KeyFile != "" {
+			keyFilename = repo.KeyFile
+		}
 
 		// Add to additionalFiles
 		gpgKeyFile := AdditionalFileInfo{
