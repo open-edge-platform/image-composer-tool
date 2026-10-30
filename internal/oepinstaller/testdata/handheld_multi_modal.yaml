@@ -1,5 +1,6 @@
 "schema-version": "1"
 "cli-version": "main"
+"cli-url": "https://github.com/example/oep-installer-cli/blob/main/rendered/openedge-cli"
 "module-list": ["handheld_multi_modal"]
 ---
 "pkg-list": ["curl","ca-certificates"]
