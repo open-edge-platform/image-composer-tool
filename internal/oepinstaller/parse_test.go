@@ -258,3 +258,28 @@ func TestPackageKernelRole(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePins(t *testing.T) {
+	t.Parallel()
+	pins, err := parsePins([]string{"Package: *", "Pin: origin \"edge.example.com\"", "Pin-Priority: 1001",
+		"Package: intel-oneapi-runtime-* intel-oneapi-mkl-*", "Explanation: series", "Pin: version 2025.3*",
+		"Pin-Priority: 1002"})
+	if err != nil {
+		t.Fatalf("parsePins: %v", err)
+	}
+	if len(pins) != 2 || pins[0].Origin != "edge.example.com" || pins[0].Priority != 1001 ||
+		len(pins[1].Packages) != 2 || pins[1].Version != "2025.3*" || pins[1].Priority != 1002 {
+		t.Errorf("pins = %+v", pins)
+	}
+	for _, bad := range [][]string{
+		{"Package: *", "Pin: release a=noble", "Pin-Priority: 500"},
+		{"Package: *", "Pin: origin edge.example.com", "Pin-Priority: high"},
+		{"Pin: origin edge.example.com"},
+		{"Package: *", "Pin-Priority: 500"},
+		{"Package: *", "Pin: origin h", "Pin-Priority: 1", "Section: main"},
+	} {
+		if _, err := parsePins(bad); err == nil {
+			t.Errorf("parsePins(%q) accepted", bad)
+		}
+	}
+}
