@@ -97,14 +97,33 @@ func Load(o config.OEPInstallerConfig) (*Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", o.SBOMURL, err)
 	}
-	log := logger.Logger()
-	log.Infof("OEP Installer: imported %s (cli-version %s, %d packages, %d repositories)",
-		o.SBOMURL, out.CLIVersion, len(out.Packages), len(out.Repositories))
-	if out.CLIURL != "" && cliFile(out.CLIURL) != cliFile(o.URL) {
-		log.Warnf("OEP Installer: %s was generated with %s, but systemConfig.oepInstaller.url is %s",
-			o.SBOMURL, out.CLIURL, o.URL)
+	if err := checkCLI(out.CLIURL, o.URL); err != nil {
+		return nil, fmt.Errorf("%s: %w", o.SBOMURL, err)
 	}
+	logger.Logger().Infof("OEP Installer: imported %s (cli-version %s, %d packages, %d repositories)",
+		o.SBOMURL, out.CLIVersion, len(out.Packages), len(out.Repositories))
 	return out, nil
+}
+
+// checkCLI compares the CLI that generated the output (cli-url) with the CLI
+// the template installs on first boot (url). A cli-url that is a raw URL, and
+// so pinned to a commit, must equal url. A web-page cli-url on a branch can
+// only be compared by repository and path.
+func checkCLI(cliURL, templateURL string) error {
+	if cliURL == "" || cliURL == templateURL {
+		return nil
+	}
+	if cliFile(cliURL) != cliFile(templateURL) {
+		return fmt.Errorf("the output was generated with %s, a different CLI than systemConfig.oepInstaller.url %s",
+			cliURL, templateURL)
+	}
+	if u, err := url.Parse(cliURL); err == nil && strings.EqualFold(u.Host, "raw.githubusercontent.com") {
+		return fmt.Errorf("the output was generated with %s, a different version of the CLI than "+
+			"systemConfig.oepInstaller.url %s", cliURL, templateURL)
+	}
+	logger.Logger().Warnf("OEP Installer: the output was generated with %s; check that systemConfig.oepInstaller.url "+
+		"%s is the same version", cliURL, templateURL)
+	return nil
 }
 
 // cliFile identifies a CLI file on GitHub by repository and path, ignoring
