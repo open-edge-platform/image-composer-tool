@@ -698,6 +698,14 @@ The server binds to localhost by default. The API can start privileged builds,
 so treat exposing it on a routable address as a deliberate decision rather than
 a convenience — it has no authentication of its own.
 
+The repository's `docker-compose.yml` runs `image-composer-tool serve --host
+0.0.0.0` in a privileged container built from `build/ict/Dockerfile`. Inside
+the container, listening on every interface is what lets Docker's port
+forwarding reach the server; the compose file publishes the port on the host's
+`127.0.0.1` only, so the UI stays reachable from the host alone. Builds run as
+the container's root user, so `--sudo` is not used. See
+[Running the Web UI With Docker Compose](../get-started/usage-guide.md#running-the-web-ui-with-docker-compose).
+
 #### Serving privileged builds
 
 Builds need root for chroot and mount operations. Either run the server as root

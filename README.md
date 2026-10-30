@@ -24,6 +24,14 @@ combinations. The table below lists the OS and architecture combinations that ar
 
 ## Quick Start
 
+> **Only have Docker?** Run ICT in a container instead of building it:
+>
+> - **Web UI:** run `docker compose up --build` from a checkout and open
+>   <http://127.0.0.1:8080>. See the
+>   [Web UI Quick Start](./docs/user-guide/get-started/web-ui-quick-start.md).
+>
+> The container runs privileged, which makes it root-equivalent on the host.
+
 ### 1. Build the Tool
 
 Requires Go 1.24+.

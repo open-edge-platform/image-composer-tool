@@ -20,6 +20,7 @@ command reference, see the
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Running the Web UI](#running-the-web-ui)
+    - [Running the Web UI With Docker Compose](#running-the-web-ui-with-docker-compose)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
     - [Minimal Edge Device](#minimal-edge-device)
@@ -381,6 +382,73 @@ the
 [Serve Command](../architecture/image-composer-tool-cli-specification.md#serve-command)
 reference. For building the frontend bundle and the hot-reload development loop,
 see [`web/README.md`](../../../web/README.md).
+
+### Running the Web UI With Docker Compose
+
+Instead of building the binary and installing sudoers rules, you can run the
+web UI in a container. The host needs only Docker with the Compose plugin: the
+ICT container image, which Docker builds from your checkout, carries the
+binary, the web UI, and every program a build runs. From the root of a
+checkout:
+
+```bash
+docker compose up --build
+```
+
+Then open <http://127.0.0.1:8080>. The
+[Web UI Quick Start](./web-ui-quick-start.md) walks through this step by step,
+including where to find the OS images you build.
+
+> **Warning: the container is privileged, and therefore root-equivalent on the
+> host.** Building an OS image creates loop devices, mounts filesystems, and
+> chroots into them, so the container runs with `privileged: true` and the
+> host's `/dev` mounted. Every build runs as root with access to all of the
+> host's devices, and the web UI has no authentication of its own: anyone who
+> can reach the port can start a build. The port is therefore published on the
+> host's `127.0.0.1` only. Do not change that binding to expose the UI on a
+> network, and run the container only on a machine where you would trust
+> everyone who can reach the UI with root.
+
+What `docker-compose.yml` sets up:
+
+- **The container image.** The first `docker compose up --build` builds the ICT
+  container image from `build/ict/Dockerfile`, which takes several minutes;
+  later runs reuse Docker's cache. Keep passing `--build` after you pull new
+  commits, so the image picks them up.
+- **Two named volumes.** Docker stores them outside your checkout and keeps
+  them across `docker compose down` and `docker compose up`.
+  `docker compose down -v` deletes both, and with them every build's history
+  and images.
+
+  | Volume | Mounted at | Holds |
+  |--------|------------|-------|
+  | `webui-workspace` | `/opt/ict/webui-workspace` | Every build the UI starts: its history entry, log, work directory, downloaded packages, and finished OS image |
+  | `cache` | `/opt/ict/cache` | Downloaded packages for `image-composer-tool build` commands you run inside the container with `docker compose exec` |
+
+- **A clean stop.** `docker compose down`, or Ctrl+C, asks the server to stop.
+  It cancels a running build and waits for the build to unmount its
+  filesystems and detach its loop devices; the compose file allows 60 seconds
+  for that. As with an interrupted build outside a container, a build killed
+  without that cleanup, for example by `docker kill`, can leave mounts and
+  loop devices behind on the host.
+- **Your proxy.** If your shell sets `http_proxy`, `https_proxy`, or
+  `no_proxy` (or their uppercase forms), Compose passes them to the container
+  image build and to the server, which passes them on to every build.
+
+The container also has the `image-composer-tool` CLI. Its working directory,
+`/opt/ict`, is laid out like a checkout of this repository, so paths such as
+`image-templates/` work as they do in your checkout:
+
+```bash
+docker compose exec ict image-composer-tool validate image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
+```
+
+To build the container image without Compose, run
+`docker build -f build/ict/Dockerfile --target ict -t ict .`, or
+`earthly +ict-image`, which also records the version and git commit in it
+(`--VERSION=<tag>` sets the version and the image tag, `--ICT_IMAGE_NAME=<name>`
+the image name). `earthly +ict-image-preflight` also checks that every program
+ICT may run is present in the image.
 
 ## Shell Completion
 
