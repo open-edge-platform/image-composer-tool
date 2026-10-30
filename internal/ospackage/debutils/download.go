@@ -1203,6 +1203,21 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	selectedKernelPackages = nil
 
 	for _, want := range requests {
+		if name, prefix, ok := splitVersionPrefixRequest(want); ok {
+			pkg, found := resolveVersionPrefix(name, prefix, all)
+			if !found {
+				requestedPkgs = append(requestedPkgs, want)
+				log.Warnf("requested package '%q' not found in repo", want)
+				gotMissingPkg = true
+				continue
+			}
+			key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
+			if _, dup := seen[key]; !dup {
+				seen[key] = struct{}{}
+				out = append(out, pkg)
+			}
+			continue
+		}
 		if isGlobPattern(want) {
 			pkgs, found := ResolveWildcardPackageConflicts(want, all)
 			if !found {

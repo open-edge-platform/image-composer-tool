@@ -2582,16 +2582,31 @@ func TestUbuntuOverlayCapable(t *testing.T) {
 	}
 }
 
-// TestUbuntuPreProcessRejectsOEPInstaller checks that a template with
-// systemConfig.oepInstaller fails until the integration is implemented,
-// rather than building an image without the requested modules.
-func TestUbuntuPreProcessRejectsOEPInstaller(t *testing.T) {
+// TestUbuntuPreProcessOEPInstallerDownloadError checks that PreProcess stops,
+// naming the section, when the OEP Installer's published output cannot be
+// downloaded, before generating repository files or resolving packages.
+func TestUbuntuPreProcessOEPInstallerDownloadError(t *testing.T) {
 	ubuntu := &ubuntu{chrootEnv: &mockChrootEnv{}}
 	template := createTestImageTemplate()
-	template.SystemConfig.OEPInstaller = config.OEPInstallerConfig{Modules: []string{"handheld_multi_modal"}}
+	template.SystemConfig.OEPInstaller = config.OEPInstallerConfig{
+		SBOMURL:    "https://127.0.0.1:1/sbom-handheld-blueprint-ubuntu-24.04.5.yaml",
+		SBOMSHA256: strings.Repeat("0", 64),
+		Modules:    []string{"handheld_blueprint"},
+	}
 
 	err := ubuntu.PreProcess(template)
-	if err == nil || !strings.Contains(err.Error(), "systemConfig.oepInstaller is not supported yet") {
-		t.Fatalf("PreProcess err = %v, want the not-supported error", err)
+	if err == nil || !strings.Contains(err.Error(), "systemConfig.oepInstaller: downloading") {
+		t.Fatalf("PreProcess err = %v, want the download error", err)
+	}
+	if len(template.SystemConfig.AdditionalFiles) != 0 {
+		t.Errorf("repository files were generated before the error: %+v", template.SystemConfig.AdditionalFiles)
+	}
+}
+
+func TestApplyOEPInstallerAbsentSection(t *testing.T) {
+	template := createTestImageTemplate()
+	out, err := applyOEPInstaller(template)
+	if out != nil || err != nil {
+		t.Fatalf("applyOEPInstaller = %v, %v; want nil, nil", out, err)
 	}
 }
