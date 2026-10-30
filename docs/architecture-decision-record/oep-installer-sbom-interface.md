@@ -2,6 +2,7 @@
 
 - **Status:** Draft (for agreement between the OEP Installer and ICT teams)
 - **Date:** 2026-10-27
+- **Updated:** 2026-10-30 (OEP Installer publishes the output; ICT imports it)
 - **Schema version:** `1`
 - **Implements:** [ADR: Integrate OEP Installer Profiles Through a Solution-Owned DEB Dependency Interface](./adr-oep-installer-intent-manifest.md)
 
@@ -10,8 +11,9 @@
 This document defines the contract between `openedge-cli` (OEP Installer) and
 the Image Composition Tool (ICT):
 
-- **Part A (compose time):** the command ICT runs to get a profile's
-  repository-installable Debian packages, and the format of its output
+- **Part A (build time):** the output files the OEP Installer publishes with
+  the CLI for each supported configuration, their format, and how ICT
+  imports them
 - **Part B (first boot):** how ICT invokes `openedge-cli` on the deployed
   system to finish the profile installation
 
@@ -20,109 +22,87 @@ repository-installable packages before first boot. `openedge-cli` installs
 everything else on first boot.
 
 The contract builds on the existing `openedge-cli list --sbom` output. The
-following changes were requested from `openedge-cli`. Items 1 to 5 are
-implemented on its `main` branch:
+following changes were requested from `openedge-cli`:
 
-1. Accept `--os-release <file>` so the output describes the target image,
-   not the build host (A.1).
-2. Exit non-zero, with a message on stderr, if any requested profile is
-   unknown (A.3).
-3. Print a header document with `schema-version`, `cli-version`, and
-   `module-list` first (A.5).
-4. Validate the `list --sbom` output of every profile against the JSON Schema
+1. Exit non-zero, with a message on stderr, if any requested profile is
+   unknown (A.3). Implemented.
+2. Print a header document with `schema-version`, `cli-version`,
+   `module-list`, and `cli-url` first (A.5). Implemented.
+3. Validate the `list --sbom` output of every profile against the JSON Schema
    in the appendix, ideally in CI, so problems are caught before ICT sees
-   them. For example, the current `docker_ce` handler prints its repository
-   line under key names the output helper rejects, and the schema rejects
-   the resulting block.
-5. In the kernel handlers (`linux_image_6.18_intel`,
+   them. Implemented.
+4. In the kernel handlers (`linux_image_6.18_intel`,
    `linux_image_generic_7.0`), also print the kernel parameters they set, as
-   `kernel-cmdline` (A.6).
-6. Accept `--kernel-release <release>` so that nothing in the output depends
-   on the kernel the build host is running (A.1). Not yet implemented.
+   `kernel-cmdline` (A.6). Implemented.
+5. Publish one output file per supported configuration, generated on a
+   reference host that runs the target OS and kernel, next to the CLI (A.1).
+   In progress: the Handheld blueprint file is published.
+6. Record the arguments the output was generated with in the header, as
+   `arguments` (A.5). Requested.
 
 The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 
 ---
 
-## Part A: Compose-time query
+## Part A: Build-time package requirements
 
-### A.1 Command
+### A.1 Published output files
 
-```text
-openedge-cli list --sbom --os-release <file> --kernel-release <release> \
-    <module> [<module>...] [<argument>...]
-```
+The output of `openedge-cli list --sbom` depends on the host it runs on: its
+OS release, its running kernel (`uname -r`, `/boot/config-*`,
+`/proc/cmdline`), and the packages the CLI selects for them. For example,
+`kernel_module_essential` lists `linux-headers-$(uname -r)` and the `gcc-N`
+the running kernel was built with. ICT builds images on any Ubuntu 24.04 host
+and in containers, which share the host's kernel, so it does not run the
+query itself. The OEP Installer team runs it on a reference host and
+publishes the output:
 
-| Input | Meaning |
-| --- | --- |
-| `<module>...` | One or more profile or module names, as accepted by `openedge-cli install`. An unknown name fails with exit code `3`. |
-| `--os-release <file>` | An `os-release(5)` file describing the **target image**. The CLI MUST read it instead of the host's `/etc/os-release`. |
-| `--kernel-release <release>` | The kernel release of the **target image**, as `uname -r` reports it on the deployed system (for example `7.0.0-14-generic`). The CLI MUST use it instead of the build host's running kernel. |
-| `<argument>...` | Optional arguments from the image template (for example `--k3s`). Some profiles choose different modules depending on them, so ICT passes the same arguments here as to `install` on first boot (Part B). |
+- **One file per configuration.** A configuration is a set of modules and
+  arguments for one target OS release, for example
+  `openedge-cli-federal-aerospace list --sbom handheld_blueprint --edgepack`
+  for Ubuntu 24.04.
+- **Generated on a reference host** that runs the target OS release and the
+  target kernel.
+- **Published next to the CLI** that generated it, in the `rendered/`
+  directory of the `intel-sandbox/oep-installer-cli` repository, named
+  `sbom-<blueprint>-<os>-<version>.yaml`, for example
+  `sbom-handheld-blueprint-ubuntu-24.04.5.yaml`.
+- **Regenerated** whenever the CLI, the modules or arguments, or the
+  reference host's kernel change.
 
-ICT runs the query with `HOME` set to a temporary directory, so it never
-reads or changes state in the build user's home.
+The first published files cover the three Federal and Aerospace blueprints,
+Handheld, Uncrewed Aerial Vehicle (UAV), and Mission Decision Support,
+generated on a host running the Journey 1 kernel.
 
-ICT builds images on any Ubuntu 24.04 host, and in containers, which share the
-host's kernel. The build host's kernel is therefore unrelated to the image's
-kernel. Today several modules read it: `kernel_module_essential` prints
-`linux-headers-$(uname -r)` and chooses `gcc-N` from
-`/boot/config-$(uname -r)`, and `linux_tools` prints
-`linux-tools-$(uname -r)`. In `list --sbom`, these values MUST come from
-`--kernel-release` instead, including the compiler version, which must be the
-one the target kernel needs rather than the one the build host's kernel was
-built with.
-
-ICT runs the query on the build host, which is often a different Ubuntu
-release, or a different distribution, than the image it builds. Today the CLI
-reads the host's `/etc/os-release`, so repository suites and `.deb` URLs come
-out for the build host instead of the target. For example, an Ubuntu 22.04
-build host gets `jammy` repositories for a `noble` image.
-
-ICT generates the file from the template's target in a temporary directory.
-It is not copied into the image. The file sets every field the CLI reads,
-because the CLI falls back to the host's value for a field the file omits:
-`NAME`, `PRETTY_NAME`, `VERSION`, `ID`, `ID_LIKE`, `VERSION_ID`,
-`VERSION_CODENAME`, and `UBUNTU_CODENAME`. The CLI MUST NOT rely on any other
-host OS fields. For an Ubuntu 24.04 target:
-
-```ini
-NAME="Ubuntu"
-PRETTY_NAME="Ubuntu 24.04 LTS"
-VERSION="24.04 LTS (Noble Numbat)"
-ID=ubuntu
-ID_LIKE=debian
-VERSION_ID="24.04"
-VERSION_CODENAME=noble
-UBUNTU_CODENAME=noble
-```
+A file pins the reference host's kernel release, for example
+`linux-headers-7.0.0-38-generic`, so an image template that uses it must
+install that exact kernel (A.6). When Ubuntu publishes a newer kernel and its
+archive stops listing the pinned release's packages, builds fail until the
+file is republished for the new kernel.
 
 Version 1 covers `amd64` targets only.
 
-### A.2 Behavioral requirements
+### A.2 Generation requirements
 
-The query MUST:
+Generating an output file MUST:
 
 1. **Have no side effects.** It must not use `sudo`, install packages, or
    change apt configuration.
-2. **Be reproducible.** The same CLI version, profile, `--os-release`
-   contents, and `--kernel-release` produce the same output. Values must not
-   come from online "latest release" lookups, or from the build host's
-   running kernel or its files under `/boot`, `/proc`, or `/lib/modules`.
-3. **Use the same definitions as `install`.** The packages and repositories
-   reported for a profile must be the ones `install` would set up for it.
-4. **Keep stdout clean.** Only the YAML stream (A.4) goes to stdout.
+2. **Use the same definitions as `install`.** The packages and repositories
+   reported for a configuration must be the ones `install` would set up for
+   it on the reference host.
+3. **Be reproducible.** Regenerating with the same CLI on the same reference
+   host gives the same output. Values must not come from online "latest
+   release" lookups.
+4. **Keep the file clean.** Only the YAML stream (A.4) goes into the file.
    Diagnostics go to stderr.
 
 ### A.3 Exit status
 
-| Exit | Meaning | ICT behavior |
-| --- | --- | --- |
-| `0` | Success | Use the output. A header with no component documents is valid: the profile needs no DEBs. |
-| non-zero | Unknown profile, unsupported target, or internal error | Fail the build and show stderr. |
-
-Today an unknown profile produces empty output and exit `0`. ICT cannot tell
-that apart from a valid profile with no package requirements.
+The CLI exits `0` on success and non-zero, with a message on stderr, for an
+unknown profile or module, an unsupported target, or an internal error. A
+file MUST NOT be published from a failed run. A header with no component
+documents is valid: the configuration needs no DEBs.
 
 ### A.4 Output format
 
@@ -146,6 +126,8 @@ documents are allowed and ignored.
 | `schema-version` | string | yes | `"1"` for this specification. ICT rejects versions it does not support. |
 | `cli-version` | string | yes | The `openedge-cli` version: the release version (for example `"v2026.3.0"`), which changes with each release, or `"main"` for builds before the first release. ICT records it; reproducibility comes from the commit and SHA-256 ICT pins (A.8). |
 | `module-list` | array of string | yes | The profiles or modules the output was produced for, in the order requested. |
+| `cli-url` | string | no | Web URL of the CLI file that generated the output (for example `https://github.com/intel-sandbox/oep-installer-cli/blob/main/rendered/openedge-cli-federal-aerospace`). ICT warns when its repository and file name differ from the template's CLI `url`. |
+| `arguments` | array of string | requested | The arguments the output was generated with (for example `["--edgepack"]`). When present, ICT checks that they equal the template's `args`, which first boot passes to `install`. |
 
 ### A.6 Component documents
 
@@ -211,6 +193,11 @@ key decides which packages apt trusts from that repository. For an `http://`
 key, `gpg-key-fingerprint` SHOULD be provided. ICT verifies the key against
 it when present and logs a warning when it is absent.
 
+The same repository group may appear in several documents, for example once
+per EdgePack module. ICT merges groups that are identical. Two groups that
+name the same `apt-list-file`, `key-file`, or `apt-pref-file` with different
+content fail the build.
+
 ICT writes `apt-list-file`, `key-file`, and `apt-pref-file` into the image at
 these exact paths, with the content `openedge-cli install` would write. When
 `openedge-cli` later writes the same files on first boot, it replaces them
@@ -242,13 +229,15 @@ whatever the stanzas say.
 
 ### A.7 Example
 
-`openedge-cli list --sbom --os-release ./os-release-noble handheld_multi_modal`
-(abridged, illustrative):
+`openedge-cli-federal-aerospace list --sbom handheld_blueprint --edgepack`,
+run on a reference host (abridged, illustrative):
 
 ```yaml
 "schema-version": "1"
 "cli-version": "v2026.3.0"
-"module-list": ["handheld_multi_modal"]
+"cli-url": "https://github.com/intel-sandbox/oep-installer-cli/blob/v2026.3.0/rendered/openedge-cli-federal-aerospace"
+"module-list": ["handheld_blueprint"]
+"arguments": ["--edgepack"]
 ---
 "pkg-list": ["curl","ca-certificates"]
 ---
@@ -269,23 +258,19 @@ whatever the stanzas say.
 
 ### A.8 How ICT processes the output
 
-ICT runs the query on the build host before it resolves packages:
+ICT imports the output file on the build host before it resolves packages:
 
-1. **Run.** ICT downloads the pinned `openedge-cli`, verifies its SHA-256,
-   generates the target `os-release` file (A.1), resolves the template's
-   kernel to pass its release as `--kernel-release`, and runs the query. A
-   non-zero exit fails the build and shows stderr. `openedge-cli` is
-   developed in the `intel-sandbox/oep-installer-cli` repository, which also
-   renders variants for specific solutions, such as
-   `openedge-cli-federal-aerospace` for the Federal and Aerospace
-   blueprints. ICT uses a rendered CLI from the `main` branch for now, and
-   release tags (for example `v2026.3.0-rc1`) once they exist. ICT downloads
-   the raw file (`raw.githubusercontent.com`), not the GitHub web page, and
-   pins a specific commit or tag and its SHA-256 so builds stay
-   reproducible.
+1. **Download.** ICT downloads the output file named in the template
+   (`sbomUrl`) and the CLI (`url`), and verifies each against its SHA-256
+   (`sbomSha256`, `sha256`). It downloads the raw files
+   (`raw.githubusercontent.com`), not the GitHub web pages, pinned to a
+   specific commit or tag. Downloading from the private sandbox repository
+   needs a GitHub token, which ICT sends only to GitHub hosts. This is no
+   longer needed once the files are published in a public repository.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
    - the first document is the header, its `schema-version` is supported,
-     and its `module-list` is the list requested
+     its `module-list` equals the template's `modules`, and its `arguments`,
+     when present, equal the template's `args`
    - every document matches the JSON Schema in the appendix
    - the rules the schema cannot express hold: `signed-by` in `apt-source`
      equals `key-file`, and every package name or glob in `pkg-list`
@@ -326,9 +311,9 @@ ICT runs the query on the build host before it resolves packages:
 
 ## Part B: First-boot execution
 
-ICT copies the pinned CLI file it used for the compose-time query into the
-image. The query and the first-boot install therefore use the same CLI
-version, and first boot does not need to download the installer.
+ICT copies the pinned CLI (`url`, `sha256`) into the image, so first boot
+does not need to download the installer. It should be the CLI that generated
+the output file (`cli-url` in A.5).
 
 ICT runs the installer from a first-boot provisioning unit, after the network
 is online, as the template-defined user. It first runs the copied file's
@@ -340,7 +325,8 @@ bash completion and an agent skill file, then runs the installation:
 openedge-cli install <module> [<module>...] [<argument>...]
 ```
 
-The modules and arguments are the same ones ICT passed to the query (A.1).
+The modules and arguments are the template's `modules` and `args`, which
+match the output file's header (A.5).
 
 - **Sudo.** ICT gives the user passwordless sudo only while the unit runs,
   so `ensure_sudo` takes its `sudo -n` path. The grant is a separate
@@ -400,6 +386,7 @@ identical.
       "properties": {
         "schema-version": { "const": "1" },
         "cli-version": { "$ref": "#/$defs/nonEmpty" },
+        "cli-url": { "$ref": "#/$defs/url" },
         "module-list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
       }
     },
