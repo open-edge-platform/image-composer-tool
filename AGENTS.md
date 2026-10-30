@@ -85,6 +85,10 @@ Deterministic lifecycle hooks (enforcement, not just guidance) live in `.github/
 - [`post-edit-checks.json`](.github/hooks/post-edit-checks.json) — flags `gofmt` drift and validates edited image templates
 - [`pr-size-warning.json`](.github/hooks/pr-size-warning.json) — asks for confirmation before `git push` when the branch diff vs `main` exceeds ~500 LOC
 
+Claude Code reads its own hook config from `.claude/settings.json` rather than
+`.github/hooks/*.json` — that file wires the same scripts so behavior stays
+identical across GHCP and Claude Code (see [CLAUDE.md](CLAUDE.md#hooks)).
+
 Custom agent personas (restricted tool sets, selectable from the agent picker or delegated to as subagents) live in `.github/agents/`:
 
 - [`reviewer.agent.md`](.github/agents/reviewer.agent.md) — read-only code review
