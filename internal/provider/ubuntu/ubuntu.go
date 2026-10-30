@@ -2,6 +2,7 @@ package ubuntu
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -123,8 +124,6 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 		if err := oepinstaller.CheckKernel(oepOutput, template.ResolvedKernelPackages); err != nil {
 			return fmt.Errorf("systemConfig.oepInstaller: %w", err)
 		}
-		return fmt.Errorf("systemConfig.oepInstaller: the build-time packages resolved, but running openedge-cli " +
-			"on first boot is not supported yet")
 	}
 	if templateAwareChrootEnv, ok := p.chrootEnv.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
 		templateAwareChrootEnv.SetBuildTemplate(template)
@@ -459,6 +458,24 @@ func (p *ubuntu) downloadImagePkgs(template *config.ImageTemplate) error {
 	return nil
 }
 
+// addOEPInstallerFirstBoot downloads the CLI the template pins and adds the
+// first-boot installation that runs it.
+func addOEPInstallerFirstBoot(template *config.ImageTemplate) error {
+	o := template.SystemConfig.OEPInstaller
+	cli, err := oepinstaller.Download(o.URL, o.SHA256)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(config.TempDir(), 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", config.TempDir(), err)
+	}
+	workDir, err := os.MkdirTemp(config.TempDir(), "oep-installer-*")
+	if err != nil {
+		return fmt.Errorf("creating a work directory: %w", err)
+	}
+	return oepinstaller.AddFirstBoot(template, cli, workDir)
+}
+
 // applyOEPInstaller imports the OEP Installer's published package
 // requirements into the template, or returns nil when the template has no
 // systemConfig.oepInstaller section. The kernel is checked here when the
@@ -480,6 +497,9 @@ func applyOEPInstaller(template *config.ImageTemplate) (*oepinstaller.Output, er
 		if err := oepinstaller.CheckKernel(out, kernel); err != nil {
 			return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
 		}
+	}
+	if err := addOEPInstallerFirstBoot(template); err != nil {
+		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
 	}
 	return out, nil
 }
