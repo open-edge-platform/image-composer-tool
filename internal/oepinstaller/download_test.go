@@ -121,6 +121,41 @@ func TestCLIFile(t *testing.T) {
 	}
 }
 
+func TestCheckCLI(t *testing.T) {
+	t.Parallel()
+	const pinned = "https://raw.githubusercontent.com/org/oep-installer-cli/8d24c5b/rendered/" +
+		"openedge-cli-federal-aerospace"
+	tests := []struct {
+		name, cliURL, templateURL, wantErr string
+	}{
+		{"same pinned CLI", pinned, pinned, ""},
+		{"no cli-url", "", pinned, ""},
+		{"branch page of the same file", "https://github.com/org/oep-installer-cli/blob/main/rendered/" +
+			"openedge-cli-federal-aerospace", pinned, ""},
+		{"pinned CLI at another commit", pinned,
+			"https://raw.githubusercontent.com/org/oep-installer-cli/1234abc/rendered/openedge-cli-federal-aerospace",
+			"a different version"},
+		{"another CLI file", pinned,
+			"https://raw.githubusercontent.com/org/oep-installer-cli/8d24c5b/rendered/openedge-cli", "a different CLI"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkCLI(tt.cliURL, tt.templateURL)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestLoad is not parallel: it replaces the package's HTTP client.
 func TestLoad(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "handheld_blueprint.yaml"))
@@ -134,6 +169,7 @@ func TestLoad(t *testing.T) {
 	defer func() { httpClient = orig }()
 
 	o := config.OEPInstallerConfig{SBOMURL: srv.URL + "/sbom.yaml", SBOMSHA256: sha256Hex(data),
+		URL:     "https://raw.githubusercontent.com/example/oep-installer-cli/abc/rendered/openedge-cli-federal-aerospace",
 		Modules: []string{"handheld_blueprint"}}
 	out, err := Load(o)
 	if err != nil || len(out.Packages) == 0 {

@@ -1362,7 +1362,10 @@ At build time ICT downloads the file at `sbomUrl`, checks it against
 To download from a private GitHub repository, set `ICT_OEP_INSTALLER_TOKEN`
 to a GitHub token with read access, for example the one the GitHub CLI stores
 (`gh config get -h github.com oauth_token`, or `gh auth token` on newer
-versions). ICT sends the token only to GitHub hosts.
+versions). ICT sends the token only to GitHub hosts. Behind a proxy that
+inspects TLS traffic, the build host must trust the proxy's root certificate
+(for example in `/usr/local/share/ca-certificates/`, followed by
+`update-ca-certificates`), or the download fails with a certificate error.
 
 A child template's `oepInstaller` section replaces an inherited one as a
 whole. The section is rejected in overlay mode.
