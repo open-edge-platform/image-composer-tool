@@ -19,24 +19,33 @@ func WriteNetworkConfig(installRoot string, netConfig *config.NetworkConfig) err
 		return nil
 	}
 
-	if netConfig.Backend != "systemd-networkd" && netConfig.Backend != "netplan" {
-		return fmt.Errorf("unsupported network backend: %s (must be 'systemd-networkd' or 'netplan')", netConfig.Backend)
+	switch netConfig.Backend {
+	case config.NetworkBackendSystemdNetworkd, config.NetworkBackendNetplan:
+	case config.NetworkBackendNetworkManager, config.NetworkBackendNone:
+		if len(netConfig.Interfaces) > 0 {
+			return fmt.Errorf("network.interfaces cannot be used with backend %q: only %q and %q can render interface configuration",
+				netConfig.Backend, config.NetworkBackendSystemdNetworkd, config.NetworkBackendNetplan)
+		}
+		log.Debugf("Network backend %q: no interface configuration to write", netConfig.Backend)
+		return nil
+	default:
+		return fmt.Errorf("unsupported network backend: %s (must be one of %q, %q, %q, %q)", netConfig.Backend,
+			config.NetworkBackendSystemdNetworkd, config.NetworkBackendNetplan,
+			config.NetworkBackendNetworkManager, config.NetworkBackendNone)
 	}
 
 	if len(netConfig.Interfaces) == 0 {
-		log.Warnf("Network backend specified but no interfaces configured")
+		log.Debugf("Network backend %q selected with no interfaces to configure", netConfig.Backend)
 		return nil
 	}
 
 	log.Infof("Configuring network with backend: %s", netConfig.Backend)
 
 	switch netConfig.Backend {
-	case "systemd-networkd":
+	case config.NetworkBackendSystemdNetworkd:
 		return writeNetworkdConfig(installRoot, netConfig.Interfaces)
-	case "netplan":
-		return writeNetplanConfig(installRoot, netConfig.Interfaces)
 	default:
-		return fmt.Errorf("unsupported network backend: %s", netConfig.Backend)
+		return writeNetplanConfig(installRoot, netConfig.Interfaces)
 	}
 }
 

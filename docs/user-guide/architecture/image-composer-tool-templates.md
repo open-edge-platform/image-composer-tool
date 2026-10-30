@@ -844,7 +844,7 @@ explicit-interface implementation.
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `backend` | string | **Yes** (when section present) | `systemd-networkd`, `netplan` | Network configuration backend |
+| `backend` | string | **Yes** (when section present) | `systemd-networkd`, `netplan`, `networkmanager`, `none` | The component that owns networking on the installed OS |
 | `interfaces` | object[] | No | See below | List of interface configurations |
 
 `interfaces[]` fields:
@@ -868,10 +868,19 @@ explicit-interface implementation.
 > **Note:** Interface names are explicit and user-provided. The current
 > implementation does not auto-discover or auto-select NICs at install time.
 >
-> When `backend` is `systemd-networkd`, the builder enables the
-> `systemd-networkd` service in the image. When `backend` is `netplan`,
-> `systemd-networkd` is **not** forcibly enabled — netplan manages its own
-> renderer.
+> `backend` names who owns networking, and the builder enables
+> `systemd-networkd` only when that owner is `systemd-networkd`. The unit ships
+> in the base `systemd` package of nearly every image, so its presence says
+> nothing about intent, and enabling it next to another network owner makes the
+> two fight over the same interface: DHCP succeeds and the link shows
+> "connected", but routing breaks and outbound connectivity fails.
+>
+> | `backend` | Who brings the network up | What the builder does |
+> |-----------|---------------------------|-----------------------|
+> | `systemd-networkd` | `systemd-networkd` | Enables the service and writes any `interfaces` as `.network` files |
+> | `netplan` | netplan, which enables the renderer at boot (this is also how cloud-init configures the network on Debian-family images) | Writes any `interfaces` as netplan YAML; does **not** enable `systemd-networkd` |
+> | `networkmanager` | NetworkManager (its package enables it) | Does **not** enable `systemd-networkd`; `interfaces` is rejected |
+> | `none` | The template or image brings its own networking | Does nothing, and leaves `/etc/resolv.conf` alone; `interfaces` is rejected |
 
 ```yaml
 systemConfig:

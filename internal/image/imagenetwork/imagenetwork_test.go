@@ -44,6 +44,42 @@ func TestWriteNetworkConfig_UnsupportedBackend(t *testing.T) {
 	}
 }
 
+func TestWriteNetworkConfig_UnsupportedBackendWithoutInterfaces(t *testing.T) {
+	err := WriteNetworkConfig(t.TempDir(), &config.NetworkConfig{Backend: "unsupported"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported network backend") {
+		t.Errorf("expected 'unsupported network backend' error, got %v", err)
+	}
+}
+
+func TestWriteNetworkConfig_OwnerOnlyBackends(t *testing.T) {
+	for _, backend := range []string{config.NetworkBackendNetworkManager, config.NetworkBackendNone} {
+		t.Run(backend+" writes nothing", func(t *testing.T) {
+			tempDir := t.TempDir()
+			if err := WriteNetworkConfig(tempDir, &config.NetworkConfig{Backend: backend}); err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			entries, err := os.ReadDir(tempDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Errorf("backend %q must not write any files, found %d", backend, len(entries))
+			}
+		})
+
+		t.Run(backend+" rejects interfaces", func(t *testing.T) {
+			netConfig := &config.NetworkConfig{
+				Backend:    backend,
+				Interfaces: []config.NetworkInterface{{Name: "eth0", DHCP4: boolPtr(true)}},
+			}
+			err := WriteNetworkConfig(t.TempDir(), netConfig)
+			if err == nil || !strings.Contains(err.Error(), "cannot be used with backend") {
+				t.Errorf("expected interfaces to be rejected for backend %q, got %v", backend, err)
+			}
+		})
+	}
+}
+
 func TestWriteNetworkdConfig_SingleDHCPInterface(t *testing.T) {
 	tempDir := t.TempDir()
 	netConfig := &config.NetworkConfig{

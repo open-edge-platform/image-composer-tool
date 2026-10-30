@@ -2035,3 +2035,85 @@ systemConfig:
 		t.Errorf("expected disk.maxSize with extends set to defer the mode check, got: %v", err)
 	}
 }
+
+// TestNetworkBackendSchemaEnum confirms the template schema accepts exactly the
+// four network owners ICT understands and rejects anything else.
+func TestNetworkBackendSchemaEnum(t *testing.T) {
+	cases := []struct {
+		backend string
+		wantErr bool
+	}{
+		{"systemd-networkd", false},
+		{"netplan", false},
+		{"networkmanager", false},
+		{"none", false},
+		{"NetworkManager", true},
+		{"ifupdown", true},
+	}
+	for _, c := range cases {
+		t.Run(c.backend, func(t *testing.T) {
+			var raw map[string]interface{}
+			if err := yaml.Unmarshal(loadFile(t, "../../image-templates/azl3/azl3-x86_64-edge-raw.yml"), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+			systemConfig, ok := raw["systemConfig"].(map[string]interface{})
+			if !ok {
+				t.Fatal("template has no systemConfig section")
+			}
+			systemConfig["network"] = map[string]interface{}{"backend": c.backend}
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+			err = ValidateImageTemplateJSON(dataJSON)
+			if c.wantErr && err == nil {
+				t.Errorf("expected network.backend %q to fail schema validation", c.backend)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("expected network.backend %q to pass schema validation, got: %v", c.backend, err)
+			}
+		})
+	}
+}
+
+// TestNetworkBackendSchemaRejectsInterfacesForOwnerOnlyBackends confirms the
+// schema rejects interfaces for the backends that cannot render them, so
+// `validate` fails before a build instead of the build failing later.
+func TestNetworkBackendSchemaRejectsInterfacesForOwnerOnlyBackends(t *testing.T) {
+	cases := []struct {
+		backend    string
+		interfaces []interface{}
+		wantErr    bool
+	}{
+		{"networkmanager", []interface{}{map[string]interface{}{"name": "eth0"}}, true},
+		{"none", []interface{}{map[string]interface{}{"name": "eth0"}}, true},
+		{"networkmanager", []interface{}{}, false},
+		{"none", nil, false},
+		{"systemd-networkd", []interface{}{map[string]interface{}{"name": "eth0"}}, false},
+		{"netplan", []interface{}{map[string]interface{}{"name": "eth0"}}, false},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("%s with %d interfaces", c.backend, len(c.interfaces)), func(t *testing.T) {
+			var raw map[string]interface{}
+			if err := yaml.Unmarshal(loadFile(t, "../../image-templates/azl3/azl3-x86_64-edge-raw.yml"), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+			network := map[string]interface{}{"backend": c.backend}
+			if c.interfaces != nil {
+				network["interfaces"] = c.interfaces
+			}
+			raw["systemConfig"].(map[string]interface{})["network"] = network
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+			err = ValidateImageTemplateJSON(dataJSON)
+			if c.wantErr && err == nil {
+				t.Errorf("expected backend %q with interfaces to fail schema validation", c.backend)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("expected backend %q to pass schema validation, got: %v", c.backend, err)
+			}
+		})
+	}
+}
