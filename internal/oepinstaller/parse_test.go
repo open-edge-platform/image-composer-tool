@@ -63,30 +63,41 @@ func TestParseHeaderOnly(t *testing.T) {
 	}
 }
 
-func TestParseHeaderArguments(t *testing.T) {
+func TestParseInstallCmdline(t *testing.T) {
 	t.Parallel()
-	const header = "\"schema-version\": \"1\"\n\"cli-version\": \"main\"\n" +
-		"\"module-list\": [\"handheld_blueprint\"]\n\"arguments\": [\"--edgepack\"]\n"
+	const header = "\"schema-version\": \"1\"\n\"cli-version\": \"8d24c5b\"\n" +
+		"\"module-list\": [\"handheld_blueprint\"]\n"
 	modules := []string{"handheld_blueprint"}
 	tests := []struct {
-		name    string
-		args    []string
-		wantErr bool
+		name, cmdline string
+		args          []string
+		wantArgs      []string
+		wantErr       string
 	}{
-		{"matching arguments", []string{"--edgepack"}, false},
-		{"different arguments", []string{"--k3s"}, true},
-		{"no arguments in the template", nil, true},
+		{"matching arguments", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
+			[]string{"--edgepack"}, []string{"--edgepack"}, ""},
+		{"no arguments", `["openedge-cli","install","handheld_blueprint"]`, nil, []string{}, ""},
+		{"different arguments", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
+			[]string{"--k3s"}, nil, "do not match"},
+		{"template without arguments", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
+			nil, nil, "do not match"},
+		{"not an install command", `["openedge-cli","list","handheld_blueprint"]`, nil, nil, "must be the CLI"},
+		{"other modules", `["openedge-cli","install","uav_blueprint"]`, nil, nil, "must be the CLI"},
+		{"too short", `["openedge-cli"]`, nil, nil, "must be the CLI"},
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			out, err := Parse([]byte(header), modules, tt.args)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			out, err := Parse([]byte(header+"\"install-cmdline\": "+tt.cmdline+"\n"), modules, tt.args)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
 			}
-			if err == nil && !slices.Equal(out.Arguments, []string{"--edgepack"}) {
-				t.Errorf("Arguments = %v", out.Arguments)
+			if err != nil || !slices.Equal(out.Arguments, tt.wantArgs) || out.Arguments == nil {
+				t.Fatalf("Parse = %+v, %v; want arguments %v", out, err, tt.wantArgs)
 			}
 		})
 	}
