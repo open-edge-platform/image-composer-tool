@@ -338,7 +338,7 @@
 **Fixed**:
 
 - `fix(imagedisc)`: bound sfdisk calls and detach stale loop devices before reattach: `createPartitionTable`'s `sfdisk` calls had no execution timeout, so a wedged `sfdisk` (e.g. blocked behind a stale loop-device handle from a hard-killed prior build) could hang a build indefinitely. Both `sfdisk` invocations are now bounded to a 30s context so a hang fails fast into the existing retry-with-force path instead of blocking forever. Loop-device attach is also now idempotent: before `losetup`, any existing loop device already bound to the same backing file (including one whose backing file was since deleted) is detached first, removing the actual trigger that could wedge the kernel's partition-table re-read on a freshly attached device.
-- `fix(debutils)`: support APT repositories that publish only a combined `InRelease` file instead of a detached `Release`/`Release.gpg` pair. Builds against such repositories (including EdgePack's public repository) previously failed to fetch metadata; the format is now auto-detected and verified either way, and offline rebuilds correctly keep using the previously detected format instead of reverting to the missing classic files.
+- `fix(debutils)`: support APT repositories that publish only a combined `InRelease` file instead of a detached `Release`/`Release.gpg` pair. Builds against such repositories (including EdgePack's public repository) previously failed to fetch metadata; the format is now auto-detected and verified either way, and rebuilds keep using the previously detected format instead of reverting to the missing classic files.
 - `fix(debutils)`: correctly resolve dependencies on a versioned virtual `Provides:` (e.g. Debian's Qt6 ABI-pinning packages) by comparing against the version the provider actually declares for that capability, not the provider's own unrelated package version. An unversioned `Provides:` no longer incorrectly satisfies a versioned dependency either.
 - `fix(shell)`: `configurations` commands containing multi-line scripts or shell metacharacters (`$()`, backticks, `$var`) now reach the chroot unmodified instead of having their whitespace collapsed or being partially expanded by the outer shell before execution.
 
@@ -430,13 +430,13 @@
 
 - Local package repository population via `packageRepositories` section: The `packageRepositories` schema now accepts a package list whose entries are HTTPS URLs (downloaded at build time) or local file/directory paths (copied). Archives (.tar, .tar.gz, .tgz, .zip) are extracted for their .deb/.rpm payloads. The `path` field is optional when `packages` is set. A temporary directory is auto-created and cleaned up. An optional `insecureSkipVerify` flag allows skipping TLS certificate verification for downloads from environments with self-signed certificates.
 
-- Full offline/cache mode for DEB and RPM repositories: DEB Packages.gz metadata is now cached by SHA-256 checksum (`packages.parsed.json`) under `cache_dir/` and reused on rebuilds with no network access. RPM `primary.xml` metadata and `primary.location.json` are cached under `cache_dir/rpm-metadata/`. Debian repository GPG keys are cached in `cache_dir/gpg-keys/`. Repository file-existence check results and package-list URLs are cached in-process per run to eliminate redundant HEAD requests.
+- Repository metadata caching for DEB and RPM repositories: DEB Packages.gz metadata is now cached by SHA-256 checksum (`packages.parsed.json`) under `cache_dir/` and reused on rebuilds. RPM `primary.xml` metadata and `primary.location.json` are cached under `cache_dir/rpm-metadata/`. Debian repository GPG keys are cached in `cache_dir/gpg-keys/`. Repository file-existence check results and package-list URLs are cached in-process per run to eliminate redundant HEAD requests.
 
 - DKMS module installation: Package resolution now uses a target-name-aware candidate filter (`filterCandidatesByPriorityWithTarget`) that prefers exact-name matches over Provides virtual package matches, preventing kernel packages that provide a DKMS module name from being selected instead of the actual DKMS package.
 
 **Improved**:
 
-- RPM package cache: `DownloadPackagesComplete` now checks for a valid local cache before contacting the repository. If all required packages are present, no network request is made. Only the missing packages are re-fetched, preserving existing cached files.
+- RPM package cache: `DownloadPackagesComplete` now checks for a valid local cache before contacting the repository. Packages already present are reused and only the missing packages are re-fetched, preserving existing cached files.
 
 - DEB package cache: `DownloadPackages` performs a staleness check against the local `.deb` cache (by name) before downloading. Version-pinned requirements and epoch-prefixed package names are matched correctly.
 

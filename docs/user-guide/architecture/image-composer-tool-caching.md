@@ -127,13 +127,14 @@ superseded it. Validating the cache against `Release` means such a build picks u
 the current version instead of failing. Note that `--no-cache` does **not** help
 here: it isolates the package and workspace directories, not this metadata cache.
 
-**Offline behaviour is preserved by falling back, not by skipping validation.** If
-the `Release` refresh fails, the previously downloaded metadata is used as-is and
-a warning is logged; if that metadata has passed its `Valid-Until` date, the
-warning says so, since versions it names are likely to have been superseded. The
-refresh is staged in a temporary directory and moved into place only once every
-file has arrived, so a failed or interrupted refresh cannot leave a partial
-`Release` behind and break a working offline build.
+**A failed refresh falls back to the cached metadata.** If the `Release` refresh
+fails, the previously downloaded metadata is used as-is and a warning is logged;
+if that metadata has passed its `Valid-Until` date, the warning says so, since
+versions it names are likely to have been superseded. The refresh is staged in a
+temporary directory and moved into place only once every file has arrived, so a
+failed or interrupted refresh cannot leave a partial `Release` behind. Builds
+still require network access to the package repositories; offline builds are not
+supported.
 
 Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
@@ -260,25 +261,13 @@ The `chrootpkgs.dot` file contains a visual representation of package dependenci
 - Subsequent builds: Downloads only new or updated packages (~0-100MB typical)
 - Shared packages across different configurations are downloaded once
 
-**3. Offline Build Capability**
-
-If all required packages are cached, you can build images without internet access:
-- Useful for air-gapped environments
-- Enables builds on systems with restricted network access
-- Reduces dependency on repository availability
-
-When offline, cached repository metadata is used as-is and a warning is logged
-(see [Repository Metadata Caching](#repository-metadata-caching)). Packages the
-cache names but that are not already downloaded cannot be fetched, and a
-long-offline cache may name versions the repository has since removed.
-
-**4. Consistent Build Performance**
+**3. Consistent Build Performance**
 
 - Build times become predictable after initial cache population
 - Less affected by repository server performance
 - Reduces impact of network congestion
 
-**5. Development Workflow Efficiency**
+**4. Development Workflow Efficiency**
 
 - Rapid iteration during development
 - Quick testing of configuration changes
