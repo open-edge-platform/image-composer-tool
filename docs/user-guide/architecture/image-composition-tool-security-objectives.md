@@ -44,7 +44,7 @@ its signing key is fetched from a remote URL, is an rpm repository signed with
 a same-origin key rather than a separately trusted keyring, or has no key
 configured at all.
 
-## 6. Containerized Web UI
+## 6. Running ICT in a Container
 
 `docker compose up` runs the web UI in a container that is privileged and has
 the host's `/dev` mounted, because building an OS image creates loop devices,
@@ -54,6 +54,10 @@ The compose file publishes the port on `127.0.0.1` only, so only users of the
 host itself can reach it. The container image does not store the proxy
 settings of the host that built it; the proxy comes from the environment each
 time the container starts.
+
+`scripts/build-in-container.sh` runs command-line builds in the same
+privileged container. It mounts the template's directory read-only and copies
+only the build's outputs back to the host, owned by the invoking user.
 
 ## 7. Deployed-System Provisioning
 

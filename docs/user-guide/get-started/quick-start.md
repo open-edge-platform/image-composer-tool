@@ -4,7 +4,9 @@ This guide walks you through building your first image in three steps. For full 
 [Installation Guide](./installation.md). To check general prerequisites, go to [Prerequisites](./prerequisites.md), and for the practical guide on common ICT workflows, refer to [Usage Guide](./usage-guide.md).
 
 To build images from the web UI in a Docker container instead, with nothing
-but Docker installed, see the [Web UI Quick Start](./web-ui-quick-start.md).
+but Docker installed, see the [Web UI Quick Start](./web-ui-quick-start.md). To
+build from the command line in a Docker container, see the
+[CLI Quick Start (Docker)](./cli-docker-quick-start.md).
 
 ## Build and Run
 

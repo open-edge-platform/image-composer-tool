@@ -11,6 +11,8 @@ on:
       - '.dockerignore'
       - 'internal/utils/shell/shell.go'
       - 'scripts/preflight.sh'
+      - 'scripts/container-build.sh'
+      - 'scripts/build-in-container.sh'
       - '.github/workflows/ict-image-preflight.yml'
   push:
     branches:
@@ -21,6 +23,8 @@ on:
       - '.dockerignore'
       - 'internal/utils/shell/shell.go'
       - 'scripts/preflight.sh'
+      - 'scripts/container-build.sh'
+      - 'scripts/build-in-container.sh'
       - '.github/workflows/ict-image-preflight.yml'
   workflow_dispatch:
 
@@ -54,14 +58,21 @@ jobs:
       - name: Load ICT image into Docker
         run: earthly +ict-image
 
+      # The container image, Earthly's cache, an OS image build and the copied
+      # outputs all share the runner's disk. Delete preinstalled SDKs this job
+      # never uses to make room.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      # Build the smallest shipped template the way a user would, through
+      # scripts/build-in-container.sh, so the mounts and the copy back to the
+      # host are tested along with the build. Pass if the build reports success
+      # and a RAW image reached the output directory.
       - name: Smoke build inside the ICT image
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/ict-workspace"
-          docker run --rm --privileged -v /dev:/dev \
-            -v "$RUNNER_TEMP/ict-workspace:/opt/ict/workspace" \
-            ict:latest \
-            image-composer-tool build image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml \
+          scripts/build-in-container.sh \
+            image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml "$RUNNER_TEMP/ict-out" \
             2>&1 | tee "$RUNNER_TEMP/smoke-build.log"
           grep -q "image build completed successfully" "$RUNNER_TEMP/smoke-build.log"
-          sudo find "$RUNNER_TEMP/ict-workspace" -path '*/imagebuild/*' -name '*.raw*' -print | grep .
+          find "$RUNNER_TEMP/ict-out" -name '*.raw*' -print | grep .

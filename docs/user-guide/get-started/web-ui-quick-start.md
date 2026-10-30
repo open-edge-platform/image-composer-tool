@@ -207,5 +207,8 @@ not store any of them in the container image.
   commands in the container.
 - [Serve Command](../architecture/image-composer-tool-cli-specification.md#serve-command)
   documents every flag of `serve`, the command the container runs.
+- [CLI Quick Start (Docker)](./cli-docker-quick-start.md) builds a template
+  you write from the command line, with the same container image and without
+  the web UI.
 - [Quick Start](./quick-start.md) builds an image with the CLI installed on the
   host, without Docker.

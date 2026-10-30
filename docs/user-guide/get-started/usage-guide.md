@@ -10,6 +10,7 @@ command reference, see the
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
+  - [Building an Image in a Docker Container](#building-an-image-in-a-docker-container)
   - [Comparing Overlay Outputs](#comparing-overlay-outputs)
     - [Baseline RAW vs Overlay RAW](#baseline-raw-vs-overlay-raw)
     - [SBOM Comparison (Complete SBOM)](#sbom-comparison-complete-sbom)
@@ -130,6 +131,38 @@ An ISO build also leaves the SPDX SBOM of the installed system
 (`<image-name>-<version>.composition.json`), and the merged template
 (`template-dump.yaml`) in this directory. See the
 [Unattended ISO Installer Tutorial](./unattended-iso-provisioning.md).
+
+## Building an Image in a Docker Container
+
+Instead of installing the tool and running builds with `sudo`, you can build
+inside the ICT container image, which carries `image-composer-tool` and every
+program a build runs:
+
+```bash
+docker build -f build/ict/Dockerfile --target ict -t ict .
+scripts/build-in-container.sh my-template.yml ./out
+```
+
+The OS image and its SBOM land in `./out/<system-config-name>/`, owned by you.
+The container runs privileged with the host's `/dev` mounted, so it is
+root-equivalent on the host. The
+[CLI Quick Start (Docker)](./cli-docker-quick-start.md) covers writing a
+template, the mounts, and every option of the script.
+
+The script wraps one `docker run`, which runs
+`/opt/ict/scripts/container-build.sh` inside the container. To run that
+yourself, mount the template's directory and your output directory, and pass
+the output's mount point as `--output`; it must be a mounted volume, or the
+files would disappear with the container. Create the output directory first,
+so it is not owned by root:
+
+```bash
+mkdir -p out
+docker run --rm --init --privileged -v /dev:/dev \
+  -v "$PWD:/input:ro" -v "$PWD/out:/artifacts" \
+  ict /opt/ict/scripts/container-build.sh \
+    --template /input/my-template.yml --output /artifacts --owner "$(id -u):$(id -g)"
+```
 
 ## Comparing Overlay Outputs
 
@@ -442,6 +475,9 @@ The container also has the `image-composer-tool` CLI. Its working directory,
 ```bash
 docker compose exec ict image-composer-tool validate image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
 ```
+
+To build OS images from the command line without the web UI, see
+[Building an Image in a Docker Container](#building-an-image-in-a-docker-container).
 
 To build the container image without Compose, run
 `docker build -f build/ict/Dockerfile --target ict -t ict .`, or
