@@ -51,6 +51,10 @@ disk:
       mountPoint: /opt
 
 systemConfig:
+  # Network owner: this default ships a systemd-networkd DHCP drop-in, so ICT enables it.
+  # A template that installs NetworkManager or uses cloud-init overrides it.
+  network:
+    backend: systemd-networkd
   name: Default_Raw_ARM64
   description: Default yml configuration for raw image (ARM64)
 

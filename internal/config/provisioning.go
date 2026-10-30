@@ -665,9 +665,20 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 		log.Warnf("sshAuthorizedKeys are configured but openssh-server is not in systemConfig.packages; " +
 			"key-based SSH login will not be available unless the base image provides an SSH server")
 	}
-	if t.SystemConfig.CloudInit.NetworkConfigFile != "" && !isEmptyNetworkConfig(t.SystemConfig.Network) {
-		log.Warnf("both systemConfig.cloudInit.networkConfigFile and systemConfig.network are set; " +
-			"cloud-init and the declarative network configuration may conflict")
+	// The OS default config declares a network backend, so a merged template
+	// always has one; only declared interfaces, or ICT enabling systemd-networkd,
+	// can actually clash with a cloud-init network config.
+	if t.SystemConfig.CloudInit.NetworkConfigFile != "" {
+		switch {
+		case len(t.SystemConfig.Network.Interfaces) > 0:
+			log.Warnf("both systemConfig.cloudInit.networkConfigFile and systemConfig.network.interfaces are set; " +
+				"the interfaces ICT writes may conflict with cloud-init's network config. " +
+				"Omit systemConfig.network.interfaces if cloud-init should be the only source of network configuration")
+		case t.SystemConfig.Network.Backend == NetworkBackendSystemdNetworkd:
+			log.Warnf("systemConfig.cloudInit.networkConfigFile is set but systemConfig.network.backend is systemd-networkd; " +
+				"cloud-init and systemd-networkd may conflict. " +
+				"Set systemConfig.network.backend to netplan so cloud-init owns networking")
+		}
 	}
 	return nil
 }
