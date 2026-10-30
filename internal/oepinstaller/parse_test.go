@@ -213,3 +213,37 @@ func TestSplitAptSource(t *testing.T) {
 		})
 	}
 }
+
+func TestPackageKernelRole(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		entry           string
+		role            KernelRole
+		release, series string
+	}{
+		{"linux-image-7.0.0-38-generic", KernelImage, "7.0.0-38-generic", ""},
+		{"linux-image-6.18-intel", KernelImage, "6.18-intel", ""},
+		{"linux-image-generic-7.0", KernelMeta, "", "7.0"},
+		{"linux-image-generic", KernelMeta, "", ""},
+		{"linux-image-generic-hwe-24.04", KernelMeta, "", ""},
+		{"linux-generic-hwe-24.04", KernelMeta, "", ""},
+		{"linux-headers-7.0.0-38-generic", KernelExtra, "7.0.0-38-generic", ""},
+		{"linux-tools-7.0.0-38-generic", KernelExtra, "7.0.0-38-generic", ""},
+		{"linux-modules-extra-7.0.0-38-generic", KernelExtra, "7.0.0-38-generic", ""},
+		{"linux-headers-generic-7.0", KernelMeta, "", "7.0"},
+		{"linux-tools-common", KernelNone, "", ""},
+		{"linux-firmware", KernelNone, "", ""},
+		{"-linux-image-generic", KernelNone, "", ""},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.entry, func(t *testing.T) {
+			t.Parallel()
+			p := classifyPackage(tt.entry)
+			if p.KernelRole() != tt.role || p.KernelRelease() != tt.release || p.KernelSeries() != tt.series {
+				t.Errorf("%q: role %d release %q series %q; want %d %q %q", tt.entry,
+					p.KernelRole(), p.KernelRelease(), p.KernelSeries(), tt.role, tt.release, tt.series)
+			}
+		})
+	}
+}

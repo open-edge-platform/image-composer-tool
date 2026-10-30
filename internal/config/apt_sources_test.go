@@ -1217,3 +1217,60 @@ func TestGenerateAptSourcesAppliesAptPolicyForDebian(t *testing.T) {
 		t.Errorf("Debian must get sources (%v) and a no-upgrade pin for the unlisted repository (%v)", sources, vendorPin)
 	}
 }
+
+// TestGenerateAptSourcesOwnFilesRepository checks that a repository naming
+// its own apt files (as the OEP Installer integration sets them) is written at
+// those paths with the given content, and kept out of the shared sources list
+// and ICT's generated pins.
+func TestGenerateAptSourcesOwnFilesRepository(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "edge.gpg")
+	if err := os.WriteFile(keyPath, []byte("binary-keyring"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ownLine := "deb [signed-by=/etc/apt/keyrings/intel-edge-pack.gpg] https://edge.example.com/edgepack noble unstable"
+	template := &ImageTemplate{
+		Target: TargetInfo{OS: "ubuntu"},
+		PackageRepositories: []PackageRepository{
+			{ID: "plain", Codename: "noble", URL: "https://plain.example.com/repo", Component: "main"},
+			{
+				Codename: "noble", URL: "https://edge.example.com/edgepack", Component: "unstable", PKey: keyPath,
+				ListFile:        "/etc/apt/sources.list.d/intel-edge-pack.list",
+				SourceLines:     []string{ownLine},
+				KeyFile:         "/etc/apt/keyrings/intel-edge-pack.gpg",
+				PreferencesFile: "/etc/apt/preferences.d/intel-edge-pack.pref",
+				Preferences:     "Package: *\nPin: origin edge.example.com\nPin-Priority: 1001\n",
+			},
+		},
+	}
+	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
+		t.Fatalf("GenerateAptSourcesFromRepositories: %v", err)
+	}
+	contents := map[string]string{}
+	for _, f := range template.SystemConfig.AdditionalFiles {
+		data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Final, err)
+		}
+		contents[f.Final] = string(data)
+		t.Cleanup(func() { os.Remove(filepath.Join(TempDir(), filepath.Base(f.Local))) })
+	}
+	if got := contents["/etc/apt/sources.list.d/intel-edge-pack.list"]; got != ownLine+"\n" {
+		t.Errorf("own list file = %q", got)
+	}
+	shared := contents["/etc/apt/sources.list.d/package-repositories.list"]
+	if strings.Contains(shared, "edge.example.com") || !strings.Contains(shared, "plain.example.com") {
+		t.Errorf("shared sources list = %q", shared)
+	}
+	if got := contents["/etc/apt/keyrings/intel-edge-pack.gpg"]; got == "" {
+		t.Error("keyring not written at the repository's key file")
+	}
+	if got := contents["/etc/apt/preferences.d/intel-edge-pack.pref"]; !strings.Contains(got, "Pin-Priority: 1001") {
+		t.Errorf("own preferences file = %q", got)
+	}
+	for final, content := range contents {
+		if strings.HasPrefix(final, "/etc/apt/preferences.d/") && final != "/etc/apt/preferences.d/intel-edge-pack.pref" &&
+			strings.Contains(content, "edge.example.com") {
+			t.Errorf("ICT generated a pin for the repository with its own files: %s", final)
+		}
+	}
+}
