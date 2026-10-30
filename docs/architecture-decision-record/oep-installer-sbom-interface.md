@@ -76,9 +76,12 @@ generated on a host running the Journey 1 kernel.
 
 A file pins the reference host's kernel release, for example
 `linux-headers-7.0.0-38-generic`, so an image template that uses it must
-install that exact kernel (A.6). When Ubuntu publishes a newer kernel and its
-archive stops listing the pinned release's packages, builds fail until the
-file is republished for the new kernel.
+install that exact kernel (A.6), and ICT fails the build otherwise. Each ICT
+template pins its kernel and the OEP Installer commit whose published file
+matches it. When the reference kernel moves to a newer release and the OEP
+Installer publishes files for it, existing templates keep the earlier commit
+until ICT releases templates with the newer kernel and a compatible
+EdgePack.
 
 Version 1 covers `amd64` targets only.
 
