@@ -1315,11 +1315,6 @@ Check the result on a deployed system with `apt-cache policy <package>` and
 
 #### `systemConfig.oepInstaller`
 
-> **Under development.** ICT imports and checks the published output and
-> resolves its packages, but builds that set the section then stop with
-> "running openedge-cli on first boot is not supported yet" until the
-> first-boot installation is implemented.
-
 Composes OEP Installer (`openedge-cli`) profiles or modules into the image
 (`ubuntu` targets). The OEP Installer publishes, next to the CLI, the
 `openedge-cli list --sbom` output for each supported configuration, generated
@@ -1358,6 +1353,18 @@ At build time ICT downloads the file at `sbomUrl`, checks it against
   packages, a meta-package such as `linux-image-generic-7.0` must name the
   template kernel's series, and headers, modules, or tools must be for the
   template kernel's release.
+
+On first boot, a generated provisioning script
+(`/usr/local/sbin/ict-oep-installer.sh`, ordered after the template's own
+`provisioning.scripts`) runs as `user`: the CLI's `setup` command, which saves
+it as `~/.local/bin/openedge-cli`, and then `openedge-cli install` with
+`modules` and `args`. The user has passwordless sudo only while the script
+runs; the grant is removed when it exits and again at every boot. Like other
+first-boot scripts, it runs again on each boot until it succeeds, including
+after `openedge-cli` reboots the system to finish an installation step. ICT
+copies the CLI to `/usr/local/share/oep-installer/` and adds `sudo` to the
+image's packages. Samples that run on top of a blueprint are not part of the
+image; install them afterwards with `openedge-cli install <sample>`.
 
 To download from a private GitHub repository, set `ICT_OEP_INSTALLER_TOKEN`
 to a GitHub token with read access, for example the one the GitHub CLI stores
