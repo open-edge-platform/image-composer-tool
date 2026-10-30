@@ -674,8 +674,10 @@ func repoMetadataBuildPath(id, baseURL, codename, arch, component, packageListUR
 //
 // A single probe's error (e.g. a transient 5xx with no cached verdict) does
 // not abort resolution early: the other format may still be reachable, so
-// every remaining probe is still attempted, and an error is only returned
-// once none of them yielded a usable or cached verdict.
+// every remaining probe is still attempted. Only a confirmed absence (a 4xx)
+// falls back to the classic URLs; if none of the probes yielded a usable or
+// cached verdict because the server kept answering 429/502/503/504, an error
+// is returned instead.
 //
 // A releaseSignURL of inReleaseSentinel signals ParseRepositoryMetadata to
 // treat releaseFileURL as a combined InRelease file rather than a
@@ -723,6 +725,14 @@ func resolveReleaseURLs(baseURL, codename, releaseNm string) (releaseFileURL, re
 	}
 
 	if len(probeErrs) > 0 {
+		probeErr := errors.Join(probeErrs...)
+		// A server still answering 429/502/503/504 after probeURLExistence's
+		// retries has not said which files exist, and falling back would
+		// guess classic Release/Release.gpg files the repository may not
+		// publish. Report the outage instead.
+		if errors.Is(probeErr, errRepoUnavailable) {
+			return "", "", fmt.Errorf("probing release files under %s/dists/%s: %w", baseURL, codename, probeErr)
+		}
 		// Don't abort here: a fresh/offline probe can fail for reasons
 		// probeURL doesn't recognize as "no response" (e.g. "network is
 		// unreachable" isn't in its offline-error allowlist, so it surfaces
@@ -733,7 +743,7 @@ func resolveReleaseURLs(baseURL, codename, releaseNm string) (releaseFileURL, re
 		// ParseRepositoryMetadata's own offline cache fallback still gets a
 		// chance; a genuinely broken/typo'd repo surfaces its error there
 		// (or at actual fetch time) instead.
-		logger.Logger().Warnf("could not confirm repo format for %s/dists/%s via probing: %v; falling back to classic Release/Release.gpg URLs", baseURL, codename, errors.Join(probeErrs...))
+		logger.Logger().Warnf("could not confirm repo format for %s/dists/%s via probing: %v; falling back to classic Release/Release.gpg URLs", baseURL, codename, probeErr)
 	}
 
 	// Neither found; keep the classic URLs so a genuinely broken/typo'd
@@ -1001,7 +1011,68 @@ func checkFileExists(url string) (bool, error) {
 // file, a repository's Release.gpg-vs-InRelease publication format can
 // change between builds, so a stale cached verdict must never be trusted as
 // a shortcut, only as a last resort.
+//
+// A 429/502/503/504 says the server (or a gateway in front of it) cannot
+// answer right now, not that the file is missing, so the probe is repeated
+// after a wait: Launchpad's PPA snapshot host sheds load for minutes at a
+// time. If every attempt is answered that way, the error wraps
+// errRepoUnavailable so callers never read the outage as an absent file.
 func probeURLExistence(url string) (bool, int, error) {
+	found, status, err := probeURLExistenceOnce(url)
+	wait := probeUnavailableBackoff
+	for attempt := 1; probeUnavailableStatus(status); attempt++ {
+		if attempt == probeUnavailableAttempts {
+			// probeURL reports a 429 like any other 4xx, with no error of its
+			// own, so name the URL and status here.
+			if err == nil {
+				err = fmt.Errorf("checking file at %s: status %d %s", url, status, http.StatusText(status))
+			}
+			return false, status, fmt.Errorf("%w after %d attempts: %w", errRepoUnavailable, attempt, err)
+		}
+		logger.Logger().Warnf("%s answered %d (attempt %d/%d); retrying in %s",
+			url, status, attempt, probeUnavailableAttempts, wait)
+		timer := time.NewTimer(wait)
+		select {
+		case <-runctx.Context().Done():
+			timer.Stop()
+			return false, status, fmt.Errorf("probing %s cancelled during retry backoff: %w", url, runctx.Context().Err())
+		case <-timer.C:
+		}
+		wait = min(wait*2, maxProbeUnavailableBackoff)
+		found, status, err = probeURLExistenceOnce(url)
+	}
+	return found, status, err
+}
+
+// errRepoUnavailable marks a probe the server kept answering with a
+// temporary-unavailability status, so it gave no verdict on the file.
+var errRepoUnavailable = errors.New("repository server unavailable")
+
+// The retry budget for probes the server answers as unavailable, matching
+// the package-download schedule in pkgfetcher. Variables rather than
+// constants so tests can shorten them.
+var (
+	probeUnavailableAttempts   = 6
+	probeUnavailableBackoff    = 15 * time.Second
+	maxProbeUnavailableBackoff = 2 * time.Minute
+)
+
+// probeUnavailableStatus reports whether status means the server is
+// temporarily unable to answer rather than that the file is absent.
+func probeUnavailableStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// probeURLExistenceOnce is a single existence check: HEAD, confirmed by a
+// ranged GET when the server rejects HEAD.
+func probeURLExistenceOnce(url string) (bool, int, error) {
 	found, status, err := probeURL(url, http.MethodHead)
 
 	// A HEAD rejection is not proof of absence. Some CDN-backed APT mirrors
