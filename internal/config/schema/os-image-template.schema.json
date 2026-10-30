@@ -400,6 +400,31 @@
       },
       "additionalProperties": false
     },
+    "OEPInstaller": {
+      "type": "object",
+      "description": "Compose OEP Installer (openedge-cli) profiles or modules into the image: ICT installs the Debian packages from the published list --sbom output at build time and runs openedge-cli install on first boot (ubuntu targets)",
+      "properties": {
+        "url": { "type": "string", "pattern": "^https://[^\\s@]+$", "description": "HTTPS URL of the rendered openedge-cli file (not a GitHub web page), pinned to a commit or tag" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$", "description": "Hex SHA-256 digest of the file at url" },
+        "sbomUrl": { "type": "string", "pattern": "^https://[^\\s@]+$", "description": "HTTPS URL of the openedge-cli list --sbom output the OEP Installer publishes for the modules (not a GitHub web page), pinned to a commit or tag" },
+        "sbomSha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$", "description": "Hex SHA-256 digest of the file at sbomUrl" },
+        "modules": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$" },
+          "description": "Profiles or modules to install, as accepted by openedge-cli install"
+        },
+        "user": { "type": "string", "minLength": 1, "description": "systemConfig.users entry that runs openedge-cli on first boot (not root)" },
+        "args": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{1,256}$" },
+          "description": "Extra arguments passed to openedge-cli install; must equal the arguments the sbomUrl output was generated with (no spaces, quotes, $ or ;)"
+        }
+      },
+      "required": ["url", "sha256", "sbomUrl", "sbomSha256", "modules", "user"],
+      "additionalProperties": false
+    },
     "NetworkInterface": {
       "type": "object",
       "description": "Network interface configuration",
@@ -695,7 +720,8 @@
         "proxy": { "$ref": "#/$defs/Proxy" },
         "provisioning": { "$ref": "#/$defs/Provisioning" },
         "cloudInit": { "$ref": "#/$defs/CloudInit" },
-        "aptPolicy": { "$ref": "#/$defs/AptPolicy" }
+        "aptPolicy": { "$ref": "#/$defs/AptPolicy" },
+        "oepInstaller": { "$ref": "#/$defs/OEPInstaller" }
       },
       "additionalProperties": false
     },

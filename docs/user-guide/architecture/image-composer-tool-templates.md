@@ -45,6 +45,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.provisioning`](#systemconfigprovisioning)
       - [`systemConfig.cloudInit`](#systemconfigcloudinit)
       - [`systemConfig.aptPolicy`](#systemconfigaptpolicy)
+      - [`systemConfig.oepInstaller`](#systemconfigoepinstaller)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Template Extends (Inheritance)](#template-extends-inheritance)
     - [Syntax](#syntax)
@@ -778,6 +779,7 @@ user templates (as defaults already provide a complete base).
 | `provisioning` | object | No | Boot-time provisioning scripts |
 | `cloudInit` | object | No | Install and seed cloud-init |
 | `aptPolicy` | object | No | Restrict which repositories may upgrade packages |
+| `oepInstaller` | object | No | Compose OEP Installer profiles or modules into the image |
 
 Package names must match: `^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$`
 and must be unique within the list.
@@ -1310,6 +1312,53 @@ systemConfig:
 
 Check the result on a deployed system with `apt-cache policy <package>` and
 `apt-get -s upgrade`.
+
+#### `systemConfig.oepInstaller`
+
+> **Under development.** The section is parsed and validated, but builds that
+> set it fail with "systemConfig.oepInstaller is not supported yet" until the
+> integration is complete.
+
+Composes OEP Installer (`openedge-cli`) profiles or modules into the image
+(`ubuntu` targets). The OEP Installer publishes, next to the CLI, the
+`openedge-cli list --sbom` output for each supported configuration, generated
+on a host running the target OS and kernel. At build time ICT installs the
+Debian packages and apt repositories that output lists; on first boot
+`openedge-cli install` completes the remaining installation. The interface is
+described in the
+[OEP Installer interface specification](../../architecture-decision-record/oep-installer-sbom-interface.md).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
+| `sha256` | string | Yes | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
+| `sbomUrl` | string | Yes | `https://` URL of the published `list --sbom` output for `modules`, pinned to a commit or tag. The same GitHub rule as for `url` applies |
+| `sbomSha256` | string | Yes | Hex SHA-256 digest of the file at `sbomUrl` |
+| `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install`. Must equal the `module-list` of the `sbomUrl` output |
+| `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must equal the arguments in the `install-cmdline` of the `sbomUrl` output, since some profiles choose modules based on them; the build fails otherwise (no spaces, quotes, `$` or `;`) |
+
+A child template's `oepInstaller` section replaces an inherited one as a
+whole. The section is rejected in overlay mode.
+
+```yaml
+systemConfig:
+  users:
+    - name: edge
+  oepInstaller:
+    url: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace
+    sha256: <sha256 of the CLI>
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/sbom-handheld-blueprint-ubuntu-24.04.5.yaml
+    sbomSha256: <sha256 of the output file>
+    modules:
+      - handheld_blueprint
+    user: edge
+    args: ["--edgepack"]
+```
+
+The output file pins the kernel of the host it was generated on (for example
+`linux-headers-7.0.0-38-generic`), so the template must install that exact
+kernel.
 
 ## Package Repositories
 
