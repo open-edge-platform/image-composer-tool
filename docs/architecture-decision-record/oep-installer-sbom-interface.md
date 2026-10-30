@@ -36,9 +36,9 @@ following changes were requested from `openedge-cli`:
    `kernel-cmdline` (A.6). Implemented.
 5. Publish one output file per supported configuration, generated on a
    reference host that runs the target OS and kernel, next to the CLI (A.1).
-   In progress: the Handheld blueprint file is published.
-6. Record the arguments the output was generated with in the header, as
-   `arguments` (A.5). Requested.
+   Implemented for the Handheld blueprint, generated in CI.
+6. Record the install command the output was generated for in the header,
+   as `install-cmdline` (A.5). Implemented.
 
 The key words MUST, MUST NOT, SHOULD, and MAY are used as in RFC 2119.
 
@@ -132,10 +132,10 @@ documents are allowed and ignored.
 | Key | Type | Required | Description |
 | --- | --- | --- | --- |
 | `schema-version` | string | yes | `"1"` for this specification. ICT rejects versions it does not support. |
-| `cli-version` | string | yes | The `openedge-cli` version: the release version (for example `"v2026.3.0"`), which changes with each release, or `"main"` for builds before the first release. ICT records it; reproducibility comes from the commit and SHA-256 ICT pins (A.8). |
+| `cli-version` | string | yes | The `openedge-cli` version: the release version (for example `"v2026.3.0"`), which changes with each release, or the commit the CLI was built from for files generated before a release. ICT records it. |
 | `module-list` | array of string | yes | The profiles or modules the output was produced for, in the order requested. |
-| `cli-url` | string | no | Web URL of the CLI file that generated the output (for example `https://github.com/intel-sandbox/oep-installer-cli/blob/main/rendered/openedge-cli-federal-aerospace`). ICT warns when its repository and file name differ from the template's CLI `url`. |
-| `arguments` | array of string | requested | The arguments the output was generated with (for example `["--edgepack"]`). When present, ICT checks that they equal the template's `args`, which first boot passes to `install`. |
+| `cli-url` | string | no | Raw URL of the CLI file that generated the output, pinned to a commit or tag (for example `https://raw.githubusercontent.com/intel-sandbox/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace`). ICT fails the build when it differs from the template's CLI `url`, so first boot runs the CLI that generated the output. For a web-page URL on a branch, ICT can only compare the repository and file name, and warns. |
+| `install-cmdline` | array of string | no | The install command the output was generated for: the CLI, `install`, the `module-list`, then any arguments (for example `["openedge-cli","install","handheld_blueprint","--edgepack"]`). ICT checks that the arguments equal the template's `args`, which first boot passes to `install`. |
 
 ### A.6 Component documents
 
@@ -244,9 +244,9 @@ run on a reference host (abridged, illustrative):
 ```yaml
 "schema-version": "1"
 "cli-version": "v2026.3.0"
-"cli-url": "https://github.com/intel-sandbox/oep-installer-cli/blob/v2026.3.0/rendered/openedge-cli-federal-aerospace"
+"cli-url": "https://raw.githubusercontent.com/intel-sandbox/oep-installer-cli/v2026.3.0/rendered/openedge-cli-federal-aerospace"
+"install-cmdline": ["openedge-cli","install","handheld_blueprint","--edgepack"]
 "module-list": ["handheld_blueprint"]
-"arguments": ["--edgepack"]
 ---
 "pkg-list": ["curl","ca-certificates"]
 ---
@@ -278,8 +278,9 @@ ICT imports the output file on the build host before it resolves packages:
    longer needed once the files are published in a public repository.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
    - the first document is the header, its `schema-version` is supported,
-     its `module-list` equals the template's `modules`, and its `arguments`,
-     when present, equal the template's `args`
+     its `module-list` equals the template's `modules`, the arguments of its
+     `install-cmdline`, when present, equal the template's `args`, and its
+     `cli-url`, when present, matches the template's CLI `url` (A.5)
    - every document matches the JSON Schema in the appendix
    - the rules the schema cannot express hold: `signed-by` in `apt-source`
      equals `key-file`, and every package name or glob in `pkg-list`
@@ -398,6 +399,7 @@ identical.
         "schema-version": { "const": "1" },
         "cli-version": { "$ref": "#/$defs/nonEmpty" },
         "cli-url": { "$ref": "#/$defs/url" },
+        "install-cmdline": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } },
         "module-list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
       }
     },
