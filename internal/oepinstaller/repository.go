@@ -2,7 +2,10 @@ package oepinstaller
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 // newRepository builds a Repository from a component document with an
@@ -34,7 +37,65 @@ func newRepository(doc document) (Repository, error) {
 	if arch := opts["arch"]; arch != "" {
 		repo.Architectures = strings.Split(arch, ",")
 	}
+	if repo.Pins, err = parsePins(doc.AptPref); err != nil {
+		return Repository{}, fmt.Errorf("apt-pref: %w", err)
+	}
 	return repo, nil
+}
+
+// parsePins parses apt-pref lines, each stanza starting at a Package: line,
+// into pins. Only "Pin: origin <host>" and "Pin: version <glob>" are
+// supported; any other form is rejected rather than ignored.
+func parsePins(lines []string) ([]debutils.Pin, error) {
+	var pins []debutils.Pin
+	for _, line := range lines {
+		key, value, _ := strings.Cut(line, ":")
+		value = strings.TrimSpace(value)
+		if key == "Package" {
+			pins = append(pins, debutils.Pin{Packages: strings.Fields(value)})
+			continue
+		}
+		if len(pins) == 0 {
+			return nil, fmt.Errorf("%q comes before the first Package: line", line)
+		}
+		p := &pins[len(pins)-1]
+		if err := setPinField(p, key, value); err != nil {
+			return nil, err
+		}
+	}
+	for _, p := range pins {
+		if len(p.Packages) == 0 || (p.Origin == "" && p.Version == "") {
+			return nil, fmt.Errorf("stanza for %v needs a Package, a Pin, and a Pin-Priority", p.Packages)
+		}
+	}
+	return pins, nil
+}
+
+// setPinField applies one "key: value" line of a stanza.
+func setPinField(p *debutils.Pin, key, value string) error {
+	switch key {
+	case "Pin":
+		kind, arg, _ := strings.Cut(value, " ")
+		arg = strings.TrimSpace(arg)
+		switch {
+		case kind == "origin" && arg != "":
+			p.Origin = strings.Trim(arg, `"`)
+		case kind == "version" && arg != "":
+			p.Version = arg
+		default:
+			return fmt.Errorf("unsupported %q; only origin and version pins are supported", "Pin: "+value)
+		}
+	case "Pin-Priority":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid Pin-Priority %q", value)
+		}
+		p.Priority = n
+	case "Explanation":
+	default:
+		return fmt.Errorf("unsupported apt preferences field %q", key)
+	}
+	return nil
 }
 
 // splitAptSource splits a one-line "deb [options] uri suite component" entry

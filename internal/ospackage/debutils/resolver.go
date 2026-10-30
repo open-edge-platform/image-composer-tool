@@ -913,25 +913,25 @@ func getRepositoryPriority(packageURL string) int {
 
 // shouldBlockPackage returns true if the package should be blocked based on priority < 0
 func shouldBlockPackage(pkg ospackage.PackageInfo) bool {
-	priority := getRepositoryPriority(pkg.URL)
+	priority := packagePriority(pkg)
 	return priority < 0
 }
 
 // shouldForceInstall returns true if the package should be force installed (priority > 1000)
 func shouldForceInstall(pkg ospackage.PackageInfo) bool {
-	priority := getRepositoryPriority(pkg.URL)
+	priority := packagePriority(pkg)
 	return priority > 1000
 }
 
 // shouldInstallEvenIfLower returns true if the package should be installed even if version is lower (priority = 1000)
 func shouldInstallEvenIfLower(pkg ospackage.PackageInfo) bool {
-	priority := getRepositoryPriority(pkg.URL)
+	priority := packagePriority(pkg)
 	return priority == 1000
 }
 
 // shouldPrefer returns true if the package should be preferred (priority = 990)
 func shouldPrefer(pkg ospackage.PackageInfo) bool {
-	priority := getRepositoryPriority(pkg.URL)
+	priority := packagePriority(pkg)
 	return priority == 990
 }
 
@@ -951,8 +951,8 @@ func filterCandidatesByPriority(candidates []ospackage.PackageInfo) []ospackage.
 		pkgI := filtered[i]
 		pkgJ := filtered[j]
 
-		priorityI := getRepositoryPriority(pkgI.URL)
-		priorityJ := getRepositoryPriority(pkgJ.URL)
+		priorityI := packagePriority(pkgI)
+		priorityJ := packagePriority(pkgJ)
 
 		// Force install (>1000) has highest preference
 		forceI := shouldForceInstall(pkgI)
@@ -1034,8 +1034,8 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 		}
 
 		// For same type (both exact or both provides), use standard APT priority + version
-		priorityI := getRepositoryPriority(pkgI.URL)
-		priorityJ := getRepositoryPriority(pkgJ.URL)
+		priorityI := packagePriority(pkgI)
+		priorityJ := packagePriority(pkgJ)
 
 		// APT priority comparison
 		if priorityI != priorityJ {
@@ -1111,8 +1111,8 @@ func comparePriorityBehavior(pkgA, pkgB ospackage.PackageInfo) bool {
 	}
 
 	// For same priority category, compare versions
-	priorityA := getRepositoryPriority(pkgA.URL)
-	priorityB := getRepositoryPriority(pkgB.URL)
+	priorityA := packagePriority(pkgA)
+	priorityB := packagePriority(pkgB)
 
 	if priorityA == priorityB {
 		// Special handling for priority 1000 - can install even if version is lower

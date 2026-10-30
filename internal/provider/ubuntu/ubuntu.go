@@ -104,6 +104,9 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 	if err != nil {
 		return err
 	}
+	// Apply the OEP Installer's apt preferences when resolving packages; nil
+	// clears pins left by an earlier build in the same process.
+	debutils.ConfigurePins(oepinstaller.Pins(oepOutput))
 
 	// Generate apt sources file from packageRepositories
 	if err := template.GenerateAptSourcesFromRepositories(); err != nil {

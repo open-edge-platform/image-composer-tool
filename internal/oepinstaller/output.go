@@ -7,6 +7,8 @@ package oepinstaller
 import (
 	"regexp"
 	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 // SchemaVersion is the output schema version this package supports.
@@ -125,19 +127,33 @@ func (p Package) KernelSeries() string {
 
 // Repository is an apt repository group from a component document.
 type Repository struct {
-	Name              string   // repo-name, may be empty
-	GPGKey            string   // URL of the signing key
-	GPGKeyFingerprint string   // optional OpenPGP fingerprint of the key
-	KeyFile           string   // in-image path of the dearmored keyring
-	Source            string   // the deb line, as printed
-	SourceSrc         string   // optional deb-src line, as printed
-	ListFile          string   // in-image path of the sources list file
-	Preferences       []string // apt_preferences(5) lines, may be empty
-	PreferencesFile   string   // in-image path of the preferences file
-	URI               string   // repository URI from Source
-	Suite             string   // suite (codename) from Source
-	Component         string   // single component from Source
-	Architectures     []string // arch= option from Source, may be empty
+	Name              string         // repo-name, may be empty
+	GPGKey            string         // URL of the signing key
+	GPGKeyFingerprint string         // optional OpenPGP fingerprint of the key
+	KeyFile           string         // in-image path of the dearmored keyring
+	Source            string         // the deb line, as printed
+	SourceSrc         string         // optional deb-src line, as printed
+	ListFile          string         // in-image path of the sources list file
+	Preferences       []string       // apt_preferences(5) lines, may be empty
+	PreferencesFile   string         // in-image path of the preferences file
+	URI               string         // repository URI from Source
+	Suite             string         // suite (codename) from Source
+	Component         string         // single component from Source
+	Architectures     []string       // arch= option from Source, may be empty
+	Pins              []debutils.Pin // stanzas of Preferences, applied when resolving packages
+}
+
+// Pins returns the apt preferences of every repository in out, or nil when out
+// is nil.
+func Pins(out *Output) []debutils.Pin {
+	if out == nil {
+		return nil
+	}
+	var pins []debutils.Pin
+	for _, r := range out.Repositories {
+		pins = append(pins, r.Pins...)
+	}
+	return pins
 }
 
 // Output is the parsed and validated `openedge-cli list --sbom` output.
