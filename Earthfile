@@ -309,65 +309,47 @@ deb:
     SAVE ARTIFACT /tmp/dist/ict_*_${ARCH}.deb AS LOCAL dist/
     SAVE ARTIFACT /tmp/dist/image-composer-tool.version AS LOCAL dist/image-composer-tool.version
 
-# ── Builder container image ───────────────────────────────────────────────────
-# Builds the ICT builder image: Ubuntu 24.04 + complete toolchain + ICT binary.
-# The toolchain apt-install layer is ordered before the binary copy so it stays
-# cached across binary-only rebuilds.
+# ── ICT container image ───────────────────────────────────────────────────────
+# Builds the ICT container image from build/ict/Dockerfile, the only definition
+# of it: the image-composer-tool binary (CLI and web UI), live-installer,
+# config/, image-templates/ and every program a build runs. docker-compose.yml
+# builds the same Dockerfile; these targets add the version and git commit to
+# the binary and the image labels, and run the toolchain check.
 #
-# Build locally:
-#   earthly +builder-image
-# Push to registry:
-#   earthly +builder-image-push --REGISTRY=<registry> --VERSION=<tag>
+#   earthly +ict-image                       # loads ict:dev and ict:latest into Docker
+#   earthly +ict-image --VERSION=1.2.3       # loads ict:1.2.3 and ict:latest
+#   earthly +ict-image --ICT_IMAGE_NAME=foo  # loads foo:dev and foo:latest
+#   earthly +ict-image-preflight             # checks every allowlisted program exists
+#
+# The host's proxy variables are passed to the Dockerfile as build arguments,
+# which Docker does not store in the image.
 
-builder-image:
+ict-image:
     ARG VERSION="dev"
-    ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
+    ARG ICT_IMAGE_NAME="ict"
+    # Set by Earthly to the checkout's short commit hash.
+    ARG EARTHLY_GIT_SHORT_HASH
 
-    # Ensure the ICT binary is built first
-    BUILD +build --VERSION=$VERSION --version=$VERSION
     FROM DOCKERFILE \
+        --build-arg VERSION=$VERSION \
+        --build-arg COMMIT_SHA=$EARTHLY_GIT_SHORT_HASH \
         --build-arg http_proxy=$http_proxy \
         --build-arg https_proxy=$https_proxy \
         --build-arg no_proxy=$no_proxy \
         --build-arg HTTP_PROXY=$HTTP_PROXY \
         --build-arg HTTPS_PROXY=$HTTPS_PROXY \
         --build-arg NO_PROXY=$NO_PROXY \
-        -f build/builder/Dockerfile .
-    COPY +build/image-composer-tool /usr/local/bin/image-composer-tool
-    RUN chmod +x /usr/local/bin/image-composer-tool
+        --target ict \
+        -f build/ict/Dockerfile .
 
-    SAVE IMAGE ${BUILDER_IMAGE_NAME}:${VERSION}
-    SAVE IMAGE ${BUILDER_IMAGE_NAME}:latest
+    SAVE IMAGE ${ICT_IMAGE_NAME}:${VERSION}
+    SAVE IMAGE ${ICT_IMAGE_NAME}:latest
 
-builder-image-push:
-    ARG VERSION="dev"
-    ARG REGISTRY
-    ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
-
-    BUILD +build --VERSION=$VERSION --version=$VERSION
-
-    FROM DOCKERFILE \
-        --build-arg http_proxy=$http_proxy \
-        --build-arg https_proxy=$https_proxy \
-        --build-arg no_proxy=$no_proxy \
-        --build-arg HTTP_PROXY=$HTTP_PROXY \
-        --build-arg HTTPS_PROXY=$HTTPS_PROXY \
-        --build-arg NO_PROXY=$NO_PROXY \
-        -f build/builder/Dockerfile .
-    COPY +build/image-composer-tool /usr/local/bin/image-composer-tool
-    RUN chmod +x /usr/local/bin/image-composer-tool
-
-    SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:${VERSION}
-    SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:latest
-
-# Run preflight in a separate target to keep builder-image (Subtask 1)
-# independent from runtime validation (Subtask 2).
-builder-image-preflight:
-    FROM +builder-image
-
-    # Preflight derives required commands from shell commandMap source.
-    COPY scripts/preflight.sh /usr/local/bin/preflight.sh
-    COPY internal/utils/shell/shell.go /tmp/shell.go
-
-    RUN chmod +x /usr/local/bin/preflight.sh
-    RUN /usr/local/bin/preflight.sh --check-only --command-map-file /tmp/shell.go
+# ICT runs external programs only through the allowlist in
+# internal/utils/shell/shell.go (commandMap). Fail if any of them is missing
+# from the image, listing the missing ones. CI runs this whenever one of the
+# image's inputs changes.
+ict-image-preflight:
+    FROM +ict-image
+    RUN /opt/ict/scripts/preflight.sh --check-only \
+        --command-map-file /opt/ict/internal/utils/shell/shell.go

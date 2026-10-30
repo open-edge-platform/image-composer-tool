@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'Earthfile'
-      - 'build/builder/Dockerfile'
+      - 'build/ict/Dockerfile'
       - 'internal/utils/shell/shell.go'
       - 'scripts/preflight.sh'
   push:
@@ -12,7 +12,7 @@ on:
       - main
     paths:
       - 'Earthfile'
-      - 'build/builder/Dockerfile'
+      - 'build/ict/Dockerfile'
       - 'internal/utils/shell/shell.go'
       - 'scripts/preflight.sh'
   workflow_dispatch:
@@ -37,5 +37,5 @@ jobs:
         with:
           version: 0.8.15
 
-      - name: Build builder image and run preflight
-        run: earthly +builder-image-preflight
+      - name: Build ICT image and run preflight
+        run: earthly +ict-image-preflight
