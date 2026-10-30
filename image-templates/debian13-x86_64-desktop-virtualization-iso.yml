@@ -55,6 +55,10 @@ target:
 # System Configuration
 # ============================================================================
 systemConfig:
+  # Network owner: cloud-init renders netplan config at boot and the netplan
+  # generator enables the renderer, so ICT must not also enable systemd-networkd.
+  network:
+    backend: netplan
   name: Debian13-Desktop-Virtualization
   description: >-
     Debian 13 Desktop Virtualization ISO with Intel graphics SR-IOV support.

@@ -89,6 +89,10 @@ disk:
 
 # Host OS configuration applied within the image
 systemConfig:
+  # Network owner: cloud-init renders netplan config at boot and the netplan
+  # generator enables the renderer, so ICT must not also enable systemd-networkd.
+  network:
+    backend: netplan
   # Name reused by logging and validation output
   name: ubuntu-minimal-cloud-amd64
   # High-level description surfaced in manifests

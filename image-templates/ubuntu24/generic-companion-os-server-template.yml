@@ -276,6 +276,10 @@ packageRepositories:
 
 
 systemConfig:
+  # Network owner: this image installs NetworkManager, so ICT must not also
+  # enable systemd-networkd.
+  network:
+    backend: networkmanager
   name: minimal-ubuntu-server
   description: Ubuntu 24.04 server image with Intel packages from Ubuntu archive and overlay
   hostname: minimal-server-ubuntu

@@ -72,6 +72,10 @@ packageRepositories:
     component: "main"
 
 systemConfig:
+  # Network owner: this image installs NetworkManager, so ICT must not also
+  # enable systemd-networkd.
+  network:
+    backend: networkmanager
   name: edgepack-demo
   description: Ubuntu 24.04 (noble) image with the EdgePack base metapackage and optional add-ons for PTL/WCL
 

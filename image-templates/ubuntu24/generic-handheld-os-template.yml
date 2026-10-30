@@ -255,6 +255,10 @@ packageRepositories:
       - libv4lconvert0t64
 
 systemConfig:
+  # Network owner: this image installs NetworkManager, so ICT must not also
+  # enable systemd-networkd.
+  network:
+    backend: networkmanager
   name: minimal
   description: Minimal desktop ubuntu image for Panther Lake
   hostname: minimal-desktop-ubuntu
