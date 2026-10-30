@@ -78,7 +78,7 @@ For path-scoped detail, see `.github/instructions/`:
 - [`image-templates.instructions.md`](.github/instructions/image-templates.instructions.md) — YAML image template conventions
 - [`web.instructions.md`](.github/instructions/web.instructions.md) — web UI (`web/`) conventions
 
-Deterministic lifecycle hooks (enforcement, not just guidance) live in `.github/hooks/`:
+Deterministic lifecycle hooks (enforcement, not just guidance) live in `.github/hooks/` (the scripts require `jq`):
 
 - [`block-dangerous-git.json`](.github/hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
 - [`post-edit-checks.json`](.github/hooks/post-edit-checks.json) — flags `gofmt` drift and validates edited image templates
@@ -120,7 +120,7 @@ If no docs need updating, **say so explicitly in the PR description**.
 
 - TLS 1.2+ via the project HTTP client.
 - Shell allowlist enforced — adding a new command requires justification.
-- Validate templates against `os-image-template.schema.json` (`image-composer-tool validate -t …`).
+- Validate templates against `os-image-template.schema.json` (`image-composer-tool validate <template.yml>`).
 - File permissions: `0700` chroot dirs, `0755` general dirs, `0644` data, `0640` logs.
 - Never embed secrets in fixtures, code, or logs.
 - CI gates (all must pass before merge): Trivy (HIGH/CRITICAL fails), Gitleaks, Zizmor, per-OS/arch integration builds.
