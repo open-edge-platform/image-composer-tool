@@ -21,12 +21,13 @@ func readFixture(t *testing.T) string {
 
 func TestParseFixture(t *testing.T) {
 	t.Parallel()
-	out, err := Parse([]byte(readFixture(t)), handheldModules)
+	out, err := Parse([]byte(readFixture(t)), handheldModules, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if out.CLIVersion != "main" || !slices.Equal(out.Modules, handheldModules) {
-		t.Errorf("header = %q %v", out.CLIVersion, out.Modules)
+	if out.CLIVersion != "main" || !slices.Equal(out.Modules, handheldModules) || out.Arguments != nil ||
+		out.CLIURL != "https://github.com/example/oep-installer-cli/blob/main/rendered/openedge-cli" {
+		t.Errorf("header = %q %q %v %v", out.CLIVersion, out.CLIURL, out.Modules, out.Arguments)
 	}
 	if len(out.Packages) != 16 {
 		t.Errorf("got %d packages, want 16: %+v", len(out.Packages), out.Packages)
@@ -53,12 +54,41 @@ func TestParseFixture(t *testing.T) {
 func TestParseHeaderOnly(t *testing.T) {
 	t.Parallel()
 	data := "\"schema-version\": \"1\"\n\"cli-version\": \"v2026.3.0\"\n\"module-list\": [\"a\", \"b\"]\n---\n"
-	out, err := Parse([]byte(data), []string{"a", "b"})
+	out, err := Parse([]byte(data), []string{"a", "b"}, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(out.Packages) != 0 || len(out.Repositories) != 0 {
 		t.Errorf("expected no packages or repositories, got %+v", out)
+	}
+}
+
+func TestParseHeaderArguments(t *testing.T) {
+	t.Parallel()
+	const header = "\"schema-version\": \"1\"\n\"cli-version\": \"main\"\n" +
+		"\"module-list\": [\"handheld_blueprint\"]\n\"arguments\": [\"--edgepack\"]\n"
+	modules := []string{"handheld_blueprint"}
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{"matching arguments", []string{"--edgepack"}, false},
+		{"different arguments", []string{"--k3s"}, true},
+		{"no arguments in the template", nil, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			out, err := Parse([]byte(header), modules, tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && !slices.Equal(out.Arguments, []string{"--edgepack"}) {
+				t.Errorf("Arguments = %v", out.Arguments)
+			}
+		})
 	}
 }
 
@@ -90,7 +120,7 @@ func TestParseRejects(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := Parse([]byte(tt.data), handheldModules)
+			_, err := Parse([]byte(tt.data), handheldModules, nil)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
 			}

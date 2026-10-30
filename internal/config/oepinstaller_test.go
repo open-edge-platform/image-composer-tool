@@ -6,7 +6,12 @@ import (
 	"testing"
 )
 
-const testOEPSHA256 = "3f1c0e5a9b7d2c4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0de9"
+const (
+	testOEPSHA256     = "3f1c0e5a9b7d2c4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0de9"
+	testOEPSBOMSHA256 = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	testOEPSBOMURL    = "https://raw.githubusercontent.com/example/oep-installer-cli/0123abc/rendered/" +
+		"sbom-handheld-blueprint-ubuntu-24.04.5.yaml"
+)
 
 const oepInstallerTemplateYAML = `image:
   name: handheld
@@ -23,6 +28,8 @@ systemConfig:
   oepInstaller:
     url: https://raw.githubusercontent.com/example/oep-installer-cli/0123abc/rendered/openedge-cli
     sha256: ` + testOEPSHA256 + `
+    sbomUrl: ` + testOEPSBOMURL + `
+    sbomSha256: ` + testOEPSBOMSHA256 + `
     modules:
       - handheld_multi_modal
     user: edge
@@ -31,10 +38,12 @@ systemConfig:
 
 func validOEPInstaller() OEPInstallerConfig {
 	return OEPInstallerConfig{
-		URL:     "https://raw.githubusercontent.com/example/oep-installer-cli/0123abc/rendered/openedge-cli",
-		SHA256:  testOEPSHA256,
-		Modules: []string{"handheld_multi_modal"},
-		User:    "edge",
+		URL:        "https://raw.githubusercontent.com/example/oep-installer-cli/0123abc/rendered/openedge-cli",
+		SHA256:     testOEPSHA256,
+		SBOMURL:    testOEPSBOMURL,
+		SBOMSHA256: testOEPSBOMSHA256,
+		Modules:    []string{"handheld_multi_modal"},
+		User:       "edge",
 	}
 }
 
@@ -45,7 +54,8 @@ func TestParseOEPInstaller(t *testing.T) {
 		t.Fatalf("parseYAMLTemplate: %v", err)
 	}
 	o := tmpl.SystemConfig.OEPInstaller
-	if o.SHA256 != testOEPSHA256 || o.User != "edge" || !slices.Equal(o.Modules, []string{"handheld_multi_modal"}) ||
+	if o.SHA256 != testOEPSHA256 || o.SBOMURL != testOEPSBOMURL || o.SBOMSHA256 != testOEPSBOMSHA256 ||
+		o.User != "edge" || !slices.Equal(o.Modules, []string{"handheld_multi_modal"}) ||
 		!slices.Equal(o.Args, []string{"--gpu"}) || !strings.HasSuffix(o.URL, "/rendered/openedge-cli") {
 		t.Errorf("oepInstaller not parsed: %+v", o)
 	}
@@ -60,6 +70,8 @@ func TestOEPInstallerSchemaRejects(t *testing.T) {
 		{"module with a space", "- handheld_multi_modal", "- \"handheld multi\""},
 		{"arg with a space", `args: ["--gpu"]`, `args: ["--gpu --npu"]`},
 		{"missing user", "    user: edge\n", ""},
+		{"missing sbomUrl", "    sbomUrl: " + testOEPSBOMURL + "\n", ""},
+		{"short sbomSha256", "sbomSha256: " + testOEPSBOMSHA256, "sbomSha256: abc"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -99,6 +111,11 @@ func TestValidateOEPInstaller(t *testing.T) {
 		{"github release download", "ubuntu", func(o *OEPInstallerConfig) {
 			o.URL = "https://github.com/intel-sandbox/oep-installer-cli/releases/download/v2026.3.0/openedge-cli"
 		}, ""},
+		{"missing sbomUrl", "ubuntu", func(o *OEPInstallerConfig) { o.SBOMURL = "" }, "sbomUrl is required"},
+		{"sbomUrl github page", "ubuntu", func(o *OEPInstallerConfig) {
+			o.SBOMURL = "https://github.com/intel-sandbox/oep-installer-cli/blob/main/rendered/sbom-handheld.yaml"
+		}, "systemConfig.oepInstaller.sbomUrl"},
+		{"bad sbomSha256", "ubuntu", func(o *OEPInstallerConfig) { o.SBOMSHA256 = "xyz" }, "sbomSha256"},
 		{"bad sha256", "ubuntu", func(o *OEPInstallerConfig) { o.SHA256 = "xyz" }, "sha256"},
 		{"no modules", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = nil }, "at least one"},
 		{"duplicate module", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = []string{"a", "a"} }, "duplicate"},

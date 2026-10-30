@@ -21,7 +21,9 @@ const schemaName = "oep-installer-sbom.schema.json"
 type document struct {
 	SchemaVersion     string   `yaml:"schema-version"`
 	CLIVersion        string   `yaml:"cli-version"`
+	CLIURL            string   `yaml:"cli-url"`
 	ModuleList        []string `yaml:"module-list"`
+	Arguments         []string `yaml:"arguments"`
 	PkgList           []string `yaml:"pkg-list"`
 	KernelCmdline     []string `yaml:"kernel-cmdline"`
 	RepoName          string   `yaml:"repo-name"`
@@ -36,10 +38,11 @@ type document struct {
 }
 
 // Parse validates `openedge-cli list --sbom` output produced for modules and
-// returns its contents. Every document must match the embedded schema, the
-// first document must be the only header, and the header's module-list must
-// equal modules.
-func Parse(data []byte, modules []string) (*Output, error) {
+// args and returns its contents. Every document must match the embedded
+// schema, the first document must be the only header, the header's
+// module-list must equal modules, and its arguments, when present, must equal
+// args.
+func Parse(data []byte, modules, args []string) (*Output, error) {
 	docs, err := decodeDocuments(data)
 	if err != nil {
 		return nil, err
@@ -52,7 +55,12 @@ func Parse(data []byte, modules []string) (*Output, error) {
 		return nil, fmt.Errorf("openedge-cli output: module-list %v does not match the requested modules %v",
 			header.ModuleList, modules)
 	}
-	out := &Output{CLIVersion: header.CLIVersion, Modules: header.ModuleList}
+	if header.Arguments != nil && !slices.Equal(header.Arguments, args) {
+		return nil, fmt.Errorf("openedge-cli output: arguments %v do not match the requested arguments %v",
+			header.Arguments, args)
+	}
+	out := &Output{CLIVersion: header.CLIVersion, CLIURL: header.CLIURL, Modules: header.ModuleList,
+		Arguments: header.Arguments}
 	for i, doc := range docs[1:] {
 		if err := out.add(doc); err != nil {
 			return nil, fmt.Errorf("openedge-cli output document %d: %w", i+1, err)

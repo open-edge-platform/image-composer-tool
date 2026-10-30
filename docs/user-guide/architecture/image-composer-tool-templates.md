@@ -1320,19 +1320,23 @@ Check the result on a deployed system with `apt-cache policy <package>` and
 > integration is complete.
 
 Composes OEP Installer (`openedge-cli`) profiles or modules into the image
-(`ubuntu` targets). At build time ICT runs `openedge-cli list --sbom` for the
-modules and installs the Debian packages and apt repositories it reports; on
-first boot `openedge-cli install` completes the remaining installation. The
-interface is described in the
+(`ubuntu` targets). The OEP Installer publishes, next to the CLI, the
+`openedge-cli list --sbom` output for each supported configuration, generated
+on a host running the target OS and kernel. At build time ICT installs the
+Debian packages and apt repositories that output lists; on first boot
+`openedge-cli install` completes the remaining installation. The interface is
+described in the
 [OEP Installer interface specification](../../architecture-decision-record/oep-installer-sbom-interface.md).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `url` | string | Yes | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
 | `sha256` | string | Yes | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
-| `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install` |
+| `sbomUrl` | string | Yes | `https://` URL of the published `list --sbom` output for `modules`, pinned to a commit or tag. The same GitHub rule as for `url` applies |
+| `sbomSha256` | string | Yes | Hex SHA-256 digest of the file at `sbomUrl` |
+| `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install`. Must equal the `module-list` of the `sbomUrl` output |
 | `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
-| `args` | string[] | No | Extra arguments (for example `--k3s`) passed to both the build-time `openedge-cli list --sbom` query and the first-boot `openedge-cli install`, since some profiles choose modules based on them (no spaces, quotes, `$` or `;`) |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must be the arguments the `sbomUrl` output was generated with, since some profiles choose modules based on them (no spaces, quotes, `$` or `;`) |
 
 A child template's `oepInstaller` section replaces an inherited one as a
 whole. The section is rejected in overlay mode.
@@ -1343,12 +1347,18 @@ systemConfig:
     - name: edge
   oepInstaller:
     url: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace
-    sha256: <sha256 of the file>
+    sha256: <sha256 of the CLI>
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/sbom-handheld-blueprint-ubuntu-24.04.5.yaml
+    sbomSha256: <sha256 of the output file>
     modules:
       - handheld_blueprint
-      - handheld_multi_modal
     user: edge
+    args: ["--edgepack"]
 ```
+
+The output file pins the kernel of the host it was generated on (for example
+`linux-headers-7.0.0-38-generic`), so the template must install that exact
+kernel.
 
 ## Package Repositories
 
