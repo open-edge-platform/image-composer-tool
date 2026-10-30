@@ -70,6 +70,11 @@ publishes the output:
 - **Regenerated** whenever the CLI, the modules or arguments, or the
   reference host's kernel change.
 
+Configurations cover **blueprints**, the platform ingredients an image is
+built for. Samples that run on top of a blueprint are not part of an ICT
+image: users install them after first boot with `openedge-cli install
+<sample>`. Samples usually add no package requirements of their own.
+
 The first published files cover the three Federal and Aerospace blueprints,
 Handheld, Uncrewed Aerial Vehicle (UAV), and Mission Decision Support,
 generated on a host running the Journey 1 kernel.
@@ -330,7 +335,9 @@ openedge-cli install <module> [<module>...] [<argument>...]
 ```
 
 The modules and arguments are the template's `modules` and `args`, which
-match the output file's header (A.5).
+match the output file's header (A.5). Once `setup` has run, the user can
+install samples on top of the blueprint with `openedge-cli install
+<sample>`.
 
 - **Sudo.** ICT gives the user passwordless sudo only while the unit runs,
   so `ensure_sudo` takes its `sudo -n` path. The grant is a separate
