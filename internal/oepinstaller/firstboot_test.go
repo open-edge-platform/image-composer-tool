@@ -109,3 +109,26 @@ func TestNextScriptOrder(t *testing.T) {
 		t.Errorf("nextScriptOrder = %d, want 31", got)
 	}
 }
+
+// TestAddFirstBootRelativeWorkDir is not parallel: it changes the working
+// directory. The configured temp directory is relative, and ICT only copies
+// generated files from absolute paths.
+func TestAddFirstBootRelativeWorkDir(t *testing.T) {
+	tmpl := firstBootTemplate(t)
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("work", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddFirstBoot(tmpl, []byte("#!/bin/bash\n"), "work"); err != nil {
+		t.Fatalf("AddFirstBoot with a relative work directory: %v", err)
+	}
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		if !filepath.IsAbs(f.Local) {
+			t.Errorf("additional file %s has a relative source %q", f.Final, f.Local)
+		}
+	}
+	scripts := tmpl.SystemConfig.Provisioning.Scripts
+	if got := scripts[len(scripts)-1]; !filepath.IsAbs(got.Local) {
+		t.Errorf("first-boot script has a relative source %q", got.Local)
+	}
+}
