@@ -316,3 +316,29 @@ describe('AdvancedPage Target step compose failure', () => {
     expect(nextButton().disabled).toBe(true)
   })
 })
+
+describe('AdvancedPage Edge Pack fetch failure', () => {
+  it('retries a failed Edge Pack fetch instead of treating it as no Edge Pack', async () => {
+    mockApi.listPackageRepos.mockResolvedValue({
+      repos: [{ id: 'intel-eci', displayName: 'Intel ECI', url: 'https://example.com', enabledByDefault: false }],
+    })
+    const pack: EdgePack = {
+      id: 'edge-pack',
+      displayName: 'Edge Pack',
+      repo: 'intel-eci',
+      repoAvailable: true,
+      baseRuntimes: [{ id: 'standard', displayName: 'Standard', available: true, package: { name: 'base-standard' } }],
+      domains: [{ id: 'media', displayName: 'Media', available: true, packages: [{ name: 'media-ffmpeg' }] }],
+    }
+    // The page's first fetch fails; everything after it, the step's own included, succeeds.
+    mockApi.getEdgePack.mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(pack)
+    useStore.setState({ addedPackages: [{ name: 'media-ffmpeg', version: '', repo: 'intel-eci' }], enabledRepos: ['intel-eci'] })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    await waitFor(() => expect(nextButton().disabled).toBe(false))
+    fireEvent.click(nextButton())
+    await screen.findByText(/which will not build/)
+
+    fireEvent.click(nextButton())
+    await waitFor(() => expect(pill('Packages').className).toContain('bg-red-500'))
+  })
+})

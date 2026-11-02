@@ -274,8 +274,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
   }, [active, complete, composeReq])
 
-  // Fetched once per OS. A failed fetch reads as "no Edge Pack", the same way
-  // the Packages step degrades, so it never raises a false issue.
+  // Fetched once per OS. A failed fetch stores nothing, so it is told apart
+  // from an OS with no Edge Pack and retried on the next step change — entering
+  // Packages included, where the step fetches its own copy and may show the
+  // inline warning. Until one succeeds no issue is raised.
   const os = selection.os
   useEffect(() => {
     if (!active || !os || edgePack?.os === os) return
@@ -283,11 +285,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     api
       .getEdgePack(os)
       .then((pack) => { if (!cancelled) setEdgePack({ os, pack }) })
-      .catch(() => { if (!cancelled) setEdgePack({ os, pack: null }) })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [active, os, edgePack?.os])
+  }, [active, os, edgePack?.os, step])
 
   // Domain packages selected with no base runtime beneath them will not build,
   // which is what the Edge Packs tab warns about inline. Derived here from the
