@@ -44,6 +44,12 @@ func AddFirstBoot(t *config.ImageTemplate, cli []byte, workDir string) error {
 	if err != nil {
 		return err
 	}
+	// ICT copies generated files into the image from absolute paths; the
+	// configured temp directory is relative to the working directory.
+	absDir, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", workDir, err)
+	}
 	files := []struct {
 		name, final string
 		data        []byte
@@ -54,7 +60,7 @@ func AddFirstBoot(t *config.ImageTemplate, cli []byte, workDir string) error {
 	}
 	locals := make([]string, len(files))
 	for i, f := range files {
-		locals[i] = filepath.Join(workDir, f.name)
+		locals[i] = filepath.Join(absDir, f.name)
 		if err := os.WriteFile(locals[i], f.data, 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", f.name, err)
 		}
