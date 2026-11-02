@@ -55,8 +55,10 @@ func TestApply(t *testing.T) {
 		t.Fatalf("repositories = %+v", repos)
 	}
 	ppa, edge := repos[1], repos[2]
-	if ppa.ListFile != "/etc/apt/sources.list.d/kobuk-ppa.list" || ppa.Codename != "noble" || ppa.Component != "main" ||
-		ppa.Priority != 0 || ppa.Preferences != "" {
+	// The fixture's apt-source line ends the URI with "/"; ICT appends "/dists/...".
+	if ppa.URL != "https://ppa.example.com/kobuk-team/intel-graphics/ubuntu/20260830T100000Z" ||
+		ppa.ListFile != "/etc/apt/sources.list.d/kobuk-ppa.list" || ppa.Codename != "noble" ||
+		ppa.Component != "main" || ppa.Priority != 0 || ppa.Preferences != "" {
 		t.Errorf("PPA repository = %+v", ppa)
 	}
 	if edge.URL != "http://edge.example.com/edgepack-test" || edge.Component != "unstable" || edge.Priority != 1001 ||
