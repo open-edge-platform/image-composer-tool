@@ -16,14 +16,33 @@ interface HelpMenuProps {
   active: boolean
 }
 
+const productName = 'Image Composer Tool'
+
 // The value an unstamped development build reports for commit and buildDate.
 const unstamped = 'unknown'
 
-// buildLine joins the commit and build date for display, leaving out whichever
-// the build did not stamp; null when it stamped neither.
-export function buildLine(v: VersionInfo): string | null {
-  const parts = [v.commit, v.buildDate].filter((p) => p && p !== unstamped)
-  return parts.length > 0 ? `Build ${parts.join(' · ')}` : null
+// stamped lists the commit and date the build stamped, leaving out whichever it
+// did not. Neither is ever labelled "build": in this app a build is an image.
+function stamped(v: VersionInfo): string[] {
+  return [v.commit, v.buildDate].filter((p) => p && p !== unstamped)
+}
+
+// versionLabel is the one line the menu shows, e.g. "Image Composer Tool
+// v2026.3-rc1.1". Release tags carry the repo's "ict-" prefix, which only
+// repeats the product name, so it is dropped. A build stamped with neither a
+// commit nor a date never came from a release, so it says so rather than
+// passing its placeholder version off as one.
+export function versionLabel(v: VersionInfo): string {
+  if (stamped(v).length === 0) return `${productName} (development build)`
+  return `${productName} v${v.version.replace(/^ict-/i, '').replace(/^v/i, '')}`
+}
+
+// versionReport is what a click copies, for pasting into a bug report:
+// "Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)".
+export function versionReport(v: VersionInfo): string {
+  const extra = stamped(v)
+  const label = extra.length === 0 ? `${productName} v${v.version} (development build)` : versionLabel(v)
+  return extra.length > 0 ? `${label} (${extra.join(', ')})` : label
 }
 
 // HelpMenu is the "?" button at the right of the nav bar. It is a disclosure (a
@@ -95,7 +114,7 @@ export function HelpMenu({ active }: HelpMenuProps) {
         <nav
           id={listId}
           aria-label="Help"
-          className="absolute right-0 z-40 mt-2 w-56 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+          className="absolute right-0 z-40 mt-2 w-64 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           <ul>
             {links.map((link) => (
@@ -110,16 +129,61 @@ export function HelpMenu({ active }: HelpMenuProps) {
               </li>
             ))}
           </ul>
-          {version && (
-            // Lets a user of a hosted instance tell, and report, exactly which
-            // release they are on.
-            <div className="mt-1 border-t border-slate-100 px-4 pb-1 pt-2 text-xs text-slate-500">
-              <p>Version {version.version}</p>
-              {buildLine(version) && <p>{buildLine(version)}</p>}
-            </div>
-          )}
+          {version && <VersionLine version={version} />}
         </nav>
       )}
+    </div>
+  )
+}
+
+// VersionLine lets a user of a hosted instance tell, and report, exactly which
+// release they are on: one quiet line, with the commit and date on hover and the
+// whole report copied on click.
+function VersionLine({ version }: { version: VersionInfo }) {
+  const [copied, setCopied] = useState(false)
+  const report = versionReport(version)
+  const details = stamped(version).join(' · ')
+  const lineClass = 'block w-full truncate px-4 pb-1 pt-2 text-left text-xs text-slate-500'
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  // The Clipboard API exists only in a secure context (HTTPS or localhost). On a
+  // plain-HTTP address the line is still selectable in one click instead.
+  if (!navigator.clipboard) {
+    return (
+      <div className="mt-1 border-t border-slate-100">
+        <p className={lineClass + ' select-all'} title={details || undefined}>
+          {versionLabel(version)}
+        </p>
+      </div>
+    )
+  }
+
+  const copy = () => {
+    navigator.clipboard.writeText(report).then(
+      () => setCopied(true),
+      () => {},
+    )
+  }
+
+  return (
+    <div className="mt-1 border-t border-slate-100">
+      <button
+        type="button"
+        onClick={copy}
+        title={[details, 'Click to copy'].filter(Boolean).join(' · ')}
+        aria-label={`${versionLabel(version)}. Copy version details`}
+        className={lineClass + ' hover:text-[#00285a]'}
+      >
+        {copied ? 'Copied' : versionLabel(version)}
+      </button>
+      <span aria-live="polite" className="sr-only">
+        {copied ? 'Version details copied' : ''}
+      </span>
     </div>
   )
 }
