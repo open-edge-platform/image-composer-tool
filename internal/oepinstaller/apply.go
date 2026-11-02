@@ -191,7 +191,7 @@ func toPackageRepository(r Repository) config.PackageRepository {
 	}
 	return config.PackageRepository{
 		Codename:        r.Suite,
-		URL:             r.URI,
+		URL:             strings.TrimRight(r.URI, "/"), // ICT appends "/dists/...", so a trailing "/" would double
 		Component:       r.Component,
 		PKey:            r.GPGKey,
 		Priority:        originPriority(r),
