@@ -1,20 +1,29 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
 import { isActiveStatus, type BuildStatus } from './api/types'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
 import { AdvancedPage } from './components/AdvancedPage'
 import { BuildImagePage } from './components/BuildImagePage'
+import { HelpMenu } from './components/HelpMenu'
+import { UserGuidePage } from './components/UserGuidePage'
+import { guideTopicFromHash } from './guide/topics'
 
 type LoadState = 'loading' | 'ready' | 'error'
-type View = 'basic' | 'advanced' | 'builds'
+type View = 'basic' | 'advanced' | 'builds' | 'guide'
+type Tab = Exclude<View, 'guide'>
 
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
   const [state, setState] = useState<LoadState>('loading')
   const [error, setError] = useState<string | null>(null)
 
-  const [view, setView] = useState<View>('basic')
+  const [view, setView] = useState<View>(() =>
+    guideTopicFromHash(window.location.hash) !== null ? 'guide' : 'basic',
+  )
+  const [guideTopic, setGuideTopic] = useState(() => guideTopicFromHash(window.location.hash) ?? '')
+  // The tab to return to when Back leaves the guide.
+  const lastTab = useRef<Tab>('basic')
   const [buildId, setBuildId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
@@ -36,6 +45,32 @@ export default function App() {
   }, [setManifest])
 
   useEffect(load, [load])
+
+  // The address alone opens the guide: every way in is a #guide/ link. Leaving
+  // it for a tab adds a history entry without the guide address, so Back
+  // returns to the guide page that was open, and Back out of the guide returns
+  // to the tab it was opened from.
+  useEffect(() => {
+    if (view === 'guide') return
+    lastTab.current = view
+    if (guideTopicFromHash(window.location.hash) !== null) {
+      window.history.pushState(null, '', window.location.pathname + window.location.search)
+    }
+  }, [view])
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const topic = guideTopicFromHash(window.location.hash)
+      if (topic !== null) {
+        setGuideTopic(topic)
+        setView('guide')
+      } else {
+        setView((v) => (v === 'guide' ? lastTab.current : v))
+      }
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   // On load, adopt any in-flight build from the server so the UI reflects it
   // after a refresh: disables the Compose button and shows the nav indicator
@@ -95,7 +130,7 @@ export default function App() {
     }
   }, [])
 
-  const tabs: { id: View; label: string; enabled: boolean }[] = [
+  const tabs: { id: Tab; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
     { id: 'advanced', label: 'Advanced', enabled: true },
     { id: 'builds', label: 'Compose Image', enabled: true },
@@ -127,16 +162,21 @@ export default function App() {
           ))}
         </div>
         {/* Build status indicator — right side of nav */}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
           <BuildIndicator status={buildStatus} onClick={() => setView('builds')} />
+          <HelpMenu active={view === 'guide'} />
         </div>
       </nav>
 
-      {state === 'loading' && (
+      {/* The guide needs no server data, so it stays readable even when the
+          configuration failed to load. */}
+      {view === 'guide' && <UserGuidePage topicId={guideTopic} />}
+
+      {view !== 'guide' && state === 'loading' && (
         <div className="m-6 text-sm text-slate-500">Loading configuration…</div>
       )}
 
-      {state === 'error' && (
+      {view !== 'guide' && state === 'error' && (
         <div className="m-6 rounded bg-red-50 p-4 text-sm text-red-700">
           <p>Failed to load configuration: {error}</p>
           <p className="mt-1 text-red-600">Is the API server running on :8080?</p>
