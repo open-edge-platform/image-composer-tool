@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { guideHref, guideTopics } from '../guide/topics'
 
 interface UserGuidePageProps {
@@ -16,9 +16,16 @@ export function UserGuidePage({ topicId }: UserGuidePageProps) {
   const prev = guideTopics[index - 1]
   const next = guideTopics[index + 1]
 
-  // A new topic starts at its top, not wherever the previous one was scrolled to.
+  const headingRef = useRef<HTMLHeadingElement>(null)
+
+  // A new topic starts at its top, not wherever the previous one was scrolled
+  // to, and keyboard focus moves to its heading: otherwise it stays on the link
+  // that was activated (or is lost when that link disappears, as Next does on
+  // the last topic), leaving a keyboard or screen-reader user behind the new
+  // content with no cue that the page changed.
   useEffect(() => {
     window.scrollTo?.(0, 0)
+    headingRef.current?.focus({ preventScroll: true })
   }, [topic.id])
 
   return (
@@ -57,7 +64,9 @@ export function UserGuidePage({ topicId }: UserGuidePageProps) {
         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
           Page {index + 1} of {guideTopics.length}
         </p>
-        <h1 className="mb-1 text-2xl font-bold text-[#00285a]">{topic.title}</h1>
+        <h1 ref={headingRef} tabIndex={-1} className="mb-1 text-2xl font-bold text-[#00285a] outline-none">
+          {topic.title}
+        </h1>
         <p className="mb-6 text-sm text-slate-500">{topic.summary}</p>
         {topic.body}
 

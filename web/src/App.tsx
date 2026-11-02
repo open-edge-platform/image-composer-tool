@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from './api/client'
 import { isActiveStatus, type BuildStatus } from './api/types'
 import { useStore } from './store'
@@ -13,6 +13,14 @@ type LoadState = 'loading' | 'ready' | 'error'
 type View = 'basic' | 'advanced' | 'builds' | 'guide'
 type Tab = Exclude<View, 'guide'>
 
+// The tab a history entry was showing, kept in that entry's history.state so
+// Back can restore it. Entries without one (the page's first, before any tab
+// was recorded) fall back to Basic, the tab the app opens on.
+const tabOfEntry = (state: unknown): Tab => {
+  const tab = (state as { tab?: unknown } | null)?.tab
+  return tab === 'advanced' || tab === 'builds' ? tab : 'basic'
+}
+
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
   const [state, setState] = useState<LoadState>('loading')
@@ -22,8 +30,6 @@ export default function App() {
     guideTopicFromHash(window.location.hash) !== null ? 'guide' : 'basic',
   )
   const [guideTopic, setGuideTopic] = useState(() => guideTopicFromHash(window.location.hash) ?? '')
-  // The tab to return to when Back leaves the guide.
-  const lastTab = useRef<Tab>('basic')
   const [buildId, setBuildId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
@@ -46,15 +52,17 @@ export default function App() {
 
   useEffect(load, [load])
 
-  // The address alone opens the guide: every way in is a #guide/ link. Leaving
-  // it for a tab adds a history entry without the guide address, so Back
-  // returns to the guide page that was open, and Back out of the guide returns
-  // to the tab it was opened from.
+  // The address alone opens the guide: every way in is a #guide/ link. Each
+  // history entry outside the guide records the tab it shows, so Back always
+  // restores the tab of the entry it lands on — not merely the tab selected
+  // last. Leaving the guide for a tab adds a new entry, so Back from there
+  // returns to the guide page that was open.
   useEffect(() => {
     if (view === 'guide') return
-    lastTab.current = view
     if (guideTopicFromHash(window.location.hash) !== null) {
-      window.history.pushState(null, '', window.location.pathname + window.location.search)
+      window.history.pushState({ tab: view }, '', window.location.pathname + window.location.search)
+    } else {
+      window.history.replaceState({ ...(window.history.state ?? {}), tab: view }, '')
     }
   }, [view])
 
@@ -65,7 +73,7 @@ export default function App() {
         setGuideTopic(topic)
         setView('guide')
       } else {
-        setView((v) => (v === 'guide' ? lastTab.current : v))
+        setView((v) => (v === 'guide' ? tabOfEntry(window.history.state) : v))
       }
     }
     window.addEventListener('hashchange', onHashChange)

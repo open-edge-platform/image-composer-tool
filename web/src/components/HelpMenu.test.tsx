@@ -143,6 +143,18 @@ describe('UserGuidePage', () => {
   })
 })
 
+describe('UserGuidePage focus', () => {
+  it('moves focus to the heading when it opens and when the topic changes', () => {
+    const { rerender } = render(<UserGuidePage topicId={guideTopics[0].id} />)
+    expect(document.activeElement).toBe(pageTitle(guideTopics[0].title))
+
+    rerender(<UserGuidePage topicId={guideTopics[guideTopics.length - 1].id} />)
+    const last = pageTitle(guideTopics[guideTopics.length - 1].title)
+    expect(document.activeElement).toBe(last)
+    expect(last.getAttribute('tabindex')).toBe('-1')
+  })
+})
+
 describe('guideTopicFromHash', () => {
   it('reads the topic from a guide address and rejects anything else', () => {
     expect(guideTopicFromHash(guideHref('basic'))).toBe('basic')
