@@ -67,38 +67,38 @@ describe('HelpMenu version', () => {
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
   })
 
-  it('formats one line, dropping the tag prefix and never saying "build"', () => {
-    expect(versionLabel(release)).toBe('Image Composer Tool v2026.3-rc1.1')
-    expect(versionLabel({ ...release, version: 'v1.2.0' })).toBe('Image Composer Tool v1.2.0')
+  it('formats the badge, dropping the tag prefix', () => {
+    expect(versionLabel(release)).toBe('v2026.3-rc1.1')
+    expect(versionLabel({ ...release, version: 'v1.2.0' })).toBe('v1.2.0')
     expect(versionReport(release)).toBe('Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)')
   })
 
   it('labels an unstamped build as a development build', () => {
-    expect(versionLabel(dev)).toBe('Image Composer Tool (development build)')
+    expect(versionLabel(dev)).toBe('Development build')
     expect(versionReport(dev)).toBe('Image Composer Tool v0.1.0 (development build)')
     expect(versionReport({ ...dev, commit: 'a1b2c3d' })).toBe('Image Composer Tool v0.1.0 (a1b2c3d)')
   })
 
-  it('shows one line under the links, with details on hover, and copies the report', async () => {
+  it('shows a version footer with details on hover, and copies the report', async () => {
     render(<HelpMenu active={false} />)
     fireEvent.click(screen.getByRole('button', { name: 'Help' }))
-    const line = await screen.findByRole('button', { name: /^Image Composer Tool v2026\.3-rc1\.1\./ })
-    expect(line.textContent).toBe('Image Composer Tool v2026.3-rc1.1')
-    expect(line.getAttribute('title')).toBe('a1b2c3d · 2026-11-02 · Click to copy')
-    expect(screen.queryByText(/Build/)).toBeNull()
+    const badge = await screen.findByText('v2026.3-rc1.1')
+    expect(badge.getAttribute('title')).toBe('a1b2c3d · 2026-11-02')
+    expect(screen.getByText('Version')).toBeTruthy()
 
-    await act(async () => fireEvent.click(line))
+    const copy = screen.getByRole('button', { name: 'Copy version details' })
+    await act(async () => fireEvent.click(copy))
     expect(writeText).toHaveBeenCalledWith('Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)')
-    expect(line.textContent).toBe('Copied')
+    expect(copy.textContent).toBe('Copied')
     expect(screen.getByText('Version details copied')).toBeTruthy()
   })
 
-  it('falls back to selectable text where the clipboard is unavailable', async () => {
+  it('offers no copy button where the clipboard is unavailable', async () => {
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
     render(<HelpMenu active={false} />)
     fireEvent.click(screen.getByRole('button', { name: 'Help' }))
-    const text = await screen.findByText('Image Composer Tool v2026.3-rc1.1')
-    expect(text.tagName).toBe('P')
+    expect(await screen.findByText('v2026.3-rc1.1')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Copy version details' })).toBeNull()
   })
 
   it('still offers the guide when the version cannot be fetched', async () => {
@@ -107,7 +107,7 @@ describe('HelpMenu version', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Help' }))
     await act(async () => {})
     expect(screen.getByRole('link', { name: 'User Guide' })).toBeTruthy()
-    expect(screen.queryByText(/Image Composer Tool/)).toBeNull()
+    expect(screen.queryByText('Version')).toBeNull()
   })
 })
 

@@ -637,7 +637,7 @@ function StatusBadge({ status }: { status: Status }) {
   return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls[status]}`}>{label[status]}</span>
 }
 
-function CopyIcon({ className }: { className?: string }) {
+export function CopyIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className={className ?? 'h-4 w-4'} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <rect x="9" y="9" width="13" height="13" rx="2" />
