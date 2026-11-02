@@ -7,6 +7,7 @@ import type {
   ComposeResponse,
   CredentialInput,
   CredentialRequirement,
+  EdgePack,
   NewUserInput,
 } from '../api/types'
 import { Select } from './Select'
@@ -18,6 +19,8 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { useBaseLock } from '../lib/baseLock'
+import { strandedPackages } from '../lib/edgepack'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -82,9 +85,17 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Accounts the user asked to add on top of the template's own, held for the
   // same reason credentials are: each entry carries a password.
   const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
-  // Whether the Packages step last reported a selection that will not build.
-  // Kept here because that step unmounts once the wizard moves past it.
-  const [packagesHaveIssues, setPackagesHaveIssues] = useState(false)
+  // The matched template's own package list from the last successful compose,
+  // null until one lands for this selection. Held for the same reason
+  // lastRequirements is: the effect clears `composed` before each refetch, and
+  // the Packages check below must keep seeing what the template ships while a
+  // recompose is in flight.
+  const [lastBasePackages, setLastBasePackages] = useState<string[] | null>(null)
+  // The Edge Pack for the selected OS, for the same check. Fetched here rather
+  // than taken from the Packages step, which unmounts once the wizard moves on
+  // and starts each visit with nothing loaded. Keyed by OS so a stale pack is
+  // never read against a different target.
+  const [edgePack, setEdgePack] = useState<{ os: string; pack: EdgePack | null } | null>(null)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -160,7 +171,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setCredentials([])
     setNewUsers([])
     setLastRequirements([])
-    setPackagesHaveIssues(false)
+    setLastBasePackages(null)
   }, [selection])
 
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
@@ -245,6 +256,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setComposed(r)
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
+          setLastBasePackages(r.basePackages ?? [])
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
           // *Edited flags in the store). The disk block is read out of the
@@ -261,6 +273,31 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       cancelled = true
     }
   }, [active, complete, composeReq])
+
+  // Fetched once per OS. A failed fetch reads as "no Edge Pack", the same way
+  // the Packages step degrades, so it never raises a false issue.
+  const os = selection.os
+  useEffect(() => {
+    if (!active || !os || edgePack?.os === os) return
+    let cancelled = false
+    api
+      .getEdgePack(os)
+      .then((pack) => { if (!cancelled) setEdgePack({ os, pack }) })
+      .catch(() => { if (!cancelled) setEdgePack({ os, pack: null }) })
+    return () => {
+      cancelled = true
+    }
+  }, [active, os, edgePack?.os])
+
+  // Domain packages selected with no base runtime beneath them will not build,
+  // which is what the Edge Packs tab warns about inline. Derived here from the
+  // store rather than reported by the Packages step, so it stays correct while
+  // that step is unmounted or still loading. Only `locked` is read off the
+  // base lock, which needs no repos and makes no requests.
+  const pack = edgePack?.os === os ? edgePack.pack : null
+  const baseLock = useBaseLock(os, null, lastBasePackages ?? [])
+  const packagesHaveIssues =
+    !!pack && lastBasePackages !== null && strandedPackages(pack, addedPackages, baseLock).length > 0
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
@@ -413,6 +450,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           (step === 1 ? 'max-w-6xl' : step === 2 ? 'max-w-5xl' : 'max-w-3xl')
         }
       >
+        {/* A failed resolve leaves Image Name unseeded, which locks Next behind
+            what reads as an unfilled field. Say why, rather than leaving the
+            error on a Review step the user cannot reach. */}
+        {step === 0 && error && (
+          <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
+        )}
         {step === 0 && (
           <TargetStep
             opts={opts}
@@ -428,10 +471,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             os={selection.os}
             active={active}
             basePackages={composed?.basePackages ?? []}
-            // Ignored while a compose is in flight: basePackages is empty
-            // then, so a domain package resting on the template's own runtime
-            // would read as stranded. The step reports again once it lands.
-            onIssuesChange={composed ? setPackagesHaveIssues : undefined}
           />
         )}
 

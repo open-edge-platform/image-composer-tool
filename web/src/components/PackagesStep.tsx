@@ -8,7 +8,7 @@ import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
-import { strandedPackages, templateLockedRepos } from '../lib/edgepack'
+import { templateLockedRepos } from '../lib/edgepack'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -21,11 +21,6 @@ interface PackagesStepProps {
   // The matched template's own package list (ComposeResponse.basePackages),
   // fetched by AdvancedPage's compose call. Empty until that call resolves.
   basePackages: string[]
-  // Told whether the current selection has a problem that will stop it
-  // building — today, Edge Pack packages selected with no base runtime beneath
-  // them. AdvancedPage holds on to the last answer to colour the step
-  // indicator, since this step unmounts once the wizard moves on.
-  onIssuesChange?: (hasIssues: boolean) => void
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -50,7 +45,7 @@ const EDGE_PACK_RETRY_LIMIT = 24
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
 // running list of added packages.
-export function PackagesStep({ os, active, basePackages, onIssuesChange }: PackagesStepProps) {
+export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   const [repos, setRepos] = useState<PackageRepo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // undefined while in flight, null once it is known there is no Edge Pack to
@@ -65,7 +60,6 @@ export function PackagesStep({ os, active, basePackages, onIssuesChange }: Packa
   const [tab, setTab] = useState<TabID>('edge-pack')
   const manifest = useStore((s) => s.manifest)
   const enabledRepos = useStore((s) => s.enabledRepos)
-  const addedPackages = useStore((s) => s.addedPackages)
 
   useEffect(() => {
     if (!os) {
@@ -139,12 +133,6 @@ export function PackagesStep({ os, active, basePackages, onIssuesChange }: Packa
     .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id) || lockedRepoIds.has(r.id))
     .map((r) => r.id)
   const resolver = useVersionResolver(os, enabledRepoIds)
-
-  // The same check the Edge Packs tab warns about inline.
-  const hasIssues = !!edgePack && strandedPackages(edgePack, addedPackages, baseLock).length > 0
-  useEffect(() => {
-    onIssuesChange?.(hasIssues)
-  }, [hasIssues, onIssuesChange])
 
   return (
     <div>

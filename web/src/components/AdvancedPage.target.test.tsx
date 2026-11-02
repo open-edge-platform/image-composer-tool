@@ -248,3 +248,71 @@ describe('AdvancedPage Packages step issues during a recompose', () => {
     expect(pill('Packages').className).not.toContain('bg-red-500')
   })
 })
+
+describe('AdvancedPage Packages status survives the step unmounting', () => {
+  const pack: EdgePack = {
+    id: 'edge-pack',
+    displayName: 'Edge Pack',
+    repo: 'intel-eci',
+    repoAvailable: true,
+    baseRuntimes: [{ id: 'standard', displayName: 'Standard', available: true, package: { name: 'base-standard' } }],
+    domains: [{ id: 'media', displayName: 'Media', available: true, packages: [{ name: 'media-ffmpeg' }] }],
+  }
+  const media = { name: 'media-ffmpeg', version: '', repo: 'intel-eci' }
+  const runtime = { name: 'base-standard', version: '', repo: 'intel-eci' }
+  const never = () => new Promise<never>(() => {})
+
+  beforeEach(() => {
+    mockApi.listPackageRepos.mockResolvedValue({
+      repos: [{ id: 'intel-eci', displayName: 'Intel ECI', url: 'https://example.com', enabledByDefault: false }],
+    })
+  })
+
+  it('turns red for a runtime cleared while a recompose is in flight', async () => {
+    mockApi.getEdgePack.mockResolvedValue(pack)
+    // Only the first compose answers; every recompose after it stays in flight.
+    mockApi.compose
+      .mockImplementationOnce(async (req: ComposeRequest) => ({ ...composeResponse(req), basePackages: [] }))
+      .mockImplementation(never)
+    useStore.setState({ addedPackages: [runtime, media], enabledRepos: ['intel-eci'] })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    await waitFor(() => expect(nextButton().disabled).toBe(false))
+    fireEvent.click(nextButton())
+    await screen.findByText(/Media/)
+
+    // Start a recompose first, so the runtime is cleared while one is in flight.
+    useStore.setState({ enabledRepos: ['intel-eci', 'extra'] })
+    await waitFor(() => expect(mockApi.compose).toHaveBeenCalledTimes(2))
+    useStore.setState({ addedPackages: [media] })
+    fireEvent.click(nextButton())
+
+    expect(pill('Packages').className).toContain('bg-red-500')
+  })
+
+  it('stays red when the step is revisited and left before its Edge Pack reloads', async () => {
+    // The page's own fetch and the first visit answer; the revisit's never does.
+    mockApi.getEdgePack.mockResolvedValueOnce(pack).mockResolvedValueOnce(pack).mockImplementation(never)
+    useStore.setState({ addedPackages: [media], enabledRepos: ['intel-eci'] })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    await waitFor(() => expect(nextButton().disabled).toBe(false))
+    fireEvent.click(nextButton())
+    await screen.findByText(/which will not build/)
+    fireEvent.click(nextButton())
+    expect(pill('Packages').className).toContain('bg-red-500')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(nextButton())
+
+    expect(pill('Packages').className).toContain('bg-red-500')
+  })
+})
+
+describe('AdvancedPage Target step compose failure', () => {
+  it('shows the compose error on the Target step that it blocks', async () => {
+    mockApi.compose.mockRejectedValue(new Error('template not found'))
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+
+    expect(await screen.findByText('template not found')).toBeTruthy()
+    expect(nextButton().disabled).toBe(true)
+  })
+})
