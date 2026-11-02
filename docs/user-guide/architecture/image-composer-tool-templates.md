@@ -1134,7 +1134,9 @@ section is written after `configurations`, so build-time commands such as
 A command that reaches the network directly (`wget`, `curl`) resolves names
 through the build host's resolver: for the duration of `configurations`, ICT
 gives the chroot a temporary `/etc/resolv.conf` with the host's resolver, and
-removes it again before it sets up the image's own `/etc/resolv.conf`.
+removes it again before it sets up the image's own `/etc/resolv.conf`. A
+command that writes `/etc/resolv.conf` itself, or replaces it with a symlink,
+sets the image's resolver: ICT keeps what the command left.
 
 #### `systemConfig.proxy`
 

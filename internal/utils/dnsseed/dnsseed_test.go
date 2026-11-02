@@ -31,8 +31,8 @@ func newFixture(t *testing.T) string {
 	return root
 }
 
-// captureExec swaps in a recording executor that performs mkdir -p, cp and rm -f for
-// real (so tests can assert on the resulting tree) without needing sudo.
+// captureExec swaps in a recording executor that performs mkdir -p, cp, mv -f and
+// rm -f for real (so tests can assert on the resulting tree) without needing sudo.
 func captureExec(t *testing.T, cmds *[]string) {
 	t.Helper()
 	execFn = func(cmdStr string, _ bool, _ string, _ []string) (string, error) {
@@ -47,6 +47,8 @@ func captureExec(t *testing.T, cmds *[]string) {
 				return "", err
 			}
 			return "", os.WriteFile(fields[2], data, 0o644)
+		case strings.HasPrefix(cmdStr, "mv -f ") && len(fields) == 4:
+			return "", os.Rename(fields[2], fields[3])
 		case strings.HasPrefix(cmdStr, "rm -f ") && len(fields) == 3:
 			if err := os.Remove(fields[2]); err != nil && !os.IsNotExist(err) {
 				return "", err
@@ -56,10 +58,51 @@ func captureExec(t *testing.T, cmds *[]string) {
 	}
 }
 
-// TestSeedWhenResolvConfAbsent is the create-mode case that the PTL worker build hit:
-// mmdebstrap leaves no /etc/resolv.conf, so name resolution fails instantly. The seed
-// must create one, and restore must remove it so createResolvConfSymlink still sees
-// an absent file and nothing leaks into the shipped image.
+// failingExec runs commands for real except those whose prefix matches failOn, which
+// return an error. It lets each bail-out be exercised independently.
+func failingExec(t *testing.T, failOn string) {
+	t.Helper()
+	var cmds []string
+	captureExec(t, &cmds)
+	real := execFn
+	execFn = func(cmdStr string, sudo bool, chroot string, env []string) (string, error) {
+		if strings.HasPrefix(cmdStr, failOn) {
+			return "", os.ErrPermission
+		}
+		return real(cmdStr, sudo, chroot, env)
+	}
+}
+
+func mustRestore(t *testing.T, restore Restore) {
+	t.Helper()
+	if err := restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// leftoverTemps lists the hidden temp files a writeInto would leave in dir.
+func leftoverTemps(t *testing.T, dir string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".ict-resolv-*"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	return matches
+}
+
+// TestSeedWhenResolvConfAbsent is the create-mode case: mmdebstrap leaves no
+// /etc/resolv.conf, so name resolution fails instantly. The seed must create one,
+// and restore must remove it so createResolvConfSymlink still sees an absent file
+// and nothing leaks into the shipped image.
 func TestSeedWhenResolvConfAbsent(t *testing.T) {
 	root := newFixture(t)
 	var cmds []string
@@ -68,17 +111,13 @@ func TestSeedWhenResolvConfAbsent(t *testing.T) {
 	etcResolv := filepath.Join(root, "etc", "resolv.conf")
 	restore := SeedEphemeral(root)
 
-	got, err := os.ReadFile(etcResolv)
-	if err != nil {
-		t.Fatalf("expected a seeded resolver at %s: %v", etcResolv, err)
-	}
-	if string(got) != hostContent {
+	if got := readFile(t, etcResolv); got != hostContent {
 		t.Errorf("seeded content = %q, want %q", got, hostContent)
 	}
 
-	restore()
+	mustRestore(t, restore)
 
-	if _, err := os.Stat(etcResolv); !os.IsNotExist(err) {
+	if _, err := os.Lstat(etcResolv); !os.IsNotExist(err) {
 		t.Errorf("restore left %s behind (err=%v); it would suppress createResolvConfSymlink", etcResolv, err)
 	}
 }
@@ -104,22 +143,18 @@ func TestSeedWhenSymlinkIntoRun(t *testing.T) {
 			restore := SeedEphemeral(root)
 
 			target := filepath.Join(root, tc.wantAt)
-			got, err := os.ReadFile(target)
-			if err != nil {
-				t.Fatalf("expected seeded resolver at %s: %v", tc.wantAt, err)
-			}
-			if string(got) != hostContent {
+			if got := readFile(t, target); got != hostContent {
 				t.Errorf("seeded content = %q, want %q", got, hostContent)
 			}
 
-			restore()
+			mustRestore(t, restore)
 
-			if _, err := os.Stat(target); !os.IsNotExist(err) {
+			if _, err := os.Lstat(target); !os.IsNotExist(err) {
 				t.Errorf("restore left %s behind (err=%v)", target, err)
 			}
 			// The symlink itself must survive untouched — it is part of the image.
-			if _, err := os.Lstat(filepath.Join(root, "etc", "resolv.conf")); err != nil {
-				t.Errorf("the /etc/resolv.conf symlink was disturbed: %v", err)
+			if got, err := os.Readlink(filepath.Join(root, "etc", "resolv.conf")); err != nil || got != tc.link {
+				t.Errorf("the /etc/resolv.conf symlink was disturbed: %q, %v", got, err)
 			}
 		})
 	}
@@ -144,32 +179,29 @@ func TestSeedWhenRegularFileHasNoNameserver(t *testing.T) {
 
 			restore := SeedEphemeral(root)
 
-			got, err := os.ReadFile(etcResolv)
-			if err != nil {
-				t.Fatalf("read seeded: %v", err)
-			}
-			if string(got) != hostContent {
+			if got := readFile(t, etcResolv); got != hostContent {
 				t.Errorf("seeded content = %q, want %q", got, hostContent)
 			}
 
-			restore()
+			mustRestore(t, restore)
 
-			back, err := os.ReadFile(etcResolv)
-			if err != nil {
-				t.Fatalf("read restored: %v", err)
+			if got := readFile(t, etcResolv); got != tc.body {
+				t.Errorf("restored content = %q, want original %q", got, tc.body)
 			}
-			if string(back) != tc.body {
-				t.Errorf("restored content = %q, want original %q", back, tc.body)
+			if temps := leftoverTemps(t, filepath.Join(root, "etc")); len(temps) != 0 {
+				t.Errorf("temp files left behind: %v", temps)
 			}
 		})
 	}
 }
 
 // TestSeedLeavesUsableAndPersistentPathsUntouched is the safety property: a resolver
-// that already works, and any symlink that would write through into the delivered
-// image, must be left exactly as found with no command executed.
+// that already works, any symlink that would write through into the delivered image,
+// and any path that crosses a symlinked directory must be left exactly as found
+// with no command executed.
 func TestSeedLeavesUsableAndPersistentPathsUntouched(t *testing.T) {
 	const working = "nameserver 8.8.8.8\n"
+	outside := t.TempDir() // stands in for the build host's own tree
 
 	for _, tc := range []struct {
 		name  string
@@ -191,6 +223,33 @@ func TestSeedLeavesUsableAndPersistentPathsUntouched(t *testing.T) {
 				t.Fatalf("symlink: %v", err)
 			}
 		}},
+		{"symlink into run, target already there", func(t *testing.T, root string) {
+			if err := os.MkdirAll(filepath.Join(root, "run"), 0o755); err != nil {
+				t.Fatalf("mkdir run: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "run", "resolv.conf"), []byte(working), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if err := os.Symlink("/run/resolv.conf", filepath.Join(root, "etc", "resolv.conf")); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		}},
+		{"etc is a symlink out of the rootfs", func(t *testing.T, root string) {
+			if err := os.RemoveAll(filepath.Join(root, "etc")); err != nil {
+				t.Fatalf("remove etc: %v", err)
+			}
+			if err := os.Symlink(outside, filepath.Join(root, "etc")); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		}},
+		{"run is a symlink out of the rootfs", func(t *testing.T, root string) {
+			if err := os.Symlink(outside, filepath.Join(root, "run")); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+			if err := os.Symlink("/run/resolv.conf", filepath.Join(root, "etc", "resolv.conf")); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newFixture(t)
@@ -199,16 +258,15 @@ func TestSeedLeavesUsableAndPersistentPathsUntouched(t *testing.T) {
 			var cmds []string
 			captureExec(t, &cmds)
 
-			restore := SeedEphemeral(root)
-			restore()
+			mustRestore(t, SeedEphemeral(root))
 
 			if len(cmds) != 0 {
 				t.Errorf("expected no commands, got: %v", cmds)
 			}
-			if _, err := os.Stat(filepath.Join(root, "run")); !os.IsNotExist(err) {
-				t.Errorf("a /run tree was created that should not have been (err=%v)", err)
+			if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+				t.Errorf("wrote outside the rootfs: %v", entries)
 			}
-			if data, err := os.ReadFile(filepath.Join(root, "etc", "resolv.conf")); err == nil {
+			if data, err := os.ReadFile(filepath.Join(root, "etc", "resolv.conf")); err == nil && string(data) != "" {
 				if string(data) != working {
 					t.Errorf("resolv.conf mutated: got %q, want %q", data, working)
 				}
@@ -217,9 +275,116 @@ func TestSeedLeavesUsableAndPersistentPathsUntouched(t *testing.T) {
 	}
 }
 
-// TestSeedSkipsWhenHostResolverUnreadable covers the best-effort contract: with no
-// readable host resolver there is nothing to copy, and the caller must still get a
-// usable restore function.
+// seedShapes are the rootfs shapes SeedEphemeral writes to, each with the path the
+// seed lands at.
+var seedShapes = []struct {
+	name   string
+	setup  func(t *testing.T, root string)
+	seeded string
+}{
+	{"absent", func(*testing.T, string) {}, "etc/resolv.conf"},
+	{"symlink into run", func(t *testing.T, root string) {
+		link := filepath.Join(root, "etc", "resolv.conf")
+		if err := os.Symlink("/run/systemd/resolve/stub-resolv.conf", link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+	}, "run/systemd/resolve/stub-resolv.conf"},
+	{"regular file without nameserver", func(t *testing.T, root string) {
+		if err := os.WriteFile(filepath.Join(root, "etc", "resolv.conf"), []byte("# empty\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}, "etc/resolv.conf"},
+}
+
+// TestRestoreKeepsWhatTheCommandsLeft: a configuration command that rewrote or
+// replaced the seeded file has set the image's resolver itself; restore must keep
+// its result and run no command.
+func TestRestoreKeepsWhatTheCommandsLeft(t *testing.T) {
+	const commandResolver = "nameserver 192.0.2.53\n"
+	for _, shape := range seedShapes {
+		for _, change := range []struct {
+			name  string
+			apply func(t *testing.T, path string)
+			check func(t *testing.T, path string)
+		}{
+			{"rewrote it", func(t *testing.T, path string) {
+				if err := os.WriteFile(path, []byte(commandResolver), 0o644); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}, func(t *testing.T, path string) {
+				if got := readFile(t, path); got != commandResolver {
+					t.Errorf("command's resolver = %q, want %q", got, commandResolver)
+				}
+			}},
+			{"replaced it with a symlink", func(t *testing.T, path string) {
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("remove: %v", err)
+				}
+				if err := os.Symlink("../run/NetworkManager/resolv.conf", path); err != nil {
+					t.Fatalf("symlink: %v", err)
+				}
+			}, func(t *testing.T, path string) {
+				if got, err := os.Readlink(path); err != nil || got != "../run/NetworkManager/resolv.conf" {
+					t.Errorf("command's symlink was disturbed: %q, %v", got, err)
+				}
+			}},
+		} {
+			t.Run(shape.name+"/"+change.name, func(t *testing.T) {
+				root := newFixture(t)
+				shape.setup(t, root)
+				var cmds []string
+				captureExec(t, &cmds)
+
+				restore := SeedEphemeral(root)
+				path := filepath.Join(root, shape.seeded)
+				change.apply(t, path)
+				seedCmds := len(cmds)
+
+				mustRestore(t, restore)
+
+				change.check(t, path)
+				if len(cmds) != seedCmds {
+					t.Errorf("restore ran commands on a changed seed: %v", cmds[seedCmds:])
+				}
+			})
+		}
+	}
+}
+
+// TestRestoreNeverWritesThroughASymlink: a command that replaces a seeded resolver
+// file with an absolute symlink must not get the restore written through that link
+// onto the build host.
+func TestRestoreNeverWritesThroughASymlink(t *testing.T) {
+	root := newFixture(t)
+	etcResolv := filepath.Join(root, "etc", "resolv.conf")
+	if err := os.WriteFile(etcResolv, []byte("# empty\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	hostFile := filepath.Join(t.TempDir(), "stub-resolv.conf")
+	const hostBytes = "host file, not to be touched\n"
+	if err := os.WriteFile(hostFile, []byte(hostBytes), 0o644); err != nil {
+		t.Fatalf("write host file: %v", err)
+	}
+	var cmds []string
+	captureExec(t, &cmds)
+
+	restore := SeedEphemeral(root)
+	if err := os.Remove(etcResolv); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := os.Symlink(hostFile, etcResolv); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	mustRestore(t, restore)
+
+	if got := readFile(t, hostFile); got != hostBytes {
+		t.Errorf("restore wrote through the symlink onto the host: %q", got)
+	}
+}
+
+// TestSeedSkipsWhenHostResolverUnreadable: with no readable host resolver there is
+// nothing to copy, and the caller still gets a usable restore.
 func TestSeedSkipsWhenHostResolverUnreadable(t *testing.T) {
 	root := newFixture(t)
 	hostResolvConf = filepath.Join(t.TempDir(), "does-not-exist")
@@ -227,22 +392,11 @@ func TestSeedSkipsWhenHostResolverUnreadable(t *testing.T) {
 	var cmds []string
 	captureExec(t, &cmds)
 
-	SeedEphemeral(root)() // must not panic
+	mustRestore(t, SeedEphemeral(root))
 
 	if len(cmds) != 0 {
 		t.Errorf("expected no commands when host resolver is unreadable, got: %v", cmds)
 	}
-}
-
-// TestSeedSwallowsExecFailure asserts the helper stays best-effort when the write
-// into the root-owned tree fails: no panic, and a usable restore.
-func TestSeedSwallowsExecFailure(t *testing.T) {
-	root := newFixture(t)
-	execFn = func(string, bool, string, []string) (string, error) {
-		return "", os.ErrPermission
-	}
-
-	SeedEphemeral(root)() // must simply return
 }
 
 // TestSeedRemovesStagingFile guards against leaking a staging file on the success
@@ -252,7 +406,7 @@ func TestSeedRemovesStagingFile(t *testing.T) {
 	var cmds []string
 	captureExec(t, &cmds)
 
-	SeedEphemeral(root)()
+	mustRestore(t, SeedEphemeral(root))
 
 	var cp string
 	for _, c := range cmds {
@@ -273,47 +427,39 @@ func TestSeedRemovesStagingFile(t *testing.T) {
 	}
 }
 
-// failingExec runs commands for real except those whose prefix matches failOn, which
-// return an error. It lets each best-effort bail-out be exercised independently.
-func failingExec(t *testing.T, failOn string) {
-	t.Helper()
-	var cmds []string
-	captureExec(t, &cmds)
-	real := execFn
-	execFn = func(cmdStr string, sudo bool, chroot string, env []string) (string, error) {
-		if strings.HasPrefix(cmdStr, failOn) {
-			return "", os.ErrPermission
-		}
-		return real(cmdStr, sudo, chroot, env)
-	}
-}
-
-// TestSeedBestEffortAcrossShapesAndFailures asserts that whichever shell step fails,
-// for whichever rootfs shape, Seed neither panics nor propagates — and always hands
-// back a callable restore.
-func TestSeedBestEffortAcrossShapesAndFailures(t *testing.T) {
-	shapes := map[string]func(t *testing.T, root string){
-		"absent": func(_ *testing.T, _ string) {},
-		"symlink into run": func(t *testing.T, root string) {
-			if err := os.Symlink("/run/systemd/resolve/stub-resolv.conf", filepath.Join(root, "etc", "resolv.conf")); err != nil {
-				t.Fatalf("symlink: %v", err)
-			}
-		},
-		"regular file without nameserver": func(t *testing.T, root string) {
-			if err := os.WriteFile(filepath.Join(root, "etc", "resolv.conf"), []byte("# empty\n"), 0o644); err != nil {
-				t.Fatalf("write: %v", err)
-			}
-		},
-	}
-
-	for shapeName, setup := range shapes {
-		for _, failOn := range []string{"mkdir", "cp", "rm"} {
-			t.Run(shapeName+"/fail "+failOn, func(t *testing.T) {
+// TestSeedFailuresLeaveTheRootfsAsFound: whichever command fails while seeding, the
+// destination keeps its original state, no temp file is left, and restore has
+// nothing to undo. A failed rm is the one exception: seeding succeeds, and it is
+// the restore that fails, which must be reported.
+func TestSeedFailuresLeaveTheRootfsAsFound(t *testing.T) {
+	for _, shape := range seedShapes {
+		for _, failOn := range []string{"mkdir", "cp", "mv", "rm"} {
+			t.Run(shape.name+"/fail "+failOn, func(t *testing.T) {
 				root := newFixture(t)
-				setup(t, root)
+				shape.setup(t, root)
+				path := filepath.Join(root, shape.seeded)
+				before, beforeErr := os.ReadFile(path)
 				failingExec(t, failOn)
 
-				SeedEphemeral(root)() // seed + restore, neither may panic or propagate
+				err := SeedEphemeral(root)()
+
+				removesSeed := shape.name != "regular file without nameserver"
+				if failOn == "rm" && removesSeed {
+					if err == nil || !strings.Contains(err.Error(), path) {
+						t.Fatalf("restore error = %v, want one naming %s", err, path)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("restore: %v", err)
+				}
+				after, afterErr := os.ReadFile(path)
+				if string(after) != string(before) || os.IsNotExist(afterErr) != os.IsNotExist(beforeErr) {
+					t.Errorf("%s changed: %q (%v) -> %q (%v)", path, before, beforeErr, after, afterErr)
+				}
+				if temps := leftoverTemps(t, filepath.Dir(path)); len(temps) != 0 {
+					t.Errorf("temp files left behind: %v", temps)
+				}
 			})
 		}
 	}
@@ -330,7 +476,7 @@ func TestSeedSkipsUnexpectedFileType(t *testing.T) {
 	var cmds []string
 	captureExec(t, &cmds)
 
-	SeedEphemeral(root)()
+	mustRestore(t, SeedEphemeral(root))
 
 	if len(cmds) != 0 {
 		t.Errorf("expected no commands for an unexpected file type, got: %v", cmds)
