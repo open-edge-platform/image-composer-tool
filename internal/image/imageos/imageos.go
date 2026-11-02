@@ -2,6 +2,7 @@ package imageos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1280,9 +1281,11 @@ func updateRootfsConfig(installRoot string, template *config.ImageTemplate) erro
 	// then decide the image's final resolv.conf.
 	restoreDNS := dnsseed.SeedEphemeral(installRoot)
 	configErr := addImageConfigs(installRoot, template)
-	restoreDNS()
 	if configErr != nil {
-		return fmt.Errorf("failed to execute customized configurations to image: %w", configErr)
+		configErr = fmt.Errorf("failed to execute customized configurations to image: %w", configErr)
+	}
+	if err := errors.Join(configErr, restoreDNS()); err != nil {
+		return err
 	}
 	if err := createResolvConfSymlink(installRoot, template); err != nil {
 		return fmt.Errorf("failed to create resolv.conf: %w", err)
@@ -1332,9 +1335,11 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	// runs on the error path too, rather than via defer.
 	restoreDNS := dnsseed.SeedEphemeral(installRoot)
 	configErr := addImageConfigs(installRoot, template)
-	restoreDNS()
 	if configErr != nil {
-		return fmt.Errorf("failed to execute customized configurations to image: %w", configErr)
+		configErr = fmt.Errorf("failed to execute customized configurations to image: %w", configErr)
+	}
+	if err := errors.Join(configErr, restoreDNS()); err != nil {
+		return err
 	}
 	if err := createResolvConfSymlink(installRoot, template); err != nil {
 		return fmt.Errorf("failed to create resolv.conf: %w", err)
@@ -1687,7 +1692,9 @@ func createResolvConfSymlink(installRoot string, template *config.ImageTemplate)
 	log.Infof("Creating resolv.conf for image: %s", template.GetImageName())
 	resolveConfPath := "/etc/resolv.conf"
 	resolveConfFullPath := filepath.Join(installRoot, resolveConfPath)
-	if _, err := os.Stat(resolveConfFullPath); os.IsNotExist(err) {
+	// Lstat, so a symlink a configuration command installed is kept even when its
+	// target only exists on the running system.
+	if _, err := os.Lstat(resolveConfFullPath); os.IsNotExist(err) {
 		stubResolveConfPath := "/run/systemd/resolve/stub-resolv.conf"
 		cmdStr := fmt.Sprintf("ln -sf %s %s", stubResolveConfPath, resolveConfPath)
 		if _, err := shell.ExecCmd(cmdStr, true, installRoot, nil); err != nil {

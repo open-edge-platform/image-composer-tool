@@ -15,11 +15,18 @@
 //     during the build /run is a fresh empty tmpfs, so the symlink dangles.
 //
 // SeedEphemeral handles both, plus the degenerate "file exists but lists no
-// nameserver" case, and hands back a restore function that undoes exactly what it
-// did so nothing leaks into the delivered image.
+// nameserver" case, and hands back a restore function that takes the seed out
+// again — unless the configuration commands replaced or edited it, in which case
+// their result is the image's resolver and is left alone.
+//
+// Every path is resolved inside the rootfs without following symlinks, and every
+// write replaces its destination by rename, so nothing is ever written through a
+// symlink onto the build host.
 package dnsseed
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,54 +47,60 @@ var hostResolvConf = "/etc/resolv.conf"
 // without root or a real chroot. Production uses shell.ExecCmd; tests override it.
 var execFn = shell.ExecCmd
 
+// Restore takes a seed back out of the rootfs. It returns an error only when the
+// seeded resolver could not be removed or the original put back, so the seed
+// would otherwise ship in the image; the caller must fail the build then.
+type Restore func() error
+
 // noRestore is the no-op returned whenever nothing was changed.
-func noRestore() {}
+func noRestore() error { return nil }
 
 // SeedEphemeral makes the build host's resolver reachable inside the chroot rooted
-// at rootMount, and returns a function that reverts the change.
+// at rootMount, and returns a Restore that reverts the change.
 //
-// The returned restore function MUST be called once the network-using step is done
-// and BEFORE anything that inspects /etc/resolv.conf to decide the image's final
-// resolver configuration. It is safe to call exactly once; calling it is what keeps
-// the seeded resolver out of the shipped image.
+// Restore MUST be called once the network-using step is done and BEFORE anything
+// that inspects /etc/resolv.conf to decide the image's final resolver
+// configuration. It is safe to call exactly once.
 //
 // Behaviour by the shape of <rootMount>/etc/resolv.conf:
 //
 //   - absent (create mode, post-mmdebstrap): write the host's resolver there;
 //     restore deletes it, leaving the rootfs exactly as found.
-//   - symlink into the ephemeral /run tmpfs (overlay mode): write the host's
-//     resolver at the symlink target; restore deletes that file. Nothing under /run
-//     survives into the image regardless, so this is belt-and-braces.
+//   - symlink into the ephemeral /run tmpfs (overlay mode), target absent: write
+//     the host's resolver at the target; restore deletes it.
 //   - regular file listing no nameserver (degenerate): overwrite it; restore puts
 //     the original bytes back.
 //   - regular file with at least one nameserver: left alone — it already works.
 //   - symlink pointing outside /run: left alone — writing through it would modify
 //     the delivered image.
 //
-// The whole helper is best-effort: every failure is logged and swallowed, and a
-// failure to seed still yields a usable (no-op) restore function.
-func SeedEphemeral(rootMount string) func() {
+// Restore acts only on a seed the configuration commands left as it was: a file
+// they replaced, edited or swapped for a symlink is theirs, and stays.
+//
+// Seeding is best-effort: a failure is logged and yields a no-op Restore.
+func SeedEphemeral(rootMount string) Restore {
 	content, err := os.ReadFile(hostResolvConf) // follows a host symlink to the real file
 	if err != nil {
 		log.Debugf("DNS seed: skipping (cannot read host %s: %v)", hostResolvConf, err)
 		return noRestore
 	}
 
-	etcResolv := filepath.Join(rootMount, "etc", "resolv.conf")
+	etcDir, err := dirInRoot(rootMount, "etc")
+	if err != nil {
+		log.Debugf("DNS seed: skipping (%v)", err)
+		return noRestore
+	}
+	etcResolv := filepath.Join(etcDir, "resolv.conf")
 
 	// Lstat, not Stat, so a dangling symlink is reported as a symlink rather than as
 	// "not found" — the two need different handling.
-	fi, lerr := os.Lstat(etcResolv)
+	fi, err := os.Lstat(etcResolv)
 	switch {
-	case os.IsNotExist(lerr):
+	case os.IsNotExist(err):
 		// Create mode: mmdebstrap left no resolver at all.
-		if !writeInto(etcResolv, content) {
-			return noRestore
-		}
-		log.Infof("DNS seed: seeded ephemeral resolver at %s (removed after configuration commands)", etcResolv)
-		return func() { removePath(etcResolv) }
-	case lerr != nil:
-		log.Debugf("DNS seed: skipping (cannot stat %s: %v)", etcResolv, lerr)
+		return seedNewFile(etcResolv, content, "removed after configuration commands")
+	case err != nil:
+		log.Debugf("DNS seed: skipping (cannot stat %s: %v)", etcResolv, err)
 		return noRestore
 	case fi.Mode()&os.ModeSymlink != 0:
 		return seedSymlinkTarget(rootMount, etcResolv, content)
@@ -99,10 +112,21 @@ func SeedEphemeral(rootMount string) func() {
 	}
 }
 
+// seedNewFile writes content to path, which does not exist yet, and returns a
+// Restore that deletes it again.
+func seedNewFile(path string, content []byte, note string) Restore {
+	if err := writeInto(path, content); err != nil {
+		log.Debugf("DNS seed: skipping (%v)", err)
+		return noRestore
+	}
+	log.Infof("DNS seed: seeded ephemeral resolver at %s (%s)", path, note)
+	return func() error { return removeIfUnchanged(path, content) }
+}
+
 // seedSymlinkTarget writes content where the etcResolv symlink points, but only
-// when that lands on the ephemeral /run tmpfs; anywhere else is part of the
-// delivered image and must not be touched.
-func seedSymlinkTarget(rootMount, etcResolv string, content []byte) func() {
+// when that lands on the ephemeral /run tmpfs and nothing is there yet; anywhere
+// else is part of the delivered image and must not be touched.
+func seedSymlinkTarget(rootMount, etcResolv string, content []byte) Restore {
 	target, err := os.Readlink(etcResolv)
 	if err != nil {
 		log.Debugf("DNS seed: skipping (cannot read symlink %s: %v)", etcResolv, err)
@@ -114,41 +138,103 @@ func seedSymlinkTarget(rootMount, etcResolv string, content []byte) func() {
 	if !filepath.IsAbs(target) {
 		guestTarget = filepath.Clean(filepath.Join("/etc", target))
 	}
-	if guestTarget != "/run" && !strings.HasPrefix(guestTarget, "/run/") {
+	if !strings.HasPrefix(guestTarget, "/run/") {
 		log.Debugf("DNS seed: skipping (%s resolves to %s, not under /run)", etcResolv, guestTarget)
 		return noRestore
 	}
-	hostTargetPath := filepath.Join(rootMount, strings.TrimPrefix(guestTarget, "/"))
-	if !writeInto(hostTargetPath, content) {
+	targetDir, err := dirInRoot(rootMount, filepath.Dir(guestTarget))
+	if err != nil {
+		log.Debugf("DNS seed: skipping (%v)", err)
 		return noRestore
 	}
-	log.Infof("DNS seed: seeded ephemeral resolver at %s (under /run, discarded with the tmpfs)", guestTarget)
-	return func() { removePath(hostTargetPath) }
+	hostTarget := filepath.Join(targetDir, filepath.Base(guestTarget))
+	if _, err := os.Lstat(hostTarget); !os.IsNotExist(err) {
+		log.Debugf("DNS seed: skipping (%s already exists)", hostTarget)
+		return noRestore
+	}
+	return seedNewFile(hostTarget, content, "under /run, discarded with the tmpfs")
 }
 
 // seedResolverlessFile replaces a regular etcResolv that lists no nameserver
-// (commonly an empty file) with content, and restores the original bytes
-// afterwards so the image ships what it shipped before. A file that already
-// lists a nameserver works and is left alone.
-func seedResolverlessFile(etcResolv string, content []byte) func() {
-	existing, err := os.ReadFile(etcResolv)
+// (commonly an empty file) with content, and returns a Restore that puts the
+// original bytes back. A file that already lists a nameserver works and is left
+// alone.
+func seedResolverlessFile(etcResolv string, content []byte) Restore {
+	original, err := os.ReadFile(etcResolv)
 	if err != nil {
 		log.Debugf("DNS seed: skipping (cannot read %s: %v)", etcResolv, err)
 		return noRestore
 	}
-	if hasNameserver(existing) {
+	if hasNameserver(original) {
 		log.Debugf("DNS seed: skipping (%s already lists a nameserver)", etcResolv)
 		return noRestore
 	}
-	if !writeInto(etcResolv, content) {
+	if err := writeInto(etcResolv, content); err != nil {
+		log.Debugf("DNS seed: skipping (%v)", err)
 		return noRestore
 	}
 	log.Infof("DNS seed: seeded ephemeral resolver at %s (original had no nameserver; restored afterwards)", etcResolv)
-	return func() {
-		if !writeInto(etcResolv, existing) {
-			log.Warnf("DNS seed: could not restore the original %s", etcResolv)
+	return func() error {
+		if !unchanged(etcResolv, content) {
+			return nil
+		}
+		if err := writeInto(etcResolv, original); err != nil {
+			return fmt.Errorf("DNS seed: restoring the original %s: %w", etcResolv, err)
+		}
+		return nil
+	}
+}
+
+// dirInRoot returns the host path of the guest directory guestDir inside
+// rootMount, refusing it when any part of it that exists is a symlink or not a
+// directory: following one could lead out of the rootfs and onto the build host.
+// Parts that do not exist yet are fine; writeInto creates them.
+func dirInRoot(rootMount, guestDir string) (string, error) {
+	dir := filepath.Clean(rootMount)
+	for _, part := range strings.Split(strings.Trim(filepath.Clean(guestDir), "/"), "/") {
+		if part == "" {
+			continue
+		}
+		dir = filepath.Join(dir, part)
+		fi, err := os.Lstat(dir)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("cannot stat %s: %w", dir, err)
+		}
+		if !fi.IsDir() {
+			return "", fmt.Errorf("%s is a symlink or not a directory", dir)
 		}
 	}
+	return dir, nil
+}
+
+// unchanged reports whether path is still the regular file the seed wrote. A
+// configuration command that replaced, edited or symlinked it has set the
+// image's resolver itself, which must then be kept.
+func unchanged(path string, seeded []byte) bool {
+	fi, err := os.Lstat(path)
+	if err == nil && fi.Mode().IsRegular() {
+		if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, seeded) {
+			return true
+		}
+	}
+	log.Infof("DNS seed: %s was changed by the configuration commands; keeping it as they left it", path)
+	return false
+}
+
+// removeIfUnchanged deletes the seeded file at path unless the configuration
+// commands changed it.
+func removeIfUnchanged(path string, seeded []byte) error {
+	if !unchanged(path, seeded) {
+		return nil
+	}
+	if _, err := execFn("rm -f "+shell.QuoteArg(path), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("DNS seed: removing the seeded resolver %s: %w", path, err)
+	}
+	log.Debugf("DNS seed: removed seeded resolver %s", path)
+	return nil
 }
 
 // hasNameserver reports whether a resolv.conf body carries at least one
@@ -166,50 +252,59 @@ func hasNameserver(body []byte) bool {
 	return false
 }
 
-// writeInto stages content in the build's temp dir and copies it to dst under sudo,
-// creating dst's parent if needed. The staging hop is what lets a non-root build
-// write into a root-owned tree. Reports whether the write landed.
-func writeInto(dst string, content []byte) bool {
-	stagedFile, err := os.CreateTemp(config.TempDir(), "ict-resolv-*.conf")
+// writeInto replaces dst with content, under sudo, so a non-root build can write
+// into a root-owned tree. The content is copied next to dst and renamed over it:
+// rename replaces a symlink at dst instead of writing through it, and dst ends up
+// either fully replaced or exactly as it was.
+func writeInto(dst string, content []byte) error {
+	staged, err := stage(content)
 	if err != nil {
-		log.Debugf("DNS seed: skipping (creating staging file failed: %v)", err)
-		return false
+		return err
 	}
-	staged := stagedFile.Name()
 	defer func() { _ = os.Remove(staged) }()
-	// os.CreateTemp yields 0o600; resolv.conf is conventionally world-readable.
-	if err := stagedFile.Chmod(0o644); err != nil {
-		_ = stagedFile.Close()
-		log.Debugf("DNS seed: skipping (chmod staged resolv.conf failed: %v)", err)
-		return false
-	}
-	if _, err := stagedFile.Write(content); err != nil {
-		_ = stagedFile.Close()
-		log.Debugf("DNS seed: skipping (staging resolv.conf failed: %v)", err)
-		return false
-	}
-	if err := stagedFile.Close(); err != nil {
-		log.Debugf("DNS seed: skipping (closing staged resolv.conf failed: %v)", err)
-		return false
-	}
 
-	if _, err := execFn("mkdir -p "+shell.QuoteArg(filepath.Dir(dst)), true, shell.HostPath, nil); err != nil {
-		log.Debugf("DNS seed: skipping (creating %s failed: %v)", filepath.Dir(dst), err)
-		return false
+	dir := filepath.Dir(dst)
+	if _, err := execFn("mkdir -p "+shell.QuoteArg(dir), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	if _, err := execFn("cp "+shell.QuoteArg(staged)+" "+shell.QuoteArg(dst), true, shell.HostPath, nil); err != nil {
-		log.Debugf("DNS seed: skipping (writing %s failed: %v)", dst, err)
-		return false
+	tmp := filepath.Join(dir, "."+filepath.Base(staged))
+	if _, err := execFn("cp "+shell.QuoteArg(staged)+" "+shell.QuoteArg(tmp), true, shell.HostPath, nil); err != nil {
+		discard(tmp)
+		return fmt.Errorf("writing %s: %w", tmp, err)
 	}
-	return true
+	if _, err := execFn("mv -f "+shell.QuoteArg(tmp)+" "+shell.QuoteArg(dst), true, shell.HostPath, nil); err != nil {
+		discard(tmp)
+		return fmt.Errorf("replacing %s: %w", dst, err)
+	}
+	return nil
 }
 
-// removePath deletes a file the seed created. Best-effort: a leftover under /run is
-// discarded with the tmpfs anyway, and one in /etc is reported so it is not silent.
-func removePath(path string) {
-	if _, err := execFn("rm -f "+shell.QuoteArg(path), true, shell.HostPath, nil); err != nil {
-		log.Warnf("DNS seed: failed to remove seeded resolver %s: %v", path, err)
-		return
+// stage writes content to a world-readable file in the build's temp dir and
+// returns its path.
+func stage(content []byte) (string, error) {
+	stagedFile, err := os.CreateTemp(config.TempDir(), "ict-resolv-*.conf")
+	if err != nil {
+		return "", fmt.Errorf("creating staging file: %w", err)
 	}
-	log.Debugf("DNS seed: removed seeded resolver %s", path)
+	staged := stagedFile.Name()
+	// os.CreateTemp yields 0o600; resolv.conf is conventionally world-readable.
+	err = stagedFile.Chmod(0o644)
+	if err == nil {
+		_, err = stagedFile.Write(content)
+	}
+	if cerr := stagedFile.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(staged)
+		return "", fmt.Errorf("staging resolv.conf: %w", err)
+	}
+	return staged, nil
+}
+
+// discard removes a half-written temp file left by a failed writeInto.
+func discard(tmp string) {
+	if _, err := execFn("rm -f "+shell.QuoteArg(tmp), true, shell.HostPath, nil); err != nil {
+		log.Warnf("DNS seed: failed to remove %s: %v", tmp, err)
+	}
 }

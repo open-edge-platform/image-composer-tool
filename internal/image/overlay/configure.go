@@ -71,8 +71,15 @@ func RunOverlayConfigurations(template *config.ImageTemplate, rootMount string) 
 
 	// Seed DNS into the (now-mounted, ephemeral) /run tmpfs so a direct-internet
 	// command can resolve names. Best-effort: proxied builds inherit the proxy env
-	// instead, and a command that truly needs DNS surfaces its own error.
-	defer dnsseed.SeedEphemeral(rootMount)()
+	// instead, and a command that truly needs DNS surfaces its own error. Deferred
+	// after the unmount above, so it runs first, while /run is still mounted.
+	restoreDNS := dnsseed.SeedEphemeral(rootMount)
+	defer func() {
+		if rerr := restoreDNS(); rerr != nil {
+			log.Errorf("Overlay configure: %v", rerr)
+			recordCleanupError(&err, rerr)
+		}
+	}()
 
 	for _, configInfo := range configs {
 		cmdStr := strings.TrimSpace(configInfo.Cmd)
