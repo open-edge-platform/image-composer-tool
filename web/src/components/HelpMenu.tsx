@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { api } from '../api/client'
+import type { VersionInfo } from '../api/types'
 import { guideHref, guideTopics } from '../guide/topics'
 
 // The help pages, in menu order. Each is an ordinary link, so adding a page to
@@ -14,6 +16,16 @@ interface HelpMenuProps {
   active: boolean
 }
 
+// The value an unstamped development build reports for commit and buildDate.
+const unstamped = 'unknown'
+
+// buildLine joins the commit and build date for display, leaving out whichever
+// the build did not stamp; null when it stamped neither.
+export function buildLine(v: VersionInfo): string | null {
+  const parts = [v.commit, v.buildDate].filter((p) => p && p !== unstamped)
+  return parts.length > 0 ? `Build ${parts.join(' · ')}` : null
+}
+
 // HelpMenu is the "?" button at the right of the nav bar. It is a disclosure (a
 // button that shows and hides a list of links), not an ARIA menu: these are
 // links to pages, and a menu role would promise arrow-key handling they lack.
@@ -22,6 +34,23 @@ export function HelpMenu({ active }: HelpMenuProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const listId = useId()
+  // Fetched once, up front, so it is already there when the menu opens. On
+  // failure the version line is simply left out: a help menu is no place for an
+  // error, and the rest of the app reports an unreachable server already.
+  const [version, setVersion] = useState<VersionInfo | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getVersion()
+      .then((v) => {
+        if (!cancelled) setVersion(v)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Close on Escape or a press anywhere outside. Escape returns focus to the
   // button so a keyboard user is not left on a link that just disappeared.
@@ -66,7 +95,7 @@ export function HelpMenu({ active }: HelpMenuProps) {
         <nav
           id={listId}
           aria-label="Help"
-          className="absolute right-0 z-40 mt-2 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+          className="absolute right-0 z-40 mt-2 w-56 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           <ul>
             {links.map((link) => (
@@ -81,6 +110,14 @@ export function HelpMenu({ active }: HelpMenuProps) {
               </li>
             ))}
           </ul>
+          {version && (
+            // Lets a user of a hosted instance tell, and report, exactly which
+            // release they are on.
+            <div className="mt-1 border-t border-slate-100 px-4 pb-1 pt-2 text-xs text-slate-500">
+              <p>Version {version.version}</p>
+              {buildLine(version) && <p>{buildLine(version)}</p>}
+            </div>
+          )}
         </nav>
       )}
     </div>

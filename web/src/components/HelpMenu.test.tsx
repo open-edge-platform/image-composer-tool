@@ -2,10 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { HelpMenu } from './HelpMenu'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildLine, HelpMenu } from './HelpMenu'
 import { UserGuidePage } from './UserGuidePage'
 import { guideHref, guideTopicFromHash, guideTopics } from '../guide/topics'
+
+const mockApi = vi.hoisted(() => ({ getVersion: vi.fn() }))
+vi.mock('../api/client', () => ({ api: mockApi }))
+
+beforeEach(() => {
+  mockApi.getVersion.mockReset()
+  mockApi.getVersion.mockResolvedValue({ version: '2026.3.0', commit: 'a1b2c3d', buildDate: '2026-11-02' })
+})
 
 const pageTitle = (name: string) => screen.getByRole('heading', { level: 1, name })
 
@@ -43,6 +51,32 @@ describe('HelpMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Help' }))
     fireEvent.pointerDown(document.body)
     expect(screen.queryByRole('link')).toBeNull()
+  })
+})
+
+describe('HelpMenu version', () => {
+  it('shows the server version and build under the links', async () => {
+    render(<HelpMenu active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    expect(await screen.findByText('Version 2026.3.0')).toBeTruthy()
+    expect(screen.getByText('Build a1b2c3d · 2026-11-02')).toBeTruthy()
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(1)
+  })
+
+  it('still offers the guide when the version cannot be fetched', async () => {
+    mockApi.getVersion.mockRejectedValue(new Error('offline'))
+    render(<HelpMenu active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    await Promise.resolve()
+    expect(screen.getByRole('link', { name: 'User Guide' })).toBeTruthy()
+    expect(screen.queryByText(/^Version /)).toBeNull()
+  })
+
+  it('leaves out build fields an unstamped build reports as unknown', () => {
+    const v = { version: '0.1.0', commit: 'unknown', buildDate: 'unknown' }
+    expect(buildLine(v)).toBeNull()
+    expect(buildLine({ ...v, commit: 'a1b2c3d' })).toBe('Build a1b2c3d')
+    expect(buildLine({ ...v, buildDate: '2026-11-02' })).toBe('Build 2026-11-02')
   })
 })
 
