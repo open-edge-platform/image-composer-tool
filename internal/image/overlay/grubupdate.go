@@ -18,7 +18,7 @@ import (
 // or root. Tests override them; production resolves the defaults file through the
 // baseline-confined symlink walk (resolveInRoot), runs the generator through the
 // shell allowlist, and edits the defaults file via the temp-stage-then-sudo-copy
-// path (file.Write), the same mechanism seedChrootDNS uses for the root-owned tree.
+// path (file.Write), the same mechanism dnsseed.Seed uses for the root-owned tree.
 //
 // grubRegenExec is deliberately distinct from bootupdate.go's bootRegenExec so
 // the two boot stages' tests stay decoupled; commandExistsFn (a stateless probe)

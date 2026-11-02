@@ -1131,6 +1131,11 @@ sections are applied, so a command can still adjust their result. The `proxy`
 section is written after `configurations`, so build-time commands such as
 `apt-get install` use the build host's network, not the deployment-site proxy.
 
+A command that reaches the network directly (`wget`, `curl`) resolves names
+through the build host's resolver: for the duration of `configurations`, ICT
+gives the chroot a temporary `/etc/resolv.conf` with the host's resolver, and
+removes it again before it sets up the image's own `/etc/resolv.conf`.
+
 #### `systemConfig.proxy`
 
 Proxy settings persisted into the **deployed** system. The build itself uses
