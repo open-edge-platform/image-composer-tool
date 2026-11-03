@@ -53,12 +53,18 @@ export function HelpMenu({ active }: HelpMenuProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const listId = useId()
-  // Fetched once, up front, so it is already there when the menu opens. On
-  // failure the version line is simply left out: a help menu is no place for an
-  // error, and the rest of the app reports an unreachable server already.
+  // Fetched up front, so it is usually already there when the menu opens. A
+  // failed fetch (say, the page loaded while the server was restarting) is
+  // retried each time the menu opens without it, rather than leaving the
+  // version missing until a reload. Until then the footer is simply left out:
+  // a help menu is no place for an error, and the rest of the app reports an
+  // unreachable server already.
   const [version, setVersion] = useState<VersionInfo | null>(null)
+  const fetched = useRef(false)
 
   useEffect(() => {
+    if (version || (fetched.current && !open)) return
+    fetched.current = true
     let cancelled = false
     api
       .getVersion()
@@ -69,7 +75,7 @@ export function HelpMenu({ active }: HelpMenuProps) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [open, version])
 
   // Close on Escape or a press anywhere outside. Escape returns focus to the
   // button so a keyboard user is not left on a link that just disappeared.

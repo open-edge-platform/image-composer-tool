@@ -106,6 +106,26 @@ describe('HelpMenu version', () => {
     expect(screen.queryByRole('button', { name: 'Copy version details' })).toBeNull()
   })
 
+  it('retries a failed fetch when the menu opens, without refetching once loaded', async () => {
+    // The page loaded while the server was down: the first fetch fails.
+    mockApi.getVersion.mockRejectedValueOnce(new Error('server restarting'))
+    render(<HelpMenu active={false} />)
+    await act(async () => {})
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(1)
+
+    // The server is back; opening the menu tries again and shows the version.
+    const toggle = screen.getByRole('button', { name: 'Help' })
+    fireEvent.click(toggle)
+    expect(await screen.findByText('v2026.3-rc1.1')).toBeTruthy()
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(2)
+
+    // Once loaded, closing and reopening does not fetch again.
+    fireEvent.click(toggle)
+    fireEvent.click(toggle)
+    await act(async () => {})
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(2)
+  })
+
   it('still offers the guide when the version cannot be fetched', async () => {
     mockApi.getVersion.mockRejectedValue(new Error('offline'))
     render(<HelpMenu active={false} />)
