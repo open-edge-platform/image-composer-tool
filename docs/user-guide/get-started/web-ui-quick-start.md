@@ -76,7 +76,7 @@ ssh -L 8080:127.0.0.1:8080 <user>@<docker-host>
 2. Select **Compose Image**. In the dialog that opens, enter a password or SSH
    public key for any account that needs one, and confirm.
 3. The **Compose Image** tab streams the build log. When the status reads
-   **Completed**, the **Artefacts** table lists what the build produced:
+   **Completed**, the **Artifacts** table lists what the build produced:
    download the OS image, its software bill of materials (SBOM), and the
    template the build used, with every inherited setting filled in. To reach
    the files another way, see
@@ -118,7 +118,7 @@ docker compose down -v
 ## Where Your Files and Image Artifacts Are
 
 Builds run inside the container, so every path the UI shows, such as the
-**Path** column of the **Artefacts** table, is a path inside the container,
+**Path** column of the **Artifacts** table, is a path inside the container,
 not on your host:
 
 ```text
@@ -145,7 +145,7 @@ when the container stops. Each build has its own directory under `builds/`:
 You can get a file out in three ways:
 
 - **Download it from the UI.** Use the download icon in the build's
-  **Artefacts** table. If Docker runs on another machine, forward the port
+  **Artifacts** table. If Docker runs on another machine, forward the port
   first, as described in [Open the UI](#2-open-the-ui).
 - **Copy it out with Compose.** Run this from your checkout, with the path the
   UI shows:
