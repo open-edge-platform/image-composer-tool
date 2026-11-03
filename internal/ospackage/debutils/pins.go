@@ -32,18 +32,25 @@ func ConfigurePins(p []Pin) {
 	pins = p
 }
 
-// packagePriority returns the apt priority of pkg: that of the first pin that
-// applies to it, with pins naming specific packages taking precedence over
-// "Package: *" pins as in apt, or else its repository's priority.
+// packagePriority returns the apt priority of pkg: that of the first pin
+// naming specific packages that applies to it, else the highest priority of
+// the "Package: *" pins that apply (as in apt), else its repository's priority.
 func packagePriority(pkg ospackage.PackageInfo) int {
 	pinsMu.RLock()
 	defer pinsMu.RUnlock()
-	for _, specific := range []bool{true, false} {
-		for _, p := range pins {
-			if p.isGeneral() != specific && p.applies(pkg) {
-				return p.Priority
-			}
+	for _, p := range pins {
+		if !p.isGeneral() && p.applies(pkg) {
+			return p.Priority
 		}
+	}
+	best, found := 0, false
+	for _, p := range pins {
+		if p.isGeneral() && p.applies(pkg) && (!found || p.Priority > best) {
+			best, found = p.Priority, true
+		}
+	}
+	if found {
+		return best
 	}
 	return getRepositoryPriority(pkg.URL)
 }

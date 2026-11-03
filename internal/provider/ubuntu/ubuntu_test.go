@@ -8,6 +8,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
@@ -2608,5 +2609,16 @@ func TestApplyOEPInstallerAbsentSection(t *testing.T) {
 	out, err := applyOEPInstaller(template)
 	if out != nil || err != nil {
 		t.Fatalf("applyOEPInstaller = %v, %v; want nil, nil", out, err)
+	}
+}
+
+func TestResolvedKernelImages(t *testing.T) {
+	resolved := []ospackage.PackageInfo{
+		{Name: "linux-image-generic-7.0"}, {Name: "linux-image-7.0.0-38-generic"}, {Name: "curl"},
+		{Name: "linux-headers-7.0.0-38-generic"},
+	}
+	got := resolvedKernelImages(resolved)
+	if len(got) != 1 || got[0] != "linux-image-7.0.0-38-generic" {
+		t.Errorf("resolvedKernelImages = %v, want only the kernel image pulled in by the meta-package", got)
 	}
 }

@@ -12,6 +12,8 @@ func TestPackagePriorityWithPins(t *testing.T) {
 		{Packages: []string{"*"}, Origin: "edge.example.com", Priority: 1001},
 		{Packages: []string{"intel-oneapi-runtime-*"}, Version: "2025.3*", Priority: 1002},
 		{Packages: []string{"blocked"}, Version: "*", Priority: -1},
+		{Packages: []string{"*"}, Origin: "multi.example.com", Priority: -1},
+		{Packages: []string{"*"}, Origin: "multi.example.com", Priority: 1001},
 	})
 	defer ConfigurePins(nil)
 	tests := []struct {
@@ -30,6 +32,8 @@ func TestPackagePriorityWithPins(t *testing.T) {
 			getRepositoryPriority("https://other.example.com/pool/m.deb")},
 		{"negative pin", ospackage.PackageInfo{Name: "blocked", Version: "1.0",
 			URL: "https://other.example.com/pool/b.deb"}, -1},
+		{"highest of the general pins", ospackage.PackageInfo{Name: "anything", Version: "1.0",
+			URL: "https://multi.example.com/pool/a.deb"}, 1001},
 	}
 	for _, tt := range tests {
 		if got := packagePriority(tt.pkg); got != tt.want {
@@ -44,5 +48,20 @@ func TestPackagePriorityWithPins(t *testing.T) {
 	got := filterCandidatesByPriority(candidates)
 	if len(got) != 2 || got[0].Version != "2025.3.1-1" {
 		t.Errorf("filterCandidatesByPriority = %+v; want the pinned 2025.3 first and blocked removed", got)
+	}
+}
+
+// TestResolveTopPackageConflictsExactVersionIgnoresPins is not parallel: it
+// sets the package's pins.
+func TestResolveTopPackageConflictsExactVersionIgnoresPins(t *testing.T) {
+	ConfigurePins([]Pin{{Packages: []string{"libfoo"}, Version: "*", Priority: -1}})
+	defer ConfigurePins(nil)
+	all := []ospackage.PackageInfo{{Name: "libfoo", Version: "1.0-1", URL: "https://h.example.com/pool/libfoo_1.0-1_amd64.deb"}}
+	if _, ok := ResolveTopPackageConflicts("libfoo", all); ok {
+		t.Error("an automatic request selected a package that a negative pin forbids")
+	}
+	got, ok := ResolveTopPackageConflicts("libfoo_1.0-1", all)
+	if !ok || got.Version != "1.0-1" {
+		t.Errorf("ResolveTopPackageConflicts(libfoo_1.0-1) = %+v, %v; want the exact version despite the pin", got, ok)
 	}
 }

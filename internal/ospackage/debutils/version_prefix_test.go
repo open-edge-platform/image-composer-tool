@@ -48,6 +48,10 @@ func TestResolveVersionPrefix(t *testing.T) {
 		{"intel-edge-base-standard", "1.0", "1.0.10-1", true},
 		{"intel-edge-base-standard", "2.0", "2:2.0.0-1", true},
 		{"intel-edge-npu", "1.0", "1:1.0.1-3", true},
+		{"intel-edge-npu", "1:1.0", "1:1.0.1-3", true},
+		{"intel-edge-npu", "2:1.0", "", false},
+		{"intel-edge-base-standard", "0:1.0", "1.0.10-1", true},
+		{"intel-edge-base-standard", "1:1.0", "", false},
 		{"intel-edge-base-standard", "3", "", false},
 		{"intel-edge-ipu", "1.0", "", false},
 	}
@@ -76,6 +80,23 @@ func TestMatchRequestedVersionPrefix(t *testing.T) {
 	want := []string{"intel-edge-base-standard=1.0.10-1", "intel-edge-npu=1:1.0.1-3"}
 	if !slices.Equal(versions, want) {
 		t.Errorf("MatchRequested = %v, want %v", versions, want)
+	}
+}
+
+func TestMatchRequestedGlobHonorsVersionPrefix(t *testing.T) {
+	for _, requests := range [][]string{
+		{"intel-edge-*", "intel-edge-base-standard_1.0*"},
+		{"intel-edge-base-standard_1.0*", "intel-edge-*"},
+	} {
+		got, err := MatchRequested(requests, edgePackVersions)
+		if err != nil {
+			t.Fatalf("MatchRequested(%v): %v", requests, err)
+		}
+		for _, pi := range got {
+			if pi.Name == "intel-edge-base-standard" && pi.Version != "1.0.10-1" {
+				t.Errorf("MatchRequested(%v) selected %s=%s, want 1.0.10-1", requests, pi.Name, pi.Version)
+			}
+		}
 	}
 }
 

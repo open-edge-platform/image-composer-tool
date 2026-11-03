@@ -342,6 +342,10 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 
 	for _, repo := range t.PackageRepositories {
 		if repo.hasOwnFiles() {
+			if !t.repoMayUpgrade(repo) {
+				return fmt.Errorf("repository %s writes its own apt files, so immutability and "+
+					"aptPolicy.upgradeAllowedRepos cannot restrict upgrades from it", getRepositoryName(repo))
+			}
 			if err := t.addOwnPreferencesFile(repo); err != nil {
 				return err
 			}

@@ -989,12 +989,19 @@ func filterCandidatesByPriority(candidates []ospackage.PackageInfo) []ospackage.
 
 // filterCandidatesByPriorityWithTarget filters and sorts candidates, prioritizing exact name matches
 func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, targetName string) []ospackage.PackageInfo {
+	return filterCandidatesWithTarget(candidates, targetName, false)
+}
+
+// filterCandidatesWithTarget is filterCandidatesByPriorityWithTarget; with
+// keepBlocked it keeps candidates a pin forbids (priority < 0), as for a
+// request that names an exact version, which apt installs whatever the pins.
+func filterCandidatesWithTarget(candidates []ospackage.PackageInfo, targetName string, keepBlocked bool) []ospackage.PackageInfo {
 	log := logger.Logger()
 	var filtered []ospackage.PackageInfo
 
 	// First pass: filter out blocked packages (priority < 0)
 	for _, candidate := range candidates {
-		if !shouldBlockPackage(candidate) {
+		if keepBlocked || !shouldBlockPackage(candidate) {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -1884,7 +1891,7 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	}
 
 	// Filter out blocked packages (priority < 0) and prioritize exact name matches
-	candidates = filterCandidatesByPriorityWithTarget(candidates, want)
+	candidates = filterCandidatesWithTarget(candidates, want, isExactVersionRequest(want))
 	log.Debugf("ResolveTopPackageConflicts: After priority filtering, %d candidates remain for package '%s'", len(candidates), want)
 	for i, candidate := range candidates {
 		log.Debugf("  Filtered candidate %d: %s (version: %s)", i+1, candidate.Name, candidate.Version)
@@ -1909,6 +1916,12 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	// Candidates already sorted by filterCandidatesByPriority
 	log.Debugf("ResolveTopPackageConflicts: Selected best candidate: %s (version: %s) for package '%s'", candidates[0].Name, candidates[0].Version, want)
 	return candidates[0], true
+}
+
+// isExactVersionRequest reports whether want names a version ("name_version",
+// or a .deb file name): a pin that forbids the package does not apply to it.
+func isExactVersionRequest(want string) bool {
+	return strings.Contains(want, "_")
 }
 
 // ExpandKernelInstallNames replaces a glob kernel entry (for example
@@ -2510,12 +2523,27 @@ func splitVersionPrefixRequest(want string) (string, string, bool) {
 	return m[1], m[2], true
 }
 
-// resolveVersionPrefix returns the preferred version of name whose version,
-// without its epoch, starts with prefix: highest priority first, then newest.
+// versionHasPrefix reports whether version matches a "name_version*" prefix. A
+// prefix with an epoch ("1:1.0") matches that epoch only, an absent epoch
+// counting as 0; a prefix without one is compared with the version's epoch
+// removed.
+func versionHasPrefix(version, prefix string) bool {
+	if epoch, rest, ok := strings.Cut(prefix, ":"); ok {
+		vEpoch, vRest, hasEpoch := strings.Cut(version, ":")
+		if !hasEpoch {
+			vEpoch, vRest = "0", version
+		}
+		return vEpoch == epoch && strings.HasPrefix(vRest, rest)
+	}
+	return strings.HasPrefix(stripEpoch(version), prefix)
+}
+
+// resolveVersionPrefix returns the preferred version of name whose version
+// starts with prefix (see versionHasPrefix): highest priority first, then newest.
 func resolveVersionPrefix(name, prefix string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
 	var candidates []ospackage.PackageInfo
 	for _, pi := range all {
-		if pi.Name == name && strings.HasPrefix(stripEpoch(pi.Version), prefix) {
+		if pi.Name == name && versionHasPrefix(pi.Version, prefix) {
 			candidates = append(candidates, pi)
 		}
 	}

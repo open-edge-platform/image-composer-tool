@@ -64,8 +64,8 @@ func parsePins(lines []string) ([]debutils.Pin, error) {
 		}
 	}
 	for _, p := range pins {
-		if len(p.Packages) == 0 || (p.Origin == "" && p.Version == "") {
-			return nil, fmt.Errorf("stanza for %v needs a Package, a Pin, and a Pin-Priority", p.Packages)
+		if len(p.Packages) == 0 || (p.Origin == "" && p.Version == "") || p.Priority == 0 {
+			return nil, fmt.Errorf("stanza for %v needs a Package, a Pin, and a nonzero Pin-Priority", p.Packages)
 		}
 	}
 	return pins, nil

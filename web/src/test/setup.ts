@@ -7,6 +7,9 @@ import { afterEach, vi } from 'vitest'
 if (!Element.prototype.scrollTo) {
   Element.prototype.scrollTo = vi.fn()
 }
+// window.scrollTo exists but only logs "Not implemented"; UserGuidePage calls it
+// on every topic change.
+window.scrollTo = vi.fn()
 
 // Unmount anything a test rendered so the next test starts against an empty document.
 afterEach(() => {
