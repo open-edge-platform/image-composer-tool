@@ -114,7 +114,7 @@ export function HelpMenu({ active }: HelpMenuProps) {
         <nav
           id={listId}
           aria-label="Help"
-          className="absolute right-0 z-40 mt-2 w-60 overflow-hidden rounded-lg border border-slate-200 bg-white pt-1 shadow-lg"
+          className="absolute right-0 z-40 mt-2 w-60 rounded-lg border border-slate-200 bg-white pt-1 shadow-lg"
         >
           <ul>
             {links.map((link) => (
@@ -140,10 +140,12 @@ export function HelpMenu({ active }: HelpMenuProps) {
 // which release they are on. It follows the help-menu footer Grafana and GitLab
 // use: a shaded strip set apart from the links, a caption, and the version as a
 // badge, so it reads as information rather than as one more menu entry. The
-// commit and date show on hover; the button copies the full report.
+// commit and date show in a tooltip on hover or keyboard focus, and are read out
+// by screen readers; the button copies the full report.
 function VersionFooter({ version }: { version: VersionInfo }) {
   const [copied, setCopied] = useState(false)
   const details = stamped(version).join(' · ')
+  const tooltipId = useId()
 
   useEffect(() => {
     if (!copied) return
@@ -159,14 +161,28 @@ function VersionFooter({ version }: { version: VersionInfo }) {
   }
 
   return (
-    <div className="mt-1 border-t border-slate-200 bg-slate-50 px-4 py-2.5">
-      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Version</p>
+    <div className="mt-1 rounded-b-lg border-t border-slate-200 bg-slate-50 px-4 py-2.5">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Version</p>
       <div className="flex items-center gap-2">
-        <span
-          title={details || undefined}
-          className="select-all rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a]"
-        >
-          {versionLabel(version)}
+        {/* Focusable so a keyboard user can reach the commit and date too: a
+            native title tooltip shows only on mouse hover. */}
+        <span className="group relative">
+          <span
+            tabIndex={details ? 0 : undefined}
+            aria-describedby={details ? tooltipId : undefined}
+            className="select-all rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a] outline-none focus-visible:ring-2 focus-visible:ring-[#0071c5]"
+          >
+            {versionLabel(version)}
+          </span>
+          {details && (
+            <span
+              id={tooltipId}
+              role="tooltip"
+              className="pointer-events-none absolute left-0 top-full z-50 mt-1.5 hidden whitespace-nowrap rounded bg-[#00285a] px-2 py-1 text-xs text-white shadow group-focus-within:block group-hover:block"
+            >
+              {details}
+            </span>
+          )}
         </span>
         {/* The Clipboard API exists only in a secure context (HTTPS or
             localhost); elsewhere the badge is still one-click selectable. */}
@@ -176,7 +192,7 @@ function VersionFooter({ version }: { version: VersionInfo }) {
             onClick={copy}
             title="Copy version details"
             aria-label="Copy version details"
-            className="flex items-center gap-1 rounded p-1 text-xs text-slate-400 hover:bg-slate-200 hover:text-[#00285a]"
+            className="flex items-center gap-1 rounded p-1 text-xs text-slate-500 hover:bg-slate-200 hover:text-[#00285a]"
           >
             <CopyIcon className="h-3.5 w-3.5" />
             {copied && <span className="text-[#00285a]">Copied</span>}

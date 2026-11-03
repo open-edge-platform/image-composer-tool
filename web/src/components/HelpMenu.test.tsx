@@ -83,7 +83,12 @@ describe('HelpMenu version', () => {
     render(<HelpMenu active={false} />)
     fireEvent.click(screen.getByRole('button', { name: 'Help' }))
     const badge = await screen.findByText('v2026.3-rc1.1')
-    expect(badge.getAttribute('title')).toBe('a1b2c3d · 2026-11-02')
+    // The commit and date are reachable from the keyboard, and announced: the
+    // badge is focusable and described by the tooltip holding them.
+    expect(badge.getAttribute('tabindex')).toBe('0')
+    const tooltip = screen.getByRole('tooltip', { hidden: true })
+    expect(tooltip.textContent).toBe('a1b2c3d · 2026-11-02')
+    expect(badge.getAttribute('aria-describedby')).toBe(tooltip.id)
     expect(screen.getByText('Version')).toBeTruthy()
 
     const copy = screen.getByRole('button', { name: 'Copy version details' })
