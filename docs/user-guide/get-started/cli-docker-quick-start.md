@@ -159,15 +159,155 @@ value. Git reads the exported settings itself, and the script passes them into
 the container, so those commands stay the same. The other commands in this
 guide, such as `validate`, do not use the network.
 
-| Without a proxy | Behind a proxy |
-|-----------------|----------------|
-| `git clone https://github.com/open-edge-platform/image-composer-tool.git` | `git clone https://github.com/open-edge-platform/image-composer-tool.git` |
-| `docker build -f build/ict/Dockerfile --target ict -t ict .` | `docker build --build-arg http_proxy --build-arg https_proxy --build-arg no_proxy -f build/ict/Dockerfile --target ict -t ict .` |
-| `scripts/build-in-container.sh ~/my-image/my-image.yml ./out` | `scripts/build-in-container.sh ~/my-image/my-image.yml ./out` |
-| `scripts/build-in-container.sh ~/my-image/my-image.yml ./out -- --hostname edge-01 --log-level debug` | `scripts/build-in-container.sh ~/my-image/my-image.yml ./out -- --hostname edge-01 --log-level debug` |
-| `scripts/build-in-container.sh --mount-point /artifacts ~/my-image/my-image.yml ./out` | `scripts/build-in-container.sh --mount-point /artifacts ~/my-image/my-image.yml ./out` |
-| `scripts/build-in-container.sh --context ~/templates ~/templates/edge/my-image.yml ./out` | `scripts/build-in-container.sh --context ~/templates ~/templates/edge/my-image.yml ./out` |
-| `scripts/build-in-container.sh --image image-composer-tool-ict ~/my-image/my-image.yml ./out` | `scripts/build-in-container.sh --image image-composer-tool-ict ~/my-image/my-image.yml ./out` |
+<table>
+<tr>
+<th>Without a proxy</th>
+<th>Behind a proxy</th>
+</tr>
+<tr>
+<td>
+
+```bash
+git clone \
+  https://github.com/open-edge-platform/image-composer-tool.git
+```
+
+</td>
+<td>
+
+```bash
+git clone \
+  https://github.com/open-edge-platform/image-composer-tool.git
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```bash
+docker build \
+  -f build/ict/Dockerfile \
+  --target ict \
+  -t ict \
+  .
+```
+
+</td>
+<td>
+
+```bash
+docker build \
+  --build-arg http_proxy \
+  --build-arg https_proxy \
+  --build-arg no_proxy \
+  -f build/ict/Dockerfile \
+  --target ict \
+  -t ict \
+  .
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  ~/my-image/my-image.yml ./out
+```
+
+</td>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  ~/my-image/my-image.yml ./out
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  ~/my-image/my-image.yml ./out \
+  -- --hostname edge-01 --log-level debug
+```
+
+</td>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  ~/my-image/my-image.yml ./out \
+  -- --hostname edge-01 --log-level debug
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  --mount-point /artifacts \
+  ~/my-image/my-image.yml ./out
+```
+
+</td>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  --mount-point /artifacts \
+  ~/my-image/my-image.yml ./out
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  --context ~/templates \
+  ~/templates/edge/my-image.yml ./out
+```
+
+</td>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  --context ~/templates \
+  ~/templates/edge/my-image.yml ./out
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  --image image-composer-tool-ict \
+  ~/my-image/my-image.yml ./out
+```
+
+</td>
+<td>
+
+```bash
+scripts/build-in-container.sh \
+  --image image-composer-tool-ict \
+  ~/my-image/my-image.yml ./out
+```
+
+</td>
+</tr>
+</table>
 
 ## Stop, Reuse, and Clean Up
 
