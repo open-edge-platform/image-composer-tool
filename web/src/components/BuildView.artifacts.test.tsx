@@ -353,11 +353,10 @@ describe('BuildView template row', () => {
     await act(async () => {
       screen.getByRole('button', { name: /Compose details/ }).click()
     })
+    // Open by default: the entries are listed without expanding the card.
     const toggle = screen.getByRole('button', { name: /Advanced customization/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(toggle.textContent).toContain('image name, 11 packages, 1 repo, disk layout, 1 new user')
-    await act(async () => {
-      toggle.click()
-    })
 
     expect(screen.getByText('my-image')).toBeTruthy()
     expect(screen.getByText('intel-gpu')).toBeTruthy()
