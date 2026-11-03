@@ -6,8 +6,14 @@ import (
 	"strings"
 )
 
+// IsKernelImage reports whether name is a kernel image package, such as
+// "linux-image-7.0.0-38-generic".
+func IsKernelImage(name string) bool {
+	return classifyPackage(name).KernelRole() == KernelImage
+}
+
 // CheckKernel checks the kernel entries of out against the kernel packages
-// the template installs (exact names, without globs). A kernel image must be
+// the resolved image installs (exact package names). A kernel image must be
 // one of them; a meta-package must name the series of one of their releases;
 // headers, modules, and tools must be for one of their releases.
 func CheckKernel(out *Output, kernelPackages []string) error {
@@ -42,7 +48,7 @@ func kernelProblem(p Package, names, releases []string) string {
 		}
 	case KernelMeta:
 		series := p.KernelSeries()
-		if !slices.ContainsFunc(releases, func(r string) bool { return series == "" || strings.HasPrefix(r, series+".") }) {
+		if !slices.ContainsFunc(releases, func(r string) bool { return inSeries(r, series) }) {
 			return fmt.Sprintf("%s needs a %s kernel", p.Entry, seriesOrAny(series))
 		}
 	case KernelExtra:
@@ -51,6 +57,12 @@ func kernelProblem(p Package, names, releases []string) string {
 		}
 	}
 	return ""
+}
+
+// inSeries reports whether kernel release r belongs to series, such as "6.18"
+// for "6.18.2-1-generic" or "6.18-intel"; an empty series matches any release.
+func inSeries(r, series string) bool {
+	return series == "" || strings.HasPrefix(r, series+".") || strings.HasPrefix(r, series+"-")
 }
 
 func seriesOrAny(series string) string {

@@ -10,13 +10,17 @@ set -euo pipefail
 
 user="${OEP_INSTALLER_USER:?}"
 cli="${OEP_INSTALLER_CLI:?}"
-sudoers=/etc/sudoers.d/90-ict-oep-installer
+grant_dir=/run/ict-oep-installer.d
+sudoers="$grant_dir/grant"
 
 # openedge-cli runs its privileged steps through "sudo -n". Allow that only
-# while this script runs; a tmpfiles.d rule also removes the grant at boot.
+# while this script runs. The grant is in /run, which /etc/sudoers.d includes
+# (see the image's 90-ict-oep-installer file), so a reboot also removes it,
+# even on an image whose /etc persists across boots.
 cleanup() { rm -f "$sudoers" "$sudoers.tmp"; }
 trap cleanup EXIT
 trap 'exit 143' TERM INT HUP
+install -d -m 0755 "$grant_dir"
 printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$user" >"$sudoers.tmp"
 chmod 0440 "$sudoers.tmp"
 visudo -cqf "$sudoers.tmp"

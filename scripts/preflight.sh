@@ -66,10 +66,10 @@ mapfile -t command_entries < <(
         /var[[:space:]]+commandMap[[:space:]]*=[[:space:]]*map\[string\]\[\]string{/ {in_map=1; next}
         in_map && /^[[:space:]]*}/ {in_map=0}
         in_map {
-            if (match($0, /^[[:space:]]*\"([^\"]+)\":[[:space:]]*\{([^}]*)\}/, m)) {
+            if (match($0, /^[[:space:]]*"([^"]+)":[[:space:]]*\{([^}]*)\}/, m)) {
                 cmd = m[1]
                 paths = m[2]
-                gsub(/\"/, "", paths)
+                gsub(/"/, "", paths)
                 gsub(/[[:space:]]+/, "", paths)
                 print cmd "|" paths
             }
@@ -80,7 +80,7 @@ mapfile -t command_entries < <(
 expected_count=$(awk '
     /var[[:space:]]+commandMap[[:space:]]*=[[:space:]]*map\[string\]\[\]string{/ {in_map=1; next}
     in_map && /^[[:space:]]*}/ {in_map=0}
-    in_map && match($0, /^[[:space:]]*\"[^\"]+\":[[:space:]]*/, m) {count++}
+    in_map && match($0, /^[[:space:]]*"[^"]+":[[:space:]]*/, m) {count++}
     END {print count+0}
 ' "$command_map_file")
 

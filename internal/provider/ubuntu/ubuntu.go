@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
@@ -15,6 +14,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
 	"github.com/open-edge-platform/image-composer-tool/internal/oepinstaller"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -121,7 +121,7 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 	}
 	template.FinishDownloadImagePkgsTimer()
 	if oepOutput != nil {
-		if err := oepinstaller.CheckKernel(oepOutput, template.ResolvedKernelPackages); err != nil {
+		if err := oepinstaller.CheckKernel(oepOutput, resolvedKernelImages(template.FullPkgListBom)); err != nil {
 			return fmt.Errorf("systemConfig.oepInstaller: %w", err)
 		}
 	}
@@ -478,8 +478,8 @@ func addOEPInstallerFirstBoot(template *config.ImageTemplate) error {
 
 // applyOEPInstaller imports the OEP Installer's published package
 // requirements into the template, or returns nil when the template has no
-// systemConfig.oepInstaller section. The kernel is checked here when the
-// template names it exactly, and again by the caller after resolution.
+// systemConfig.oepInstaller section. The caller checks the kernel after the
+// packages are resolved, because a meta-package selects the kernel image.
 func applyOEPInstaller(template *config.ImageTemplate) (*oepinstaller.Output, error) {
 	o := template.SystemConfig.OEPInstaller
 	if o.IsEmpty() {
@@ -492,16 +492,22 @@ func applyOEPInstaller(template *config.ImageTemplate) (*oepinstaller.Output, er
 	if err := oepinstaller.Apply(template, out); err != nil {
 		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
 	}
-	kernel := template.GetKernelPackages()
-	if !slices.ContainsFunc(kernel, func(k string) bool { return strings.ContainsAny(k, "*?[") }) {
-		if err := oepinstaller.CheckKernel(out, kernel); err != nil {
-			return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
-		}
-	}
 	if err := addOEPInstallerFirstBoot(template); err != nil {
 		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
 	}
 	return out, nil
+}
+
+// resolvedKernelImages returns the names of the kernel images among the
+// resolved packages, including those that only a kernel meta-package pulls in.
+func resolvedKernelImages(resolved []ospackage.PackageInfo) []string {
+	var images []string
+	for _, pi := range resolved {
+		if oepinstaller.IsKernelImage(pi.Name) {
+			images = append(images, pi.Name)
+		}
+	}
+	return images
 }
 
 // buildUserRepoList converts user-defined package repositories from the image

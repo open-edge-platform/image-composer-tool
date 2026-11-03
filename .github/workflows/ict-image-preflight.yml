@@ -1,0 +1,78 @@
+# Checks the ICT container image (build/ict/Dockerfile) whenever it or one of
+# its inputs changes: builds it, confirms every program ICT may run is in it,
+# then builds a small OS image inside it.
+name: ICT Image Preflight
+
+on:
+  pull_request:
+    paths:
+      - 'Earthfile'
+      - 'build/ict/Dockerfile'
+      - '.dockerignore'
+      - 'internal/utils/shell/shell.go'
+      - 'scripts/preflight.sh'
+      - 'scripts/container-build.sh'
+      - 'scripts/build-in-container.sh'
+      - '.github/workflows/ict-image-preflight.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'Earthfile'
+      - 'build/ict/Dockerfile'
+      - '.dockerignore'
+      - 'internal/utils/shell/shell.go'
+      - 'scripts/preflight.sh'
+      - 'scripts/container-build.sh'
+      - 'scripts/build-in-container.sh'
+      - '.github/workflows/ict-image-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Validate ICT image toolchain and smoke build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1.0.13
+        with:
+          version: 0.8.15
+
+      - name: Build ICT image and run preflight
+        run: earthly +ict-image-preflight
+
+      # Earthly loads an image into Docker only for the target it is asked to
+      # build, so the image +ict-image-preflight built is not there yet. This
+      # rebuilds nothing (it comes from Earthly's cache); it only loads
+      # ict:latest into Docker for the next step.
+      - name: Load ICT image into Docker
+        run: earthly +ict-image
+
+      # The container image, Earthly's cache, an OS image build and the copied
+      # outputs all share the runner's disk. Delete preinstalled SDKs this job
+      # never uses to make room.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      # Build the smallest shipped template the way a user would, through
+      # scripts/build-in-container.sh, so the mounts and the copy back to the
+      # host are tested along with the build. Pass if the build reports success
+      # and a RAW image reached the output directory.
+      - name: Smoke build inside the ICT image
+        shell: bash
+        run: |
+          scripts/build-in-container.sh \
+            image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml "$RUNNER_TEMP/ict-out" \
+            2>&1 | tee "$RUNNER_TEMP/smoke-build.log"
+          grep -q "image build completed successfully" "$RUNNER_TEMP/smoke-build.log"
+          find "$RUNNER_TEMP/ict-out" -name '*.raw*' -print | grep .

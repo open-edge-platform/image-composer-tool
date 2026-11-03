@@ -1274,3 +1274,24 @@ func TestGenerateAptSourcesOwnFilesRepository(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateAptPreferencesOwnFilesRespectsUpgradePolicy checks that a
+// repository with its own apt files, whose preferences ICT does not generate,
+// is refused when the template forbids upgrades from it.
+func TestGenerateAptPreferencesOwnFilesRespectsUpgradePolicy(t *testing.T) {
+	own := PackageRepository{
+		Codename: "noble", URL: "https://edge.example.com/edgepack", Component: "unstable",
+		ListFile: "/etc/apt/sources.list.d/intel-edge-pack.list", KeyFile: "/etc/apt/keyrings/intel-edge-pack.gpg",
+		PreferencesFile: "/etc/apt/preferences.d/intel-edge-pack.pref",
+		Preferences:     "Package: *\nPin: origin edge.example.com\nPin-Priority: 1001\n",
+	}
+	template := &ImageTemplate{
+		Target:              TargetInfo{OS: "ubuntu"},
+		PackageRepositories: []PackageRepository{own},
+		SystemConfig:        SystemConfig{Immutability: ImmutabilityConfig{Enabled: true}},
+	}
+	err := template.generateAptPreferencesFromRepositories()
+	if err == nil || !strings.Contains(err.Error(), "cannot restrict upgrades") {
+		t.Fatalf("err = %v, want a refusal to restrict upgrades from a repository with its own files", err)
+	}
+}

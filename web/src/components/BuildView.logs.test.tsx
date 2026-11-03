@@ -5,7 +5,7 @@
 // view used to append each arrival to state as it landed, which re-cleaned and
 // re-reconciled every line already on screen once per new line — O(n) work per
 // line over an unbounded n. That saturated the browser's main thread badly
-// enough that clicks elsewhere in the view never got dispatched: the artefact
+// enough that clicks elsewhere in the view never got dispatched: the artifact
 // table's template download did nothing for the whole of a long compose, then
 // fired once the stream stopped. These tests pin the two limits that bound the
 // cost — arrivals are coalesced into bursts, and only the tail of a long log is

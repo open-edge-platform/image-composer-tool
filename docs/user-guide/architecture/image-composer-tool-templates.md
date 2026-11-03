@@ -1359,7 +1359,7 @@ On first boot, a generated provisioning script
 `provisioning.scripts`) runs as `user`: the CLI's `setup` command, which saves
 it as `~/.local/bin/openedge-cli`, and then `openedge-cli install` with
 `modules` and `args`. The user has passwordless sudo only while the script
-runs; the grant is removed when it exits and again at every boot. Like other
+runs; the grant is kept in `/run`, so it is removed when the script exits and is gone after any reboot, even on an immutable image. Like other
 first-boot scripts, it runs again on each boot until it succeeds, including
 after `openedge-cli` reboots the system to finish an installation step. ICT
 copies the CLI to `/usr/local/share/oep-installer/` and adds `sudo` to the

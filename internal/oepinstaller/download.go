@@ -1,6 +1,7 @@
 package oepinstaller
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,10 +10,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 // TokenEnv names the environment variable with a GitHub token for downloading
@@ -23,12 +26,18 @@ const TokenEnv = "ICT_OEP_INSTALLER_TOKEN"
 // and text of a few hundred kilobytes.
 const maxDownloadSize = 32 << 20
 
+// downloadTimeout bounds one download, including reading the body, so a server
+// that stalls after the headers cannot block the build.
+const downloadTimeout = 2 * time.Minute
+
 // httpClient returns the client used for downloads; tests replace it.
 var httpClient = network.GetSecureHTTPClient
 
 // Download fetches rawURL and verifies that its contents match wantSHA256.
 func Download(rawURL, wantSHA256 string) ([]byte, error) {
-	req, err := newDownloadRequest(rawURL, os.Getenv(TokenEnv))
+	ctx, cancel := context.WithTimeout(runctx.Context(), downloadTimeout)
+	defer cancel()
+	req, err := newDownloadRequest(ctx, rawURL, os.Getenv(TokenEnv))
 	if err != nil {
 		return nil, err
 	}
@@ -56,8 +65,8 @@ func Download(rawURL, wantSHA256 string) ([]byte, error) {
 
 // newDownloadRequest builds the GET request, adding token as a bearer token
 // only when the host is GitHub's.
-func newDownloadRequest(rawURL, token string) (*http.Request, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+func newDownloadRequest(ctx context.Context, rawURL, token string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid download URL %q: %w", rawURL, err)
 	}

@@ -785,6 +785,11 @@ func (t *ImageTemplate) AddGeneratedProvisioningScript(s ProvisioningScript) err
 	if err := validateProvisioningScripts(scripts); err != nil {
 		return err
 	}
+	ordered := slices.Clone(scripts)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Order < ordered[j].Order })
+	if err := checkRebootAfterIsLast(ordered); err != nil {
+		return err
+	}
 	if err := t.addLoweredFile(s.Local, s.Final, "generated provisioning script "+s.Name); err != nil {
 		return err
 	}

@@ -52,8 +52,8 @@ func TestAddFirstBoot(t *testing.T) {
 	if !strings.Contains(files[firstBootScript], "openedge-cli\" install \"$@\"") {
 		t.Errorf("first-boot script not copied to %s", firstBootScript)
 	}
-	if files[sudoersTmpfiles] != tmpfilesContents {
-		t.Errorf("tmpfiles rule = %q", files[sudoersTmpfiles])
+	if files[sudoersInclude] != includeContents || !strings.Contains(files[sudoersInclude], "#includedir /run/") {
+		t.Errorf("sudoers include = %q", files[sudoersInclude])
 	}
 	scripts := tmpl.SystemConfig.Provisioning.Scripts
 	got := scripts[len(scripts)-1]
@@ -80,6 +80,9 @@ func TestAddFirstBootRejects(t *testing.T) {
 		{"script name already used", func(tm *config.ImageTemplate) {
 			tm.SystemConfig.Provisioning.Scripts[0].Name = firstBootName
 		}, "duplicate"},
+		{"template script reboots first", func(tm *config.ImageTemplate) {
+			tm.SystemConfig.Provisioning.Scripts[0].RebootAfter = true
+		}, "rebootAfter is only allowed on the last script"},
 		{"script path already used", func(tm *config.ImageTemplate) {
 			tm.SystemConfig.AdditionalFiles = []config.AdditionalFileInfo{
 				{Local: "/tmp/other", Final: firstBootScript}}
