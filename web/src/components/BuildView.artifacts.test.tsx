@@ -323,7 +323,7 @@ describe('BuildView template row', () => {
     await act(async () => {
       screen.getByRole('button', { name: /Compose details/ }).click()
     })
-    expect(screen.getByText(/your selection, image configuration/)).toBeTruthy()
+    expect(screen.getByText(/basic selection, image configuration/)).toBeTruthy()
 
     expect(screen.queryByText(DETAILS.command)).toBeNull()
     expect(screen.queryByText('Command')).toBeNull()
@@ -353,7 +353,7 @@ describe('BuildView template row', () => {
     await act(async () => {
       screen.getByRole('button', { name: /Compose details/ }).click()
     })
-    const toggle = screen.getByRole('button', { name: /Your changes/ })
+    const toggle = screen.getByRole('button', { name: /Advanced customization/ })
     expect(toggle.textContent).toContain('image name, 11 packages, 1 repo, disk layout, 1 new user')
     await act(async () => {
       toggle.click()

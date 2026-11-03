@@ -130,11 +130,11 @@ describe('PackagesStep Edge Pack', () => {
     render(<PackagesStep os="ubuntu24" active basePackages={[]} />)
     await advance(0)
     // Nothing is listed until the runtime is actually chosen.
-    expect(screen.queryByRole('button', { name: /Included with Standard/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Included with Standard Edge Pack Profile/ })).toBeNull()
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Standard' }))
     // gfx-core appears twice in the tree but is counted once.
-    const toggle = screen.getByRole('button', { name: 'Included with Standard (5 packages)' })
+    const toggle = screen.getByRole('button', { name: 'Included with Standard Edge Pack Profile (5 packages)' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByRole('checkbox', { name: 'gfx-core' })).toBeNull()
 
@@ -160,7 +160,7 @@ describe('PackagesStep Edge Pack', () => {
     act(() => {
       useStore.getState().setPackage({ name: 'base-standard', version: '1.0', repo: 'intel-eci' })
     })
-    fireEvent.click(screen.getByRole('button', { name: /Included with Standard/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Included with Standard Edge Pack Profile/ }))
     expect(screen.getByText(/pinned to 1\.0, which may include a different set/)).toBeTruthy()
 
     // Pinned to the newest version, or unpinned, the list is exact — no note.

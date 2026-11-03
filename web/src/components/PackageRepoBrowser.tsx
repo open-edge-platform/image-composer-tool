@@ -140,30 +140,6 @@ export function PackageRepoBrowser({
           />
         </div>
       </div>
-      <p className="mt-2 text-sm text-slate-500">
-        Click a repository on the left to browse its catalog, paged 100 at a
-        time — picking a package from one checks it for you if it
-        isn&apos;t checked already, the same as the search box above already
-        does. Checking a repository&apos;s own box controls whether a build
-        resolves packages from it at all; it doesn&apos;t change which one
-        you&apos;re browsing. A package already selected from a different
-        repository still shows as checked here, with a note naming the
-        version and repository it&apos;s actually pinned to, since picking
-        the one shown on this page would be a different pin, not the same
-        package twice. Where the repository you&apos;re browsing offers
-        curated picks, check &quot;Show frequently used&quot; above to
-        narrow the list to them, or check &quot;Show only selected&quot; to
-        review just what you&apos;ve picked from this repository. What the
-        matched template ships on its own, and everything you&apos;ve added
-        across every checked repository, shows in the Selected panel on the
-        right instead. Picking &quot;Latest&quot; looks up what it actually
-        resolves to across every checked repository right away — not just
-        the one being browsed — and shows a note naming the real version and
-        repository once that lookup lands; an unresolved pick in &quot;Show
-        only selected&quot; can also be resolved individually or all at once.
-        The &quot;Select all&quot; checkbox adds everything on the current
-        page to your selection, and removes it again when unchecked.
-      </p>
     </>
   )
 }
