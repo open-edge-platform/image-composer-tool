@@ -79,9 +79,8 @@ export function BuildView({
     setPhase(isActive ? PHASE_INITIAL : PHASE_DONE)
     setInstall({ done: 0, total: 0 })
 
-    // Fetch the configuration summary for the details panel and the template
-    // name/path for its row in the artifacts table. Best-effort: a failure here
-    // shouldn't disrupt the log stream.
+    // Fetch the configuration summary and the template name for the details
+    // panel. Best-effort: a failure here shouldn't disrupt the log stream.
     api.buildDetails(buildId).then(setDetails).catch(() => {})
 
     // A history build (not active) doesn't stream logs — pull its final status,
@@ -128,10 +127,8 @@ export function BuildView({
       setLogs((prev) => [...prev, ...batch])
     }
 
-    // Re-read the build's details on every terminal outcome. The template row
-    // is already correct from the initial fetch — the server archives the
-    // merged template before StartBuild even returns — but this refresh is
-    // still what makes the log-file link appear once the build concludes.
+    // Re-read the build's details on every terminal outcome: this refresh is
+    // what makes the log-file link appear once the build concludes.
     const refreshDetails = () => {
       api.buildDetails(buildId).then(setDetails).catch(() => {})
     }
@@ -254,42 +251,6 @@ export function BuildView({
   // Copy and the log-file download still carry the whole thing.
   const hiddenLogCount = Math.max(0, logs.length - LOG_RENDER_LIMIT)
   const visibleLogs = hiddenLogCount > 0 ? logs.slice(hiddenLogCount) : logs
-
-  // Rows of the artifacts table: the build's own outputs, plus the template it
-  // ran against. The template is not something the build produced, but it is
-  // what the build is reproducible from, so it is offered beside the outputs
-  // rather than tucked into the details panel. It keeps its own download
-  // endpoint because it lives outside the work dir, which is the only tree the
-  // by-name artifact download will resolve a path in.
-  const artifactRows: {
-    key: string
-    name: string
-    type: string
-    size?: string
-    path?: string
-    href: string
-  }[] = artifacts.map((a) => ({
-    key: a.path,
-    name: a.name,
-    type: a.type,
-    size: a.size,
-    path: a.path,
-    href: `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`,
-  }))
-  if (details?.template) {
-    // The server hands the outputs over already ordered, images first and the
-    // SBOM last. The template goes in ahead of the first SBOM rather than at the
-    // end, so the SBOM stays the final row it is everywhere else; with no SBOM
-    // among the outputs the template lands last on its own.
-    const firstSbom = artifactRows.findIndex((r) => r.type === 'sbom')
-    artifactRows.splice(firstSbom === -1 ? artifactRows.length : firstSbom, 0, {
-      key: `template:${details.template}`,
-      name: details.template,
-      type: 'template',
-      path: details.templatePath,
-      href: api.templateUrl(buildId),
-    })
-  }
 
   // Request cancellation. Optimistically flip to the cancelling transient so the
   // button disables immediately; the terminal state (cancelled/failed) normally
@@ -424,14 +385,13 @@ export function BuildView({
         </div>
       )}
 
-      {/* Collapsible panel describing what was composed: the cascade selection
-          and the resolved image configuration. Collapsed by default so it
-          doesn't compete with the log for space. The template this build ran
-          against is listed in the artifacts table below instead.
-          Rendered only when there is a summary to show — a YAML-submitted build
-          has none, and an expandable that opens onto nothing is worse than no
-          expandable. */}
-      {details?.summary && (
+      {/* Collapsible panel describing what was composed: the cascade selection,
+          the resolved image configuration, and the template the build ran
+          against (downloadable). Collapsed by default so it doesn't compete with
+          the log for space. The template is not a build output, so it lives
+          here rather than in the artifacts table below. Every build has one, so
+          the panel is offered even for a YAML-submitted build with no summary. */}
+      {details && (
         <div className="mb-2 rounded-md border border-slate-200 bg-slate-50">
           <button
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-slate-100"
@@ -440,7 +400,7 @@ export function BuildView({
           >
             <span className="text-slate-400">{detailsOpen ? '▼' : '▶'}</span>
             Compose details
-            <span className="font-normal text-slate-400">— basic selection, image configuration</span>
+            <span className="font-normal text-slate-400">— template, paths</span>
           </button>
           {detailsOpen && (
             <div className="space-y-4 border-t border-slate-200 px-3 py-3 text-xs">
@@ -494,11 +454,28 @@ export function BuildView({
                 </div>
               )}
 
+              {/* Template — served by its own endpoint because it lives outside
+                  the work dir, the only tree the by-name artifact download
+                  resolves a path in. */}
+              {details.template && (
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-600">Template</span>
+                  <span className="font-mono text-slate-700">{details.template}</span>
+                  <a
+                    className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                    href={api.templateUrl(buildId)}
+                    download={details.template}
+                    title="Download template"
+                  >
+                    <DownloadIcon className="h-4 w-4" />
+                  </a>
+                </div>
+              )}
+
               {/* Advanced-tab changes: the delta this build layered onto the
                   matched template. Collapsed by default; absent when the build
                   overrode nothing. */}
-              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
-
+              {details.summary?.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
             </div>
           )}
         </div>
@@ -557,7 +534,7 @@ export function BuildView({
         </div>
       </div>
 
-      {artifactRows.length > 0 && (
+      {artifacts.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-sm font-semibold text-[#00285a]">
             {status === 'failed' || status === 'cancelled' ? 'Partial artifacts' : 'Artifacts'}
@@ -579,8 +556,8 @@ export function BuildView({
               </tr>
             </thead>
             <tbody>
-              {artifactRows.map((a) => (
-                <tr key={a.key} className="border-b border-slate-200">
+              {artifacts.map((a) => (
+                <tr key={a.path} className="border-b border-slate-200">
                   <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
                   <td className="px-3 py-2">{artifactTypeLabel(a.type)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
@@ -603,7 +580,7 @@ export function BuildView({
                     <a
                       className="inline-flex rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
                       title="Download artifact"
-                      href={a.href}
+                      href={`/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`}
                       download={a.name}
                     >
                       <DownloadIcon className="h-4 w-4" />
