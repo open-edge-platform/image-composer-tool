@@ -663,8 +663,8 @@ function TargetStep({
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
-        Select a use case, SKU, and platform. Pre-configured defaults are
-        applied based on your selection. Fields marked{' '}
+        Select a Use Case to load the default configuration. SKU, Platform, and
+        Operating System selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
