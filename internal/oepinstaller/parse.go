@@ -153,6 +153,9 @@ func (out *Output) add(doc document) error {
 	}
 	out.KernelCmdline = append(out.KernelCmdline, doc.KernelCmdline...)
 	if doc.AptSource == "" {
+		if len(doc.AptPref) > 0 {
+			out.PreferenceFiles = append(out.PreferenceFiles, PreferenceFile{File: doc.AptPrefFile, Lines: doc.AptPref})
+		}
 		return nil
 	}
 	repo, err := newRepository(doc)

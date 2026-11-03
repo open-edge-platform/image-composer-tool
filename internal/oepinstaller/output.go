@@ -156,14 +156,22 @@ func Pins(out *Output) []debutils.Pin {
 	return pins
 }
 
+// PreferenceFile is an apt preferences file that a component writes without
+// declaring a repository, for example to pin packages of an existing repository.
+type PreferenceFile struct {
+	File  string   // in-image path of the preferences file
+	Lines []string // apt_preferences(5) lines
+}
+
 // Output is the parsed and validated `openedge-cli list --sbom` output.
 type Output struct {
-	CLIVersion     string       // header cli-version
-	CLIURL         string       // header cli-url, may be empty
-	Modules        []string     // header module-list
-	InstallCmdline []string     // header install-cmdline, nil when absent
-	Arguments      []string     // arguments of InstallCmdline after the modules, nil when absent
-	Packages       []Package    // pkg-list entries, in output order
-	Repositories   []Repository // repository groups, in output order
-	KernelCmdline  []string     // kernel-cmdline entries, in output order
+	CLIVersion      string           // header cli-version
+	CLIURL          string           // header cli-url, may be empty
+	Modules         []string         // header module-list
+	InstallCmdline  []string         // header install-cmdline, nil when absent
+	Arguments       []string         // arguments of InstallCmdline after the modules, nil when absent
+	Packages        []Package        // pkg-list entries, in output order
+	Repositories    []Repository     // repository groups, in output order
+	PreferenceFiles []PreferenceFile // preferences of components without an apt-source, in output order
+	KernelCmdline   []string         // kernel-cmdline entries, in output order
 }

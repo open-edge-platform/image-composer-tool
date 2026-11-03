@@ -20,6 +20,10 @@ func Apply(t *config.ImageTemplate, out *Output) error {
 	if err := checkKernelCmdline(t.SystemConfig.Kernel.Cmdline, out.KernelCmdline); err != nil {
 		return err
 	}
+	if len(out.PreferenceFiles) > 0 {
+		return fmt.Errorf("the OEP Installer output has apt preferences without a repository (%s), which ICT does "+
+			"not support yet", out.PreferenceFiles[0].File)
+	}
 	pkgs, err := mergePackages(t.SystemConfig.Packages, out.Packages)
 	if err != nil {
 		return err
