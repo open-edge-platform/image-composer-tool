@@ -1,7 +1,11 @@
+import type { ReactNode } from 'react'
 import type { DropdownOption } from '../store'
 
 interface SelectProps {
   label: string
+  // Appended after the label — e.g. a required-field asterisk. Kept separate
+  // from `label` so the plain label text still drives the generated id.
+  labelSuffix?: ReactNode
   value: string
   options: DropdownOption[]
   placeholder: string
@@ -11,6 +15,7 @@ interface SelectProps {
 
 export function Select({
   label,
+  labelSuffix,
   value,
   options,
   placeholder,
@@ -22,6 +27,7 @@ export function Select({
     <div className="mb-4">
       <label htmlFor={id} className="mb-1 block text-sm font-semibold text-[#00285a]">
         {label}
+        {labelSuffix}
       </label>
       <select
         id={id}
