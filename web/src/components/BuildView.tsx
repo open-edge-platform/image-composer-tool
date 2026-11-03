@@ -497,7 +497,7 @@ export function BuildView({
               {/* Advanced-tab changes: the delta this build layered onto the
                   matched template. Collapsed by default; absent when the build
                   overrode nothing. */}
-              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} />}
+              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
 
             </div>
           )}
