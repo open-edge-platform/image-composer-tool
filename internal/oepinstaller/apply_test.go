@@ -129,6 +129,10 @@ func TestCombineVersions(t *testing.T) {
 		{"pkg_1.0.2-1", "pkg_1.0.3-1", "", false},
 		{"pkg_2.0.1-1", "pkg_1.0*", "", false},
 		{"pkg_1.0*", "pkg_2.0*", "", false},
+		{"pkg_2:1.0.2-1", "pkg_1:1.0*", "", false},
+		{"pkg_2:1.0.2-1", "pkg_1.0*", "pkg_2:1.0.2-1", true},
+		{"pkg_1.0*", "pkg_2:1.0*", "pkg_2:1.0*", true},
+		{"pkg_1:1.0.2-1", "pkg_1.0.2-1", "pkg_1:1.0.2-1", true},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -139,6 +143,50 @@ func TestCombineVersions(t *testing.T) {
 				t.Errorf("combineVersions(%q, %q) = %q, %v; want %q, %v", tt.a, tt.b, got, ok, tt.want, tt.ok)
 			}
 		})
+	}
+}
+
+func TestAddPackage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		pkgs    []string
+		entry   string
+		want    []string
+		wantErr bool
+	}{
+		{"new package", []string{"a"}, "b_1.0*", []string{"a", "b_1.0*"}, false},
+		{"combines with the existing entry", []string{"a", "b"}, "b_1.0*", []string{"a", "b_1.0*"}, false},
+		{"combines with every entry", []string{"b", "a", "b_1.0.2-1"}, "b_1.0*", []string{"b_1.0.2-1", "a"}, false},
+		{"incompatible with a second entry", []string{"b_1.0*", "b_2.0.1-1"}, "b_1.0*", nil, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := addPackage(slices.Clone(tt.pkgs), tt.entry)
+			if (err != nil) != tt.wantErr || (!tt.wantErr && !slices.Equal(got, tt.want)) {
+				t.Fatalf("addPackage(%v, %q) = %v, %v; want %v, err %v", tt.pkgs, tt.entry, got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestUniqueRepositoriesSharedKey(t *testing.T) {
+	t.Parallel()
+	a := Repository{GPGKey: "https://h/k.asc", KeyFile: "/etc/apt/keyrings/k.gpg", ListFile: "/etc/apt/sources.list.d/a.list",
+		Source: "deb [signed-by=/etc/apt/keyrings/k.gpg] https://h/a noble main", URI: "https://h/a", Suite: "noble",
+		Component: "main"}
+	b := a
+	b.ListFile = "/etc/apt/sources.list.d/b.list"
+	b.Source, b.URI = "deb [signed-by=/etc/apt/keyrings/k.gpg] https://h/b noble main", "https://h/b"
+	got, err := uniqueRepositories([]Repository{a, b, a})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("uniqueRepositories = %d repositories, %v; want both kept and the duplicate dropped", len(got), err)
+	}
+	b.GPGKey = "https://h/other.asc"
+	if _, err := uniqueRepositories([]Repository{a, b}); err == nil || !strings.Contains(err.Error(), "k.gpg") {
+		t.Fatalf("err = %v, want a conflict on the key file", err)
 	}
 }
 
@@ -157,6 +205,8 @@ func TestCheckKernel(t *testing.T) {
 		{"exact image", pinned, []string{"linux-image-7.0.0-38-generic"}, ""},
 		{"meta-package without a series", pinned, []string{"linux-generic-hwe-24.04"}, ""},
 		{"headers for another release", pinned, []string{"linux-headers-7.0.0-40-generic"}, "is for kernel 7.0.0-40"},
+		{"meta-package for a release without a patch version", []string{"linux-image-6.18-intel"},
+			[]string{"linux-image-intel-6.18"}, ""},
 		{"another kernel image", pinned, []string{"linux-image-6.18-intel"}, "not a kernel package of the template"},
 		{"meta-package of another series", pinned, []string{"linux-image-generic-6.8"}, "needs a 6.8.x kernel"},
 		{"template without a kernel", nil, []string{"linux-image-generic"}, "needs a matching kernel"},

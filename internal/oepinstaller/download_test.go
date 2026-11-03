@@ -1,6 +1,7 @@
 package oepinstaller
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -77,7 +78,7 @@ func TestNewDownloadRequestSendsTokenOnlyToGitHub(t *testing.T) {
 		tt := tt
 		t.Run(tt.url, func(t *testing.T) {
 			t.Parallel()
-			req, err := newDownloadRequest(tt.url, "secret")
+			req, err := newDownloadRequest(context.Background(), tt.url, "secret")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,9 +91,9 @@ func TestNewDownloadRequestSendsTokenOnlyToGitHub(t *testing.T) {
 
 func TestDownloadHint(t *testing.T) {
 	t.Parallel()
-	noToken, _ := newDownloadRequest("https://raw.githubusercontent.com/org/repo/abc/f", "")
-	withToken, _ := newDownloadRequest("https://raw.githubusercontent.com/org/repo/abc/f", "secret")
-	other, _ := newDownloadRequest("https://example.com/f", "")
+	noToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "")
+	withToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "secret")
+	other, _ := newDownloadRequest(context.Background(), "https://example.com/f", "")
 	if hint := downloadHint(noToken, http.StatusNotFound); !strings.Contains(hint, TokenEnv) ||
 		!strings.Contains(hint, "private repository") {
 		t.Errorf("hint without token = %q", hint)

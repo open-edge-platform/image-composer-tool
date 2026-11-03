@@ -2510,12 +2510,27 @@ func splitVersionPrefixRequest(want string) (string, string, bool) {
 	return m[1], m[2], true
 }
 
-// resolveVersionPrefix returns the preferred version of name whose version,
-// without its epoch, starts with prefix: highest priority first, then newest.
+// versionHasPrefix reports whether version matches a "name_version*" prefix. A
+// prefix with an epoch ("1:1.0") matches that epoch only, an absent epoch
+// counting as 0; a prefix without one is compared with the version's epoch
+// removed.
+func versionHasPrefix(version, prefix string) bool {
+	if epoch, rest, ok := strings.Cut(prefix, ":"); ok {
+		vEpoch, vRest, hasEpoch := strings.Cut(version, ":")
+		if !hasEpoch {
+			vEpoch, vRest = "0", version
+		}
+		return vEpoch == epoch && strings.HasPrefix(vRest, rest)
+	}
+	return strings.HasPrefix(stripEpoch(version), prefix)
+}
+
+// resolveVersionPrefix returns the preferred version of name whose version
+// starts with prefix (see versionHasPrefix): highest priority first, then newest.
 func resolveVersionPrefix(name, prefix string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
 	var candidates []ospackage.PackageInfo
 	for _, pi := range all {
-		if pi.Name == name && strings.HasPrefix(stripEpoch(pi.Version), prefix) {
+		if pi.Name == name && versionHasPrefix(pi.Version, prefix) {
 			candidates = append(candidates, pi)
 		}
 	}
