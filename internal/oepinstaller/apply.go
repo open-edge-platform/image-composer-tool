@@ -92,20 +92,31 @@ func ictEntry(p Package) string {
 	return p.Name
 }
 
-// addPackage adds entry to pkgs, combining it with an entry for the same
-// package when their versions are compatible.
+// addPackage adds entry to pkgs, combining it with every entry for the same
+// package into one request when their versions are compatible.
 func addPackage(pkgs []string, entry string) ([]string, error) {
-	i := slices.IndexFunc(pkgs, func(e string) bool { return packageName(e) == packageName(entry) })
-	if i < 0 {
-		return append(pkgs, entry), nil
+	name := packageName(entry)
+	merged, first := entry, -1
+	out := make([]string, 0, len(pkgs)+1)
+	for _, e := range pkgs {
+		if packageName(e) != name {
+			out = append(out, e)
+			continue
+		}
+		var ok bool
+		if merged, ok = combineVersions(e, merged); !ok {
+			return nil, fmt.Errorf("package %q is requested at incompatible versions: %q and %q", name, e, entry)
+		}
+		if first < 0 {
+			first = len(out)
+			out = append(out, "")
+		}
 	}
-	merged, ok := combineVersions(pkgs[i], entry)
-	if !ok {
-		return nil, fmt.Errorf("package %q is requested at incompatible versions: %q and %q",
-			packageName(entry), pkgs[i], entry)
+	if first < 0 {
+		return append(out, merged), nil
 	}
-	pkgs[i] = merged
-	return pkgs, nil
+	out[first] = merged
+	return out, nil
 }
 
 // packageName returns the package name of an ICT package entry.
@@ -114,52 +125,95 @@ func packageName(entry string) string {
 	return name
 }
 
+// versionRequest is the version part of an ICT package entry.
+type versionRequest struct {
+	epoch, version string
+	prefix         bool
+}
+
+func parseVersionRequest(v string) versionRequest {
+	r := versionRequest{version: v}
+	if epoch, rest, ok := strings.Cut(v, ":"); ok {
+		r.epoch, r.version = epoch, rest
+	}
+	r.version, r.prefix = strings.CutSuffix(r.version, "*")
+	return r
+}
+
+func (r versionRequest) String() string {
+	s := r.version
+	if r.epoch != "" {
+		s = r.epoch + ":" + s
+	}
+	if r.prefix {
+		s += "*"
+	}
+	return s
+}
+
 // combineVersions returns the entry that satisfies both a and b, which name the
-// same package, or false when no version can.
+// same package, or false when no version can. An explicit epoch must match the
+// other request's epoch when it has one.
 func combineVersions(a, b string) (string, bool) {
-	_, va, _ := strings.Cut(a, "_")
+	name, va, _ := strings.Cut(a, "_")
 	_, vb, _ := strings.Cut(b, "_")
-	pa, pb := strings.HasSuffix(va, "*"), strings.HasSuffix(vb, "*")
-	ca, cb := strings.TrimSuffix(stripEpoch(va), "*"), strings.TrimSuffix(stripEpoch(vb), "*")
 	switch {
 	case va == "" || va == vb:
 		return b, true
 	case vb == "":
 		return a, true
-	case !pa && !pb:
+	}
+	ra, rb := parseVersionRequest(va), parseVersionRequest(vb)
+	if ra.epoch != "" && rb.epoch != "" && ra.epoch != rb.epoch {
 		return "", false
-	case !pa:
-		return a, strings.HasPrefix(ca, cb)
-	case !pb:
-		return b, strings.HasPrefix(cb, ca)
-	case strings.HasPrefix(ca, cb):
-		return a, true
-	case strings.HasPrefix(cb, ca):
-		return b, true
 	}
-	return "", false
+	keep := ra
+	switch {
+	case !ra.prefix && !rb.prefix:
+		if ra.version != rb.version {
+			return "", false
+		}
+	case !ra.prefix:
+		if !strings.HasPrefix(ra.version, rb.version) {
+			return "", false
+		}
+	case !rb.prefix:
+		if !strings.HasPrefix(rb.version, ra.version) {
+			return "", false
+		}
+		keep = rb
+	case strings.HasPrefix(ra.version, rb.version):
+	case strings.HasPrefix(rb.version, ra.version):
+		keep = rb
+	default:
+		return "", false
+	}
+	if keep.epoch == "" {
+		keep.epoch = ra.epoch + rb.epoch // at most one is set
+	}
+	return name + "_" + keep.String(), true
 }
 
-func stripEpoch(version string) string {
-	if _, rest, ok := strings.Cut(version, ":"); ok {
-		return rest
-	}
-	return version
-}
-
-// uniqueRepositories merges identical repository groups and rejects groups
-// that name the same file with different content.
+// uniqueRepositories drops repository groups identical to an earlier one and
+// rejects groups that write the same in-image file with different content.
+// Groups that share a file with the same content, such as a signing key, are
+// both kept.
 func uniqueRepositories(repos []Repository) ([]config.PackageRepository, error) {
 	var unique []Repository
 	for _, r := range repos {
-		i := slices.IndexFunc(unique, func(u Repository) bool { return sharesFile(u, r) })
-		if i < 0 {
-			unique = append(unique, r)
-			continue
+		duplicate := false
+		for _, u := range unique {
+			if reflect.DeepEqual(u, r) {
+				duplicate = true
+				break
+			}
+			if file := conflictingFile(u, r); file != "" {
+				return nil, fmt.Errorf("the OEP Installer output names %s for two different repositories (%q and %q)",
+					file, u.Source, r.Source)
+			}
 		}
-		if !reflect.DeepEqual(unique[i], r) {
-			return nil, fmt.Errorf("the OEP Installer output names %s for two different repositories (%q and %q)",
-				sharedFile(unique[i], r), unique[i].Source, r.Source)
+		if !duplicate {
+			unique = append(unique, r)
 		}
 	}
 	out := make([]config.PackageRepository, 0, len(unique))
@@ -169,18 +223,16 @@ func uniqueRepositories(repos []Repository) ([]config.PackageRepository, error) 
 	return out, nil
 }
 
-func sharesFile(a, b Repository) bool {
-	return sharedFile(a, b) != ""
-}
-
-// sharedFile returns an in-image file both repositories write, if any.
-func sharedFile(a, b Repository) string {
+// conflictingFile returns an in-image file that both repositories write with
+// different content, if any.
+func conflictingFile(a, b Repository) string {
 	switch {
-	case a.ListFile == b.ListFile:
+	case a.ListFile == b.ListFile && (a.Source != b.Source || a.SourceSrc != b.SourceSrc):
 		return a.ListFile
-	case a.KeyFile == b.KeyFile:
+	case a.KeyFile == b.KeyFile && (a.GPGKey != b.GPGKey || a.GPGKeyFingerprint != b.GPGKeyFingerprint):
 		return a.KeyFile
-	case a.PreferencesFile != "" && a.PreferencesFile == b.PreferencesFile:
+	case a.PreferencesFile != "" && a.PreferencesFile == b.PreferencesFile &&
+		!slices.Equal(a.Preferences, b.Preferences):
 		return a.PreferencesFile
 	}
 	return ""
