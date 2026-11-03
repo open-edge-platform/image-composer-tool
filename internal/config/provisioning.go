@@ -407,6 +407,22 @@ func (t *ImageTemplate) validateProvisioning() error {
 		return fmt.Errorf("invalid systemConfig.bootloader.bootEntryPolicy %q: must be %q or %q",
 			sc.Bootloader.BootEntryPolicy, BootEntryPolicyPreserve, BootEntryPolicyExclusive)
 	}
+	return validateBootloaderTimeout(sc.Bootloader)
+}
+
+// validateBootloaderTimeout rejects a timeoutSec that cannot take effect: it is
+// written to GRUB_TIMEOUT, so it must not be negative, and systemd-boot has no
+// equivalent setting in ICT builds.
+func validateBootloaderTimeout(b Bootloader) error {
+	if b.TimeoutSec == nil {
+		return nil
+	}
+	if *b.TimeoutSec < 0 {
+		return fmt.Errorf("invalid systemConfig.bootloader.timeoutSec %d: must be 0 or greater", *b.TimeoutSec)
+	}
+	if b.Provider == "systemd-boot" {
+		return fmt.Errorf("systemConfig.bootloader.timeoutSec is only supported with the grub provider, not %q", b.Provider)
+	}
 	return nil
 }
 

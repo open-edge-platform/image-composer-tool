@@ -824,9 +824,18 @@ packageRepositories:
 | `bootType` | string | `efi`, `legacy` | Boot firmware type |
 | `provider` | string | `grub`, `grub2`, `systemd-boot` | Bootloader software |
 | `bootEntryPolicy` | string | `preserve` (default), `exclusive` | Live installer only: `preserve` puts the installed OS first and keeps the existing `BootOrder` after it; `exclusive` lists only the installed OS. Existing boot entries are kept, except entries labelled exactly `ICT` from an earlier install, which are replaced |
+| `timeoutSec` | integer | `0` or greater | Seconds GRUB shows its menu before booting the default entry (`GRUB_TIMEOUT` in `/etc/default/grub`). `0` boots at once. Omit to keep ICT's default of `5`. Applies to create-mode builds with the `grub` provider; a template that sets it with `systemd-boot` is rejected, and overlay mode leaves the baseline's GRUB settings alone |
 
 Typical defaults: raw images use `efi` / `systemd-boot`; ISO images use
 `efi` / `grub`.
+
+```yaml
+systemConfig:
+  bootloader:
+    bootType: efi
+    provider: grub
+    timeoutSec: 1   # show the GRUB menu for 1 second
+```
 
 After an EFI install, the live installer creates a firmware boot entry labelled
 `ICT` for the installed disk and sets `BootOrder` explicitly so the installed
