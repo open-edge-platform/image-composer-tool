@@ -283,6 +283,7 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 			Available:         r.Available,
 			UnavailableReason: optStr(r.UnavailableReason),
 			RequiresRepos:     optStrs(r.RequiresRepos),
+			Includes:          fromEdgePackIncluded(r.Includes),
 		}
 	}
 	for i, d := range p.Domains {
@@ -297,6 +298,24 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 		}
 	}
 	return out
+}
+
+// fromEdgePackIncluded maps a runtime's dependency tree, returning nil for an
+// empty level so `includes` is omitted rather than emitted as `[]`.
+func fromEdgePackIncluded(inc []service.EdgePackIncluded) *[]httpapi.EdgePackIncludedPackage {
+	if len(inc) == 0 {
+		return nil
+	}
+	out := make([]httpapi.EdgePackIncludedPackage, len(inc))
+	for i, p := range inc {
+		out[i] = httpapi.EdgePackIncludedPackage{
+			Name:        p.Name,
+			Description: optStr(p.Description),
+			Version:     optStr(p.Version),
+			Includes:    fromEdgePackIncluded(p.Includes),
+		}
+	}
+	return &out
 }
 
 func fromEdgePackPackages(pkgs []service.EdgePackPackage) []httpapi.EdgePackPackage {
@@ -388,7 +407,39 @@ func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 		PartitionTable: s.PartitionTable,
 		Hostname:       s.Hostname,
 		BaseImage:      optStr(s.BaseImage),
+
+		Advanced: fromAdvancedChanges(s.Advanced),
 	}
+}
+
+func fromAdvancedChanges(a *service.AdvancedChanges) *httpapi.AdvancedChanges {
+	if a == nil {
+		return nil
+	}
+	out := &httpapi.AdvancedChanges{
+		ImageName:      optStr(a.ImageName),
+		Packages:       optStrs(a.Packages),
+		Repos:          optStrs(a.Repos),
+		NewUsers:       optStrs(a.NewUsers),
+		CredentialsFor: optStrs(a.CredentialsFor),
+	}
+	if d := a.Disk; d != nil {
+		parts := make([]httpapi.DiskPartitionSummary, len(d.Partitions))
+		for i, p := range d.Partitions {
+			parts[i] = httpapi.DiskPartitionSummary{
+				Id: optStr(p.ID), FsType: optStr(p.FsType), MountPoint: optStr(p.MountPoint),
+				Start: optStr(p.Start), End: optStr(p.End),
+			}
+		}
+		out.Disk = &httpapi.DiskChangeSummary{
+			Size:           optStr(d.Size),
+			PartitionTable: optStr(d.PartitionTable),
+		}
+		if len(parts) > 0 {
+			out.Disk.Partitions = &parts
+		}
+	}
+	return out
 }
 
 // fromComposeResult maps the compose outcome onto the contract type. deltaYaml

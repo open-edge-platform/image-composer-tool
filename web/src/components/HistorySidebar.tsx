@@ -9,9 +9,18 @@ interface HistorySidebarProps {
   clockOffsetMs?: number
 }
 
+// Rows per history page.
+export const HISTORY_PAGE_SIZE = 10
+
 // Left-hand compose history list inside the Compose Image tab. Newest first;
 // each row shows a status dot and SKU, the rest of the selection as subtext, and
 // a relative time.
+//
+// Paged HISTORY_PAGE_SIZE rows at a time, so the sidebar keeps a fixed height
+// however many composes have been recorded. Paging is client-side on purpose:
+// GET /builds already has to read every meta.json to sort by creation time, and
+// App scans the full list for an in-flight build to adopt, so paging the
+// endpoint would save a few hundred bytes per row and cost a second fetch path.
 export function HistorySidebar({
   items,
   selectedId,
@@ -25,6 +34,31 @@ export function HistorySidebar({
     const t = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(t)
   }, [items.length])
+
+  const pageCount = Math.max(1, Math.ceil(items.length / HISTORY_PAGE_SIZE))
+  const [page, setPage] = useState(0)
+  // Follow the selection to its page whenever it changes — a new compose
+  // selects the newest build, so the list jumps back to page 1 to show it. Keyed
+  // on the selection being *found*, not just its id, because on first load the
+  // active build is selected before the list arrives. Paging away afterwards is
+  // left alone. Adjusted during render rather than in an effect so the stale
+  // page never paints.
+  const selectedIndex = selectedId ? items.findIndex((it) => it.id === selectedId) : -1
+  const followKey = selectedIndex >= 0 ? selectedId : null
+  const [followed, setFollowed] = useState<string | null>(null)
+  if (followKey !== followed) {
+    setFollowed(followKey)
+    if (followKey) setPage(Math.floor(selectedIndex / HISTORY_PAGE_SIZE))
+  }
+  // Clamp rather than reset: the list only shrinks if build dirs are deleted.
+  // The clamp is persisted, not just rendered — otherwise the stale page comes
+  // back as soon as the list grows again. Functional, so it applies on top of a
+  // follow update queued above instead of overwriting it with the stale page.
+  const current = Math.min(page, pageCount - 1)
+  if (page !== current) setPage((p) => Math.min(p, pageCount - 1))
+  const start = current * HISTORY_PAGE_SIZE
+  const visible = items.slice(start, start + HISTORY_PAGE_SIZE)
+
   return (
     <div className="w-72 shrink-0 border-r border-slate-200 pr-3">
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
@@ -34,7 +68,7 @@ export function HistorySidebar({
         <p className="text-xs text-slate-400">No composes yet.</p>
       ) : (
         <ul className="space-y-1">
-          {items.map((it) => {
+          {visible.map((it) => {
             const { title, details, tooltip } = rowLabels(it, manifest)
             return (
               <li key={it.id}>
@@ -66,7 +100,54 @@ export function HistorySidebar({
           })}
         </ul>
       )}
+      {pageCount > 1 && (
+        <nav
+          aria-label="History pages"
+          className="mt-2 flex items-center justify-between px-2 text-[11px] text-slate-500"
+        >
+          <PageButton
+            label="Newer"
+            disabled={current === 0}
+            onClick={() => setPage(current - 1)}
+          >
+            ‹ Newer
+          </PageButton>
+          <span>
+            {start + 1}–{start + visible.length} of {items.length}
+          </span>
+          <PageButton
+            label="Older"
+            disabled={current === pageCount - 1}
+            onClick={() => setPage(current + 1)}
+          >
+            Older ›
+          </PageButton>
+        </nav>
+      )}
     </div>
+  )
+}
+
+function PageButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string
+  disabled: boolean
+  onClick: () => void
+  children: string
+}) {
+  return (
+    <button
+      aria-label={`${label} builds`}
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded px-1.5 py-0.5 font-medium text-[#0071c5] hover:bg-slate-100 disabled:cursor-default disabled:text-slate-300 disabled:hover:bg-transparent"
+    >
+      {children}
+    </button>
   )
 }
 

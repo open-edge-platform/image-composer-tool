@@ -514,7 +514,16 @@ function MergedPane({
             onChange={(e) => setSelectedOnly(e.target.checked)}
             className="h-[13px] w-[13px] accent-[#0071c5]"
           />
-          Show only selected
+          Show only selected{' '}
+          {/* How much of the browsed repo is already picked — otherwise only
+              discoverable by checking this box, since picks are scattered
+              across catalog pages. Always shown, even at zero, so a repo
+              whose picks all live elsewhere — e.g. an Edge Pack template's
+              base packages — reads as "none from here" rather than as a
+              missing count. */}
+          <span className="text-slate-500">
+            ({selectedRows.length} selected)
+          </span>
         </label>
         {!selectedOnly && hits.length > 0 && (
           <label className="flex items-center gap-1.5 font-medium">

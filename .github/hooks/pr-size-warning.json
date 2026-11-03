@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "./.github/hooks/scripts/pr-size-warning.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}

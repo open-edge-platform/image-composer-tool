@@ -60,6 +60,8 @@ beforeEach(() => {
 describe('AdvancedPage credentials', () => {
   it('asks for credentials again for the next build of the same selection', async () => {
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    // Next stays disabled until the compose response seeds the Image Name.
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
