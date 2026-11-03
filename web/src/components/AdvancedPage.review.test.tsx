@@ -4,7 +4,7 @@
 // The review step lists what this selection changes, open by default, and does
 // not show the raw delta YAML.
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdvancedPage } from './AdvancedPage'
 import { useStore } from '../store'
@@ -60,6 +60,8 @@ beforeEach(() => {
 describe('AdvancedPage review', () => {
   it('shows Your changes open and no delta YAML', async () => {
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    // Next stays disabled until the compose response seeds the Image Name.
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
     const changes = await screen.findByRole('button', { name: /Your changes/ })

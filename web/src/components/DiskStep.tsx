@@ -76,6 +76,8 @@ const LABEL = 'mb-1 block text-sm font-semibold text-[#00285a]'
 // heading, an input value and a read-only derived value all start on the same
 // vertical line whichever one a cell happens to hold.
 const COL_HEAD = 'px-[9px] text-[11px] font-semibold uppercase tracking-wide text-slate-400'
+// Marks a field the Disk step reports as an error while empty.
+const REQUIRED = <span className="text-red-600"> *</span>
 const DERIVED = 'truncate px-[9px] font-mono text-xs text-slate-400'
 const ICON_BTN =
   'rounded border border-slate-300 px-1.5 py-0.5 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30'
@@ -189,7 +191,7 @@ export function DiskStep() {
           here rather than hardcoded the way the prototype's YAML generator does. */}
       <div className="mb-4">
         <label htmlFor="disk-name" className={LABEL}>
-          Disk Name
+          Disk Name{REQUIRED}
         </label>
         <input
           id="disk-name"
@@ -347,7 +349,7 @@ export function DiskStep() {
                   <div className={`${ROW_GRID} border border-transparent p-2 pb-1`}>
                     <span className={COL_HEAD}>Name</span>
                     <span className={COL_HEAD}>Label</span>
-                    <span className={COL_HEAD}>FS</span>
+                    <span className={COL_HEAD}>FS{REQUIRED}</span>
                     <span className={COL_HEAD}>
                       Size{disk.layoutMode === 'offset' && <em className="font-normal"> (derived)</em>}
                     </span>
@@ -456,7 +458,8 @@ function Heading({ children }: { children?: React.ReactNode }) {
       <div>
         <h2 className="mb-1 text-lg font-bold text-[#00285a]">Disk Layout</h2>
         <p className="text-sm text-slate-500">
-          Configure disk size, partition table, and partitions.
+          Configure disk size, partition table, and partitions. Fields marked{' '}
+          <span className="font-semibold text-red-600">*</span> are required.
         </p>
       </div>
       {children}
@@ -872,8 +875,10 @@ function ArtifactsSection({
               <>
                 {artifacts.length > 0 && (
                   <div className="flex gap-2 px-1 pb-1">
-                    <span className={`${COL_HEAD} w-[140px]`}>Format</span>
-                    <span className={`${COL_HEAD} w-[160px]`}>Compression</span>
+                    <span className={`${COL_HEAD} w-[140px]`}>Format{REQUIRED}</span>
+                    <span className={`${COL_HEAD} w-[160px]`}>
+                      Compression{compressionRequired && REQUIRED}
+                    </span>
                   </div>
                 )}
                 {artifacts.length === 0 ? (
