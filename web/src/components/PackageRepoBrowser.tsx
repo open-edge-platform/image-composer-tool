@@ -9,6 +9,14 @@ import type { VersionResolver } from '../lib/useVersionResolver'
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
 
+// Height cap shared by the repository rail and the package pane. It tracks the
+// viewport so the step's Back/Next row stays on screen: 34rem is roughly the
+// page chrome above the panes (header, stepper, search, tabs, notice) plus the
+// nav row below them. The floor keeps a few package cards visible on short
+// windows (the page scrolls instead); the ceiling stops very tall windows from
+// stretching the panes into a wall of rows.
+const PANE_MAX_H = 'max-h-[clamp(280px,calc(100vh-34rem),640px)]'
+
 interface PackageRepoBrowserProps {
   repos: PackageRepo[]
   os: string
@@ -109,7 +117,7 @@ export function PackageRepoBrowser({
         <div
           role="group"
           aria-label="Package repositories"
-          className="max-h-[480px] overflow-y-auto border-r border-slate-200 bg-slate-50"
+          className={`${PANE_MAX_H} overflow-y-auto border-r border-slate-200 bg-slate-50`}
         >
           {railRepos.map((r) => (
             <RepoRailRow
@@ -126,7 +134,7 @@ export function PackageRepoBrowser({
         <div
           role="region"
           aria-label="Repository packages"
-          className="max-h-[480px] overflow-y-auto bg-[#d6ecf8] px-[18px] py-3.5"
+          className={`${PANE_MAX_H} overflow-y-auto bg-[#d6ecf8] px-[18px] py-3.5`}
         >
           <MergedPane
             repos={repos}
