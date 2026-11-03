@@ -20,9 +20,11 @@ code.
   - [Development Guidelines](#development-guidelines)
     - [Coding Standards](#coding-standards)
     - [Commit Messages and Pull Requests](#commit-messages-and-pull-requests)
+      - [Keep pull requests small](#keep-pull-requests-small)
     - [Testing](#testing)
   - [Branching \& Release Strategy](#branching--release-strategy)
     - [Hotfix policy](#hotfix-policy)
+    - [Large Features \& Feature Branches](#large-features--feature-branches)
   - [Sign Your Work](#sign-your-work)
   - [License](#license)
 
@@ -163,6 +165,18 @@ Please fill in the details as per the
 [pull request template](.github/PULL_REQUEST_TEMPLATE.md) while submitting
 the pull request.
 
+#### Keep pull requests small
+
+Target **≤500 LOC changed per PR**. This applies regardless of whether the
+code was written by hand or with AI assistance — AI-assisted work tends to
+produce large diffs quickly, which makes review slower and harder, and
+makes it easy to miss **how** a feature will actually be used (e.g. logic
+copied from an unrelated existing pattern that doesn't actually fit).
+
+For anything bigger than a single focused change, see
+[Large Features & Feature Branches](#large-features--feature-branches)
+below — don't let it accumulate into one PR against `main`.
+
 ### Testing
 
 Thorough testing is crucial to maintain project stability. Ensure that you:
@@ -177,8 +191,7 @@ Thorough testing is crucial to maintain project stability. Ensure that you:
 
 ## Branching & Release Strategy
 
-- All feature and fix PRs target `main` directly; there is no separate
-  development branch to rebase onto.
+- Small, atomic PRs (a single focused change) target `main` directly.
 - `main` is expected to build and pass CI at all times.
 - Ahead of each quarterly release, a short-lived `release-YYYY.Q` branch
   (e.g. `release-2026.3`) is cut from `main` for final validation. Only
@@ -199,6 +212,25 @@ Thorough testing is crucial to maintain project stability. Ensure that you:
 - If you hit an issue on an older release, upgrade to the latest release
   branch or `main` first to confirm whether it's already fixed before
   filing a report.
+
+### Large Features & Feature Branches
+
+If a feature can't reasonably land as one PR of ≤500 LOC, don't accumulate
+it into a single large PR against `main`. Instead:
+
+1. Create a `feature/<name>` branch off `main` for the overall effort.
+2. Open a separate, small PR **against the feature branch** for each
+   independent, reviewable increment (e.g. one PR per API endpoint,
+   provider method, or UI component) rather than one PR with everything.
+3. Once all increments are merged into the feature branch and it builds
+   and passes CI, open one final PR merging `feature/<name>` into `main`.
+
+This keeps reviews fast, makes it easy to spot-check **how** a given piece
+is actually used (not just that it compiles), and lets a single
+problematic increment be reverted without unwinding the whole feature.
+It applies whether the code was written by hand or with AI assistance —
+AI makes it fast to generate a lot of code, but that's exactly when the
+discipline of splitting it into small, reviewable chunks matters most.
 
 ## Sign Your Work
 

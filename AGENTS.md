@@ -15,6 +15,7 @@
 6. **Stay in scope.** No drive-by refactors, no new comments/docstrings on code you didn't change, no abstractions for one-off use.
 7. **Update docs in the same PR** when behavior changes.
 8. **Never bypass safety gates.** No `--no-verify`, no `git push --force`, no skipping tests. Confirm before destructive or shared-system actions.
+9. **Keep PRs small.** For multi-step features, work on a `feature/<name>` branch and land small, independently reviewable PRs (≤500 LOC) against it rather than one large PR — see [Git & PRs](#git--prs).
 
 ---
 
@@ -78,10 +79,15 @@ For path-scoped detail, see `.github/instructions/`:
 - [`image-templates.instructions.md`](.github/instructions/image-templates.instructions.md) — YAML image template conventions
 - [`web.instructions.md`](.github/instructions/web.instructions.md) — web UI (`web/`) conventions
 
-Deterministic lifecycle hooks (enforcement, not just guidance) live in `.github/hooks/`:
+Deterministic lifecycle hooks (enforcement, not just guidance) live in `.github/hooks/` (the scripts require `jq`):
 
 - [`block-dangerous-git.json`](.github/hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
 - [`post-edit-checks.json`](.github/hooks/post-edit-checks.json) — flags `gofmt` drift and validates edited image templates
+- [`pr-size-warning.json`](.github/hooks/pr-size-warning.json) — asks for confirmation before `git push` when the branch diff vs `main` exceeds ~500 LOC
+
+Claude Code reads its own hook config from `.claude/settings.json` rather than
+`.github/hooks/*.json` — that file wires the same scripts so behavior stays
+identical across GHCP and Claude Code (see [CLAUDE.md](CLAUDE.md#hooks)).
 
 Custom agent personas (restricted tool sets, selectable from the agent picker or delegated to as subagents) live in `.github/agents/`:
 
@@ -120,7 +126,7 @@ If no docs need updating, **say so explicitly in the PR description**.
 
 - TLS 1.2+ via the project HTTP client.
 - Shell allowlist enforced — adding a new command requires justification.
-- Validate templates against `os-image-template.schema.json` (`image-composer-tool validate -t …`).
+- Validate templates against `os-image-template.schema.json` (`image-composer-tool validate <template.yml>`).
 - File permissions: `0700` chroot dirs, `0755` general dirs, `0644` data, `0640` logs.
 - Never embed secrets in fixtures, code, or logs.
 - CI gates (all must pass before merge): Trivy (HIGH/CRITICAL fails), Gitleaks, Zizmor, per-OS/arch integration builds.
@@ -132,6 +138,11 @@ If no docs need updating, **say so explicitly in the PR description**.
 - Sign commits (`git commit -S`).
 - Conventional commits: `type(scope): description` (`feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `build`, `ci`, `perf`).
 - Branches: `feature/`, `fix/`, `docs/`, `refactor/`.
+- **Keep PRs small — target ≤500 LOC changed.** For anything larger than a single focused change:
+  1. Create a `feature/<name>` branch off `main` for the overall effort.
+  2. Land small, independently reviewable PRs against that feature branch, one logical unit at a time — don't let agent-assisted work snowball into one giant PR.
+  3. Once the feature branch is complete and validated, open one final PR merging `feature/<name>` into `main`.
+  - A small, genuinely atomic fix/feature can still go straight to `main`.
 - Use `.github/PULL_REQUEST_TEMPLATE.md`.
 - **Never** force-push shared branches, **never** `--no-verify`.
 - Do **not** add AI co-author trailers unless the repo asks for them.

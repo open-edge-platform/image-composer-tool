@@ -7,6 +7,7 @@ import type {
   ComposeResponse,
   CredentialInput,
   CredentialRequirement,
+  EdgePack,
   NewUserInput,
 } from '../api/types'
 import { Select } from './Select'
@@ -18,6 +19,8 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { useBaseLock } from '../lib/baseLock'
+import { strandedPackages } from '../lib/edgepack'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -82,6 +85,17 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Accounts the user asked to add on top of the template's own, held for the
   // same reason credentials are: each entry carries a password.
   const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
+  // The matched template's own package list from the last successful compose,
+  // null until one lands for this selection. Held for the same reason
+  // lastRequirements is: the effect clears `composed` before each refetch, and
+  // the Packages check below must keep seeing what the template ships while a
+  // recompose is in flight.
+  const [lastBasePackages, setLastBasePackages] = useState<string[] | null>(null)
+  // The Edge Pack for the selected OS, for the same check. Fetched here rather
+  // than taken from the Packages step, which unmounts once the wizard moves on
+  // and starts each visit with nothing loaded. Keyed by OS so a stale pack is
+  // never read against a different target.
+  const [edgePack, setEdgePack] = useState<{ os: string; pack: EdgePack | null } | null>(null)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -89,6 +103,23 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   )
 
   const complete = !!opts?.matched
+
+  // Every field the Target step requires, by label, that is still empty. SKU and
+  // Kernel only count when the cascade offers them — the selectors are hidden
+  // (or skippable) otherwise. The wizard does not move past Target, and Target
+  // does not show as done, until this is empty and the selection resolves to a
+  // template.
+  const missingTarget = opts
+    ? ([
+        ['Use Case', !selection.vertical],
+        ['SKU', opts.skus.length > 0 && !selection.sku],
+        ['Platform', !selection.platform],
+        ['Operating System', !selection.os],
+        ['Kernel', opts.kernels.length > 0 && !selection.kernel],
+        ['Image Name', !imageName.trim()],
+      ] as [string, boolean][]).filter(([, missing]) => missing).map(([label]) => label)
+    : []
+  const targetComplete = complete && missingTarget.length === 0
 
   // Debounced so an override compose call (which generates and removes a
   // server-side delta file) fires once after the user pauses, not per keystroke.
@@ -140,6 +171,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setCredentials([])
     setNewUsers([])
     setLastRequirements([])
+    setLastBasePackages(null)
   }, [selection])
 
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
@@ -224,6 +256,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setComposed(r)
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
+          setLastBasePackages(r.basePackages ?? [])
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
           // *Edited flags in the store). The disk block is read out of the
@@ -240,6 +273,33 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       cancelled = true
     }
   }, [active, complete, composeReq])
+
+  // Fetched once per OS. A failed fetch stores nothing, so it is told apart
+  // from an OS with no Edge Pack and retried on the next step change — entering
+  // Packages included, where the step fetches its own copy and may show the
+  // inline warning. Until one succeeds no issue is raised.
+  const os = selection.os
+  useEffect(() => {
+    if (!active || !os || edgePack?.os === os) return
+    let cancelled = false
+    api
+      .getEdgePack(os)
+      .then((pack) => { if (!cancelled) setEdgePack({ os, pack }) })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [active, os, edgePack?.os, step])
+
+  // Domain packages selected with no base runtime beneath them will not build,
+  // which is what the Edge Packs tab warns about inline. Derived here from the
+  // store rather than reported by the Packages step, so it stays correct while
+  // that step is unmounted or still loading. Only `locked` is read off the
+  // base lock, which needs no repos and makes no requests.
+  const pack = edgePack?.os === os ? edgePack.pack : null
+  const baseLock = useBaseLock(os, null, lastBasePackages ?? [])
+  const packagesHaveIssues =
+    !!pack && lastBasePackages !== null && strandedPackages(pack, addedPackages, baseLock).length > 0
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
@@ -313,6 +373,21 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setCredentialsOpen(true)
   }
 
+  // A step reads as done once the user is past it — except Target, which also
+  // needs every required field filled (the selection is shared with Basic, so
+  // it can be cleared there while the wizard sits on a later step), and
+  // Packages and Disk, which come pre-filled from the template and so only read
+  // as done once the user has actually changed something there.
+  const packagesChanged = addedPackages.length > 0 || enabledRepos.length > 0
+  const stepDone = (i: number) =>
+    i < step &&
+    (i === 0 ? targetComplete : i === 1 ? packagesChanged : i === 2 ? diskEdited && !diskInvalid : true)
+  // Red, ahead of green, for a step whose values will not build.
+  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && diskInvalid)
+  // The wizard does not move past Target with a field missing, nor past Disk
+  // while it shows an error — a required field left empty there included.
+  const canLeaveStep = targetComplete && !(step === 2 && diskInvalid)
+
   // Empty until something is overridden: with no overrides no delta is
   // generated, and the build runs the curated template unchanged.
   const deltaYaml = composed?.deltaYaml ?? ''
@@ -340,22 +415,27 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             <button
               type="button"
               onClick={() => setStep(i)}
+              // Later steps stay locked until Target is filled in, and Review
+              // until the Disk step's errors are fixed.
+              disabled={(i > 0 && !targetComplete) || (i > 2 && diskInvalid)}
               className={
-                'flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold transition-colors ' +
+                'flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed ' +
                 (i === step
                   ? 'bg-[#0071c5] text-white'
-                  : i < step
-                    ? 'bg-emerald-500 text-white'
-                    : 'bg-slate-200 text-slate-500 hover:bg-slate-300')
+                  : stepHasIssues(i)
+                    ? 'bg-red-500 text-white'
+                    : stepDone(i)
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:hover:bg-slate-200')
               }
             >
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/25 text-[11px]">
-                {i < step ? '✓' : i + 1}
+                {i === step ? i + 1 : stepHasIssues(i) ? '!' : stepDone(i) ? '✓' : i + 1}
               </span>
               {label}
             </button>
             {i < STEPS.length - 1 && (
-              <div className={'h-0.5 w-6 ' + (i < step ? 'bg-emerald-500' : 'bg-slate-200')} />
+              <div className={'h-0.5 w-6 ' + (stepDone(i) && !stepHasIssues(i) ? 'bg-emerald-500' : 'bg-slate-200')} />
             )}
           </div>
         ))}
@@ -372,6 +452,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           (step === 1 ? 'max-w-6xl' : step === 2 ? 'max-w-5xl' : 'max-w-3xl')
         }
       >
+        {/* A failed resolve leaves Image Name unseeded, which locks Next behind
+            what reads as an unfilled field. Say why, rather than leaving the
+            error on a Review step the user cannot reach. */}
+        {step === 0 && error && (
+          <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
+        )}
         {step === 0 && (
           <TargetStep
             opts={opts}
@@ -383,7 +469,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         )}
 
         {step === 1 && (
-          <PackagesStep os={selection.os} active={active} basePackages={composed?.basePackages ?? []} />
+          <PackagesStep
+            os={selection.os}
+            active={active}
+            basePackages={composed?.basePackages ?? []}
+          />
         )}
 
         {step === 2 && <DiskStep />}
@@ -511,13 +601,25 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             Back
           </button>
           {step < STEPS.length - 1 && (
-            <button
-              type="button"
-              onClick={() => setStep((s) => Math.min(STEPS.length - 1, s + 1))}
-              className="rounded-md bg-[#0071c5] px-4 py-2 text-sm font-semibold text-white hover:bg-[#005a9e]"
-            >
-              Next
-            </button>
+            <div className="flex items-center gap-3">
+              {!canLeaveStep && (
+                <span className="text-xs text-amber-600">
+                  {!targetComplete
+                    ? missingTarget.length > 0
+                      ? `Fill in the required Target fields: ${missingTarget.join(', ')}.`
+                      : 'This selection does not match an available template.'
+                    : 'Fix the errors on the Disk step before continuing.'}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setStep((s) => Math.min(STEPS.length - 1, s + 1))}
+                disabled={!canLeaveStep}
+                className="rounded-md bg-[#0071c5] px-4 py-2 text-sm font-semibold text-white hover:bg-[#005a9e] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -539,6 +641,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   )
 }
 
+// Marks a field the Target step will not let the wizard move past while empty.
+const REQUIRED = <span className="text-red-600"> *</span>
+
 // Step 1: "Choose Image Configuration" — the selection cascade (shared with the
 // Basic tab), plus the editable Image Name override.
 function TargetStep({
@@ -559,11 +664,13 @@ function TargetStep({
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
         Select a use case, SKU, and platform. Pre-configured defaults are
-        applied based on your selection.
+        applied based on your selection. Fields marked{' '}
+        <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
       <Select
         label="Use Case"
+        labelSuffix={REQUIRED}
         placeholder="-- Select Use Case --"
         value={selection.vertical}
         options={opts.verticals}
@@ -571,6 +678,7 @@ function TargetStep({
       />
       <Select
         label="SKU"
+        labelSuffix={REQUIRED}
         placeholder="-- Select SKU --"
         value={selection.sku}
         options={opts.skus}
@@ -579,6 +687,7 @@ function TargetStep({
       />
       <Select
         label="Platform"
+        labelSuffix={REQUIRED}
         placeholder="-- Select Platform --"
         value={selection.platform}
         options={opts.platforms}
@@ -587,6 +696,7 @@ function TargetStep({
       />
       <Select
         label="Operating System"
+        labelSuffix={REQUIRED}
         placeholder="-- Select Operating System --"
         value={selection.os}
         options={opts.oses}
@@ -596,6 +706,7 @@ function TargetStep({
       {opts.kernels.length > 0 && (
         <Select
           label="Kernel"
+          labelSuffix={REQUIRED}
           placeholder="-- Select Kernel --"
           value={selection.kernel}
           options={opts.kernels}
@@ -613,6 +724,7 @@ function TargetStep({
 
       <Input
         label="Image Name"
+        labelSuffix={REQUIRED}
         placeholder="Image name"
         value={imageName}
         onChange={setImageName}
