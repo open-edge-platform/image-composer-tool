@@ -53,31 +53,29 @@ it again after `git pull` so the image picks up the new commits.
 ## 2. Write a Template
 
 A template is a YAML file that describes the OS image: the distribution, the
-disk layout, the packages, the users, and so on. The quickest start is a copy
-of a template shipped in `image-templates/`:
+disk layout, the packages, the users, and so on. Only `image` and `target` are
+required. ICT takes everything else from the defaults for the target, here
+`config/osv/ubuntu/ubuntu24/imageconfigs/defaultconfigs/default-raw-x86_64.yml`,
+so this template builds a minimal Ubuntu 24.04 RAW disk image:
 
 ```bash
 mkdir -p ~/my-image
-cp image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml ~/my-image/my-image.yml
-```
-
-Edit `~/my-image/my-image.yml`, for example to rename the image and add a
-package:
-
-```yaml
+cat > ~/my-image/my-image.yml <<'EOF'
 image:
   name: my-image       # output files are named <name>-<version>.<format>
-# ...
-systemConfig:
-  name: minimal        # the output directory is named after this
-  # ...
-  packages:
-    # ...
-    - vim              # added
+  version: "24.04"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+EOF
 ```
 
-The [template reference](../architecture/image-composer-tool-templates.md)
-describes every field. To check the template before you build it:
+To change a default, add its field to the template. The
+[template reference](../architecture/image-composer-tool-templates.md)
+describes every field, and the templates in `image-templates/` are complete
+examples. To check the template before you build it:
 
 ```bash
 docker run --rm -v ~/my-image:/input:ro ict image-composer-tool validate /input/my-image.yml
@@ -98,16 +96,15 @@ its outputs into `./out`:
 
 ```text
 out/
-└── minimal/                                         # systemConfig.name
+└── Default_Raw/                                     # systemConfig.name, from the defaults
     ├── my-image-24.04.raw.gz                        # the disk image, gzip-compressed
-    ├── my-image-24.04.vhdx                          # the same disk as a VHDX file
     └── spdx_manifest_deb_my-image_<timestamp>.json  # the SBOM
 ```
 
-The template's `disk.artifacts` list decides which formats you get. ISO
-templates also produce a second directory, holding the installer's initial RAM
-disk. Paths in the build log are inside the container, where `./out` is
-mounted at `/output`.
+The `disk.artifacts` list, which this template takes from the defaults,
+decides which formats you get. ISO templates also produce a second directory,
+holding the installer's initial RAM disk. Paths in the build log are inside
+the container, where `./out` is mounted at `/output`.
 
 Arguments after `--` go to `image-composer-tool build`; run
 `docker run --rm ict image-composer-tool build --help` to list them. A file
@@ -147,18 +144,30 @@ checkout's root.
 
 ## Behind a Proxy
 
-Export your proxy settings before both steps. `docker build` takes them as
-build arguments (a bare `--build-arg NAME` passes your shell's value), and the
-script passes them into the container:
+Export your proxy settings in your shell before the first command, `git clone`:
 
 ```bash
 export http_proxy=http://proxy.example.com:911
 export https_proxy=http://proxy.example.com:912
 export no_proxy=localhost,127.0.0.1
-docker build --build-arg http_proxy --build-arg https_proxy --build-arg no_proxy \
-  -f build/ict/Dockerfile --target ict -t ict .
-scripts/build-in-container.sh ~/my-image/my-image.yml ./out
 ```
+
+Then run the commands in this guide that reach the network as in the right
+column. Only `docker build` changes: it gives the settings to the image build
+only as build arguments, and a bare `--build-arg NAME` passes your shell's
+value. Git reads the exported settings itself, and the script passes them into
+the container, so those commands stay the same. The other commands in this
+guide, such as `validate`, do not use the network.
+
+| Without a proxy | Behind a proxy |
+|-----------------|----------------|
+| `git clone https://github.com/open-edge-platform/image-composer-tool.git` | `git clone https://github.com/open-edge-platform/image-composer-tool.git` |
+| `docker build -f build/ict/Dockerfile --target ict -t ict .` | `docker build --build-arg http_proxy --build-arg https_proxy --build-arg no_proxy -f build/ict/Dockerfile --target ict -t ict .` |
+| `scripts/build-in-container.sh ~/my-image/my-image.yml ./out` | `scripts/build-in-container.sh ~/my-image/my-image.yml ./out` |
+| `scripts/build-in-container.sh ~/my-image/my-image.yml ./out -- --hostname edge-01 --log-level debug` | `scripts/build-in-container.sh ~/my-image/my-image.yml ./out -- --hostname edge-01 --log-level debug` |
+| `scripts/build-in-container.sh --mount-point /artifacts ~/my-image/my-image.yml ./out` | `scripts/build-in-container.sh --mount-point /artifacts ~/my-image/my-image.yml ./out` |
+| `scripts/build-in-container.sh --context ~/templates ~/templates/edge/my-image.yml ./out` | `scripts/build-in-container.sh --context ~/templates ~/templates/edge/my-image.yml ./out` |
+| `scripts/build-in-container.sh --image image-composer-tool-ict ~/my-image/my-image.yml ./out` | `scripts/build-in-container.sh --image image-composer-tool-ict ~/my-image/my-image.yml ./out` |
 
 ## Stop, Reuse, and Clean Up
 
