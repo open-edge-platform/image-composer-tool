@@ -3,6 +3,7 @@ package oepinstaller
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +61,22 @@ func TestParseHeaderOnly(t *testing.T) {
 	}
 	if len(out.Packages) != 0 || len(out.Repositories) != 0 {
 		t.Errorf("expected no packages or repositories, got %+v", out)
+	}
+}
+
+func TestParsePreferencesWithoutRepository(t *testing.T) {
+	t.Parallel()
+	data := "\"schema-version\": \"1\"\n\"cli-version\": \"main\"\n\"module-list\": [\"a\"]\n---\n" +
+		"\"pkg-list\": [\"libfoo=1.0*\"]\n\"apt-pref\": [\"Package: libfoo\", \"Pin: version 1.0*\", \"Pin-Priority: 1002\"]\n" +
+		"\"apt-pref-file\": \"/etc/apt/preferences.d/foo.pref\"\n"
+	out, err := Parse([]byte(data), []string{"a"}, nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := []PreferenceFile{{File: "/etc/apt/preferences.d/foo.pref",
+		Lines: []string{"Package: libfoo", "Pin: version 1.0*", "Pin-Priority: 1002"}}}
+	if len(out.Repositories) != 0 || !reflect.DeepEqual(out.PreferenceFiles, want) {
+		t.Errorf("repositories = %+v, preference files = %+v; want %+v", out.Repositories, out.PreferenceFiles, want)
 	}
 }
 
@@ -123,6 +140,9 @@ func TestParseRejects(t *testing.T) {
 		{"signed-by mismatch", header + "---\n" + repo +
 			"\"apt-source\": \"deb [signed-by=/usr/share/keyrings/other.gpg] https://h/r noble main\"\n",
 			"must equal key-file"},
+		{"apt option without a value", header + "---\n" + repo +
+			"\"apt-source\": \"deb [arch signed-by=/etc/apt/keyrings/k.gpg] https://h/r noble main\"\n",
+			"needs a value"},
 		{"unsupported apt option", header + "---\n" + repo +
 			"\"apt-source\": \"deb [trusted=yes signed-by=/etc/apt/keyrings/k.gpg] https://h/r noble main\"\n",
 			"unsupported option"},
@@ -206,6 +226,7 @@ func TestSplitAptSource(t *testing.T) {
 		{"not a deb line", "deb-src https://h/r noble main", nil, nil, true},
 		{"unterminated options", "deb [signed-by=/k.gpg https://h/r noble main", nil, nil, true},
 		{"unsupported option", "deb [trusted=yes] https://h/r noble main", nil, nil, true},
+		{"option without a value", "deb [arch signed-by=/k.gpg] https://h/r noble main", nil, nil, true},
 	}
 	for _, tt := range tests {
 		tt := tt

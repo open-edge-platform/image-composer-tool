@@ -94,6 +94,8 @@ func TestApplyRejects(t *testing.T) {
 			&Output{Packages: []Package{classifyPackage("-ubuntu-desktop")}}, "not to be installed"},
 		{"incompatible versions", func(t *config.ImageTemplate) { t.SystemConfig.Packages = []string{"libtbb12_2021.5-1"} },
 			&Output{Packages: []Package{classifyPackage("libtbb12=2021.11.0-2")}}, "incompatible versions"},
+		{"preferences without a repository", func(*config.ImageTemplate) {},
+			&Output{PreferenceFiles: []PreferenceFile{{File: "/etc/apt/preferences.d/foo.pref"}}}, "without a repository"},
 		{"conflicting repositories", func(*config.ImageTemplate) {},
 			&Output{Repositories: []Repository{repo, other}}, "two different repositories"},
 	}

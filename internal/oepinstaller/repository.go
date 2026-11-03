@@ -52,7 +52,10 @@ func splitAptSource(line string) (map[string]string, []string, error) {
 			return nil, nil, fmt.Errorf("apt-source %q: unterminated options", line)
 		}
 		for _, opt := range strings.Fields(inner) {
-			key, value, _ := strings.Cut(opt, "=")
+			key, value, hasValue := strings.Cut(opt, "=")
+			if !hasValue || value == "" {
+				return nil, nil, fmt.Errorf("apt-source %q: option %q needs a value (name=value)", line, opt)
+			}
 			if key != "signed-by" && key != "arch" {
 				return nil, nil, fmt.Errorf("apt-source %q: unsupported option %q; only signed-by and arch are "+
 					"supported", line, key)
