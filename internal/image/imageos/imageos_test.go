@@ -1914,6 +1914,29 @@ func TestCreateResolvConfSymlink(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps a symlink whose target only exists on the running system", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		installRoot := t.TempDir()
+		etcDir := filepath.Join(installRoot, "etc")
+		if err := os.MkdirAll(etcDir, 0755); err != nil {
+			t.Fatalf("failed to create etc dir: %v", err)
+		}
+		link := filepath.Join(etcDir, "resolv.conf")
+		const target = "../run/NetworkManager/resolv.conf"
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("failed to create resolv.conf symlink: %v", err)
+		}
+
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+		if err := createResolvConfSymlink(installRoot, template); err != nil {
+			t.Fatalf("createResolvConfSymlink() unexpected error: %v", err)
+		}
+		if got, err := os.Readlink(link); err != nil || got != target {
+			t.Errorf("resolv.conf symlink = %q (err %v), want it kept pointing at %q", got, err, target)
+		}
+	})
+
 	t.Run("returns error on symlink failure", func(t *testing.T) {
 		mockCommands := []shell.MockCommand{
 			{Pattern: `ln -sf /run/systemd/resolve/stub-resolv\.conf /etc/resolv\.conf`, Output: "", Error: fmt.Errorf("ln failed")},
