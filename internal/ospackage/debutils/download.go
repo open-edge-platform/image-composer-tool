@@ -1018,10 +1018,15 @@ func checkFileExists(url string) (bool, error) {
 // time. If every attempt is answered that way, the error wraps
 // errRepoUnavailable so callers never read the outage as an absent file.
 func probeURLExistence(url string) (bool, int, error) {
+	return probeURLExistenceWith(url, probeRetrySchedule)
+}
+
+// probeURLExistenceWith is probeURLExistence with the retry schedule passed in.
+func probeURLExistenceWith(url string, sched probeSchedule) (bool, int, error) {
 	found, status, err := probeURLExistenceOnce(url)
-	wait := probeUnavailableBackoff
+	wait := sched.backoff
 	for attempt := 1; probeUnavailableStatus(status); attempt++ {
-		if attempt == probeUnavailableAttempts {
+		if attempt == sched.attempts {
 			// probeURL reports a 429 like any other 4xx, with no error of its
 			// own, so name the URL and status here.
 			if err == nil {
@@ -1030,7 +1035,7 @@ func probeURLExistence(url string) (bool, int, error) {
 			return false, status, fmt.Errorf("%w after %d attempts: %w", errRepoUnavailable, attempt, err)
 		}
 		logger.Logger().Warnf("%s answered %d (attempt %d/%d); retrying in %s",
-			url, status, attempt, probeUnavailableAttempts, wait)
+			url, status, attempt, sched.attempts, wait)
 		timer := time.NewTimer(wait)
 		select {
 		case <-runctx.Context().Done():
@@ -1038,7 +1043,7 @@ func probeURLExistence(url string) (bool, int, error) {
 			return false, status, fmt.Errorf("probing %s cancelled during retry backoff: %w", url, runctx.Context().Err())
 		case <-timer.C:
 		}
-		wait = min(wait*2, maxProbeUnavailableBackoff)
+		wait = min(wait*2, sched.maxBackoff)
 		found, status, err = probeURLExistenceOnce(url)
 	}
 	return found, status, err
@@ -1048,14 +1053,17 @@ func probeURLExistence(url string) (bool, int, error) {
 // temporary-unavailability status, so it gave no verdict on the file.
 var errRepoUnavailable = errors.New("repository server unavailable")
 
-// The retry budget for probes the server answers as unavailable, matching
-// the package-download schedule in pkgfetcher. Variables rather than
-// constants so tests can shorten them.
-var (
-	probeUnavailableAttempts   = 6
-	probeUnavailableBackoff    = 15 * time.Second
-	maxProbeUnavailableBackoff = 2 * time.Minute
-)
+// probeSchedule is how a probe the server answers as unavailable is retried:
+// up to attempts probes in all, waiting backoff before the first retry and
+// doubling the wait up to maxBackoff.
+type probeSchedule struct {
+	attempts            int
+	backoff, maxBackoff time.Duration
+}
+
+// probeRetrySchedule matches the package-download schedule in pkgfetcher: six
+// attempts, waiting 15 s and doubling up to 2 minutes. TestMain shortens it.
+var probeRetrySchedule = probeSchedule{attempts: 6, backoff: 15 * time.Second, maxBackoff: 2 * time.Minute}
 
 // probeUnavailableStatus reports whether status means the server is
 // temporarily unable to answer rather than that the file is absent.
