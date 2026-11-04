@@ -55,6 +55,14 @@ func TestAddFirstBoot(t *testing.T) {
 	if files[sudoersInclude] != includeContents || !strings.Contains(files[sudoersInclude], "#includedir /run/") {
 		t.Errorf("sudoers include = %q", files[sudoersInclude])
 	}
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		if f.Final != sudoersInclude {
+			continue
+		}
+		if info, err := os.Stat(f.Local); err != nil || info.Mode().Perm() != 0o440 {
+			t.Errorf("sudoers include %s: mode %v, %v; want 0440", f.Local, info.Mode().Perm(), err)
+		}
+	}
 	scripts := tmpl.SystemConfig.Provisioning.Scripts
 	got := scripts[len(scripts)-1]
 	if got.Name != firstBootName || got.Final != firstBootScript || got.Order != 21 ||

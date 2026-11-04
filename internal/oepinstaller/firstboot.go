@@ -50,18 +50,21 @@ func AddFirstBoot(t *config.ImageTemplate, cli []byte, workDir string) error {
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", workDir, err)
 	}
+	// The sudoers entry is mode 0440, as sudo and visudo expect; the copy into
+	// the image keeps the mode.
 	files := []struct {
 		name, final string
 		data        []byte
+		mode        os.FileMode
 	}{
-		{"openedge-cli", cliFinal, cli},
-		{"ict-oep-installer.sh", firstBootScript, firstBootScriptContents},
-		{"ict-oep-installer.sudoers", sudoersInclude, []byte(includeContents)},
+		{"openedge-cli", cliFinal, cli, 0o644},
+		{"ict-oep-installer.sh", firstBootScript, firstBootScriptContents, 0o644},
+		{"ict-oep-installer.sudoers", sudoersInclude, []byte(includeContents), 0o440},
 	}
 	locals := make([]string, len(files))
 	for i, f := range files {
 		locals[i] = filepath.Join(absDir, f.name)
-		if err := os.WriteFile(locals[i], f.data, 0o644); err != nil {
+		if err := os.WriteFile(locals[i], f.data, f.mode); err != nil {
 			return fmt.Errorf("writing %s: %w", f.name, err)
 		}
 	}
