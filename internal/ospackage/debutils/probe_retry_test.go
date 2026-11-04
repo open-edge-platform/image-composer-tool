@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,9 +171,11 @@ func TestResolveReleaseURLs_ServerUnavailability(t *testing.T) {
 		wantSign    string
 	}{
 		{
-			name:    "InRelease still unavailable fails instead of falling back",
-			scripts: map[string][]int{inRelease: {unavailable}},
-			wantErr: true,
+			name:        "InRelease still unavailable reports the outage, with the classic files",
+			scripts:     map[string][]int{inRelease: {unavailable}},
+			wantErr:     true,
+			wantRelease: "/dists/noble/Release",
+			wantSign:    sign,
 		},
 		{
 			name:        "InRelease recovering after a 503 is used",
@@ -193,13 +196,10 @@ func TestResolveReleaseURLs_ServerUnavailability(t *testing.T) {
 			_, base := newScriptedServer(t, tt.scripts)
 
 			release, signURL, err := resolveReleaseURLs(base, "noble", "Release")
-			if tt.wantErr {
-				if !errors.Is(err, errRepoUnavailable) {
-					t.Fatalf("err = %v, want errRepoUnavailable", err)
-				}
-				return
+			if tt.wantErr && !errors.Is(err, errRepoUnavailable) {
+				t.Fatalf("err = %v, want errRepoUnavailable", err)
 			}
-			if err != nil {
+			if !tt.wantErr && err != nil {
 				t.Fatalf("resolveReleaseURLs error: %v", err)
 			}
 			if release != base+tt.wantRelease {
@@ -234,5 +234,58 @@ func TestBuildRepoConfigs_UnavailableRepositoryReportsOutage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "InRelease") {
 		t.Errorf("error should name the InRelease probe the server kept refusing: %v", err)
+	}
+}
+
+// An outage that hides the release format must not fail a repository whose
+// classic release files an earlier build cached: ParseRepositoryMetadata
+// builds from that cache when it cannot refresh it.
+func TestBuildRepoConfigs_UnavailableRepositoryFallsBackToCachedMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		cached  []string
+		wantErr bool
+	}{
+		{name: "classic release files cached", cached: []string{"Release", "Release.gpg"}},
+		{name: "signature missing from the cache", cached: []string{"Release"}, wantErr: true},
+		{name: "nothing cached", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resetURLExistenceCacheForTest(t)
+			unavailable := []int{http.StatusServiceUnavailable}
+			_, base := newScriptedServer(t, map[string][]int{
+				"/dists/noble/InRelease":   unavailable,
+				"/dists/noble/Release.gpg": unavailable,
+			})
+			// An earlier build found the package index, so finding it again
+			// needs no probe.
+			pkgList := base + "/dists/noble/main/binary-amd64/Packages.gz"
+			savePackageListURLToCache(base, "noble", "amd64", "main", pkgList)
+			buildPath := repoMetadataBuildPath("snapshot", base, "noble", "amd64", "main", pkgList)
+			t.Cleanup(func() { _ = os.RemoveAll(buildPath) })
+			if err := os.MkdirAll(buildPath, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range tt.cached {
+				if err := os.WriteFile(filepath.Join(buildPath, name), []byte("cached"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			configs, err := BuildRepoConfigs([]Repository{{ID: "snapshot", Codename: "noble", URL: base, PKey: "k"}}, "amd64")
+			if tt.wantErr {
+				if !errors.Is(err, errRepoUnavailable) {
+					t.Fatalf("err = %v, want errRepoUnavailable", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildRepoConfigs should carry on with the cached metadata, got: %v", err)
+			}
+			if len(configs) != 1 || configs[0].ReleaseFile != base+"/dists/noble/Release" ||
+				configs[0].ReleaseSign != base+"/dists/noble/Release.gpg" || configs[0].BuildPath != buildPath {
+				t.Errorf("configs = %+v, want one entry for the cached classic release files", configs)
+			}
+		})
 	}
 }

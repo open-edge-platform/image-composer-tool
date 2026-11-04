@@ -218,6 +218,27 @@ func metadataFileName(raw string) string {
 	return filepath.Base(raw)
 }
 
+// releaseMetadataFiles lists the release metadata ParseRepositoryMetadata keeps
+// in dir for a repository, as local paths and the URLs they are fetched from:
+// the Release (or InRelease) file, the detached Release.gpg unless releaseSign
+// is inReleaseSentinel, and the public key when pbGPGKey is a URL. A trusted
+// repository skips the signature and the key, so it has only its Release file.
+func releaseMetadataFiles(dir, releaseFile, releaseSign, pbGPGKey string) (local, urls []string) {
+	urls = []string{releaseFile}
+	if pbGPGKey != "[trusted=yes]" {
+		if releaseSign != inReleaseSentinel {
+			urls = append(urls, releaseSign)
+		}
+		if strings.HasPrefix(pbGPGKey, "http://") || strings.HasPrefix(pbGPGKey, "https://") {
+			urls = append(urls, pbGPGKey)
+		}
+	}
+	for _, u := range urls {
+		local = append(local, filepath.Join(dir, metadataFileName(u)))
+	}
+	return local, urls
+}
+
 // refreshRepoMetadata re-downloads and verifies repository metadata before
 // installing it into pkgMetaDir.
 //
@@ -454,27 +475,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		localPBGPGKey = pbGPGKey
 	}
 
-	var metaLocalFiles []string
-	var metaURLList []string
-
-	switch {
-	case isTrustedRepo:
-		// For trusted repos, skip Release.gpg/InRelease signature and GPG key download
-		metaLocalFiles = []string{localReleaseFile}
-		metaURLList = []string{releaseFile}
-	case isInRelease && pbkeyIsURL:
-		metaLocalFiles = []string{localReleaseFile, localPBGPGKey}
-		metaURLList = []string{releaseFile, pbGPGKey}
-	case isInRelease:
-		metaLocalFiles = []string{localReleaseFile}
-		metaURLList = []string{releaseFile}
-	case pbkeyIsURL:
-		metaLocalFiles = []string{localReleaseFile, localReleaseSign, localPBGPGKey}
-		metaURLList = []string{releaseFile, releaseSign, pbGPGKey}
-	default:
-		metaLocalFiles = []string{localReleaseFile, localReleaseSign}
-		metaURLList = []string{releaseFile, releaseSign}
-	}
+	metaLocalFiles, metaURLList := releaseMetadataFiles(pkgMetaDir, releaseFile, releaseSign, pbGPGKey)
 
 	// checkableReleaseFile always holds a plain Release body: the classic
 	// Release file as-is, or (for InRelease repos) the plaintext extracted
