@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	urlpkg "net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1004,12 +1005,17 @@ func checkFileExists(url string) (bool, error) {
 // longer wait than the schedule allows, the error wraps errRepoUnavailable so
 // callers never read the outage as an absent file. A host name that does not
 // resolve is still reported absent at once.
+//
+// The waiting is budgeted per host, not per probe: all probes of a host share
+// what one full run of the schedule waits, so a server that stays down stalls
+// the build once instead of once for every file probed on it.
 func probeURLExistence(url string) (bool, int, error) {
 	return probeURLExistenceWith(url, probeRetrySchedule)
 }
 
 // probeURLExistenceWith is probeURLExistence with the retry schedule passed in.
 func probeURLExistenceWith(url string, sched probeSchedule) (bool, int, error) {
+	host, budget := probeHost(url), sched.budget()
 	wait := sched.backoff
 	for attempt := 1; ; attempt++ {
 		answer := probeURLExistenceOnce(url)
@@ -1031,6 +1037,9 @@ func probeURLExistenceWith(url string, sched probeSchedule) (bool, int, error) {
 				errRepoUnavailable, cause, answer.retryAfter, sched.maxBackoff)
 		}
 		pause := max(wait, answer.retryAfter)
+		if waited, ok := reserveProbeWait(host, pause, budget); !ok {
+			return false, answer.status, fmt.Errorf("%w after %s of retries for %s: %w", errRepoUnavailable, waited, host, cause)
+		}
 		logger.Logger().Warnf("%v (attempt %d/%d); retrying in %s", cause, attempt, sched.attempts, pause)
 		timer := time.NewTimer(pause)
 		select {
@@ -1062,6 +1071,45 @@ type probeSchedule struct {
 // probeRetrySchedule matches the package-download schedule in pkgfetcher: six
 // attempts, waiting 15 s and doubling up to 2 minutes. TestMain shortens it.
 var probeRetrySchedule = probeSchedule{attempts: 6, backoff: 15 * time.Second, maxBackoff: 2 * time.Minute}
+
+// budget is how long one full run of the schedule waits: 5m45s for
+// probeRetrySchedule.
+func (s probeSchedule) budget() time.Duration {
+	var total time.Duration
+	for i, wait := 1, s.backoff; i < s.attempts; i, wait = i+1, min(wait*2, s.maxBackoff) {
+		total += wait
+	}
+	return total
+}
+
+// probeWaited is how long probes have waited so far, per host, for a server
+// answering unavailable to come back.
+var (
+	probeWaitedMu sync.Mutex
+	probeWaited   = map[string]time.Duration{}
+)
+
+// reserveProbeWait books a wait of d against host's budget. It returns how long
+// probes of host have waited so far, and false, booking nothing, when d does
+// not fit in what is left.
+func reserveProbeWait(host string, d, budget time.Duration) (time.Duration, bool) {
+	probeWaitedMu.Lock()
+	defer probeWaitedMu.Unlock()
+	waited := probeWaited[host]
+	if waited+d > budget {
+		return waited, false
+	}
+	probeWaited[host] = waited + d
+	return waited, true
+}
+
+// probeHost is the host (with any port) whose budget probes of rawURL draw on.
+func probeHost(rawURL string) string {
+	if u, err := urlpkg.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return rawURL
+}
 
 // probeUnavailableStatus reports whether status means the server is
 // temporarily unable to answer rather than that the file is absent.
