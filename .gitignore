@@ -1,5 +1,10 @@
 # ignore build artifacts, cache files, and temporary files
 build/
+# Keep ignoring the local binaries in the root build/, but track build/ict/,
+# which holds the ICT container image's Dockerfile.
+!/build/
+/build/*
+!/build/ict/
 downloads/
 builds/
 benchmark-logs/
