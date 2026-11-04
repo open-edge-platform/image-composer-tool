@@ -623,9 +623,11 @@ func repoMetadataBuildPath(id, baseURL, codename, arch, component, packageListUR
 // A single probe's error (e.g. a transient 5xx with no cached verdict) does
 // not abort resolution early: the other format may still be reachable, so
 // every remaining probe is still attempted. Only a confirmed absence (a 4xx)
-// falls back to the classic URLs; if none of the probes yielded a usable or
-// cached verdict because the server kept answering 429/502/503/504, an error
-// is returned instead.
+// falls back to the classic URLs on its own. If none of the probes yielded a
+// usable or cached verdict because the server stayed unavailable, the classic
+// URLs come back with an error wrapping errRepoUnavailable, and
+// BuildRepoConfigs uses them only where an earlier build cached their release
+// files.
 //
 // A releaseSignURL of inReleaseSentinel signals ParseRepositoryMetadata to
 // treat releaseFileURL as a combined InRelease file rather than a
@@ -674,12 +676,12 @@ func resolveReleaseURLs(baseURL, codename, releaseNm string) (releaseFileURL, re
 
 	if len(probeErrs) > 0 {
 		probeErr := errors.Join(probeErrs...)
-		// A server still answering 429/502/503/504 after probeURLExistence's
-		// retries has not said which files exist, and falling back would
-		// guess classic Release/Release.gpg files the repository may not
-		// publish. Report the outage instead.
+		// A server still unavailable after probeURLExistence's retries has not
+		// said which files exist, and falling back would guess classic
+		// Release/Release.gpg files the repository may not publish. Report the
+		// outage, with the classic URLs for a caller that has them cached.
 		if errors.Is(probeErr, errRepoUnavailable) {
-			return "", "", fmt.Errorf("probing release files under %s/dists/%s: %w", baseURL, codename, probeErr)
+			return classicRelease, classicSign, fmt.Errorf("probing release files under %s/dists/%s: %w", baseURL, codename, probeErr)
 		}
 		// Don't abort here: a fresh/offline probe can fail for reasons
 		// probeURL doesn't recognize as "no response" (e.g. "network is
@@ -736,18 +738,38 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 			component = "main"
 		}
 		releaseFileURL, releaseSignURL, err := resolveReleaseURLs(baseURL, codename, releaseNm)
+		// With the server unavailable, the classic release files are only a
+		// guess at what the repository publishes. Metadata an earlier build
+		// cached for them still lets ParseRepositoryMetadata build from its
+		// cache, as before, so the outage fails only an entry without it.
+		var outageErr error
 		if err != nil {
-			return nil, fmt.Errorf("resolving release files: %w, baseURL %s codename %s", err, baseURL, codename)
+			err = fmt.Errorf("resolving release files: %w, baseURL %s codename %s", err, baseURL, codename)
+			if !errors.Is(err, errRepoUnavailable) {
+				return nil, err
+			}
+			outageErr = err
 		}
 		for _, componentName := range slice.SplitBySpace(component) {
 			for _, localArch := range strings.Split(archs, ",") {
 				package_list_url, err := GetPackagesNames(baseURL, codename, localArch, componentName)
 				if err != nil {
+					// Without a package list there is no cached metadata either.
+					if outageErr != nil {
+						return nil, outageErr
+					}
 					return nil, fmt.Errorf("getting package metadata name: %w, baseURL %s codename %s localArch %s componentName %s\n", err, baseURL, codename, localArch, componentName)
 				}
 				if package_list_url == "" {
 					log.Debugf("no package metadata found: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 					continue // No valid package list found for this arch/component
+				}
+				buildPath := repoMetadataBuildPath(id, baseURL, codename, localArch, componentName, package_list_url)
+				if outageErr != nil {
+					if !releaseMetadataCached(buildPath, releaseFileURL, releaseSignURL, pkey) {
+						return nil, outageErr
+					}
+					log.Warnf("%v; continuing with the release files cached in %s", outageErr, buildPath)
 				}
 				log.Debugf("found package metadata: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 				repo := RepoConfig{
@@ -760,7 +782,7 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 					RepoGPGCheck:  true,
 					Enabled:       true,
 					PbGPGKey:      pkey,
-					BuildPath:     repoMetadataBuildPath(id, baseURL, codename, localArch, componentName, package_list_url),
+					BuildPath:     buildPath,
 					Arch:          localArch,
 					Priority:      repoItem.Priority,
 					AllowPackages: repoItem.AllowPackages,
@@ -776,6 +798,18 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 	}
 
 	return userRepo, nil
+}
+
+// releaseMetadataCached reports whether buildPath holds every release file
+// ParseRepositoryMetadata falls back to when it cannot refresh them.
+func releaseMetadataCached(buildPath, releaseFile, releaseSign, pbGPGKey string) bool {
+	local, _ := releaseMetadataFiles(buildPath, releaseFile, releaseSign, pbGPGKey)
+	for _, f := range local {
+		if _, err := os.Stat(f); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
