@@ -8,6 +8,7 @@ import type {
 } from '../api/types'
 import { artifactTypeLabel } from '../api/types'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
+import { labelFor, useStore } from '../store'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
@@ -39,7 +40,7 @@ type Status =
 // the server buffers every one of them uncapped. Appending each arrival to state
 // as it lands would re-clean, re-reconcile and re-scroll the whole list once per
 // line — O(n) work per line over an unbounded n, which pegs the main thread hard
-// enough that clicks elsewhere in the view (the artefact download button among
+// enough that clicks elsewhere in the view (the artifact download button among
 // them) never get dispatched while a compose is streaming. These two limits keep
 // the cost per burst bounded instead.
 export const LOG_FLUSH_MS = 100 // coalesce arrivals into ~10 state updates a second
@@ -53,6 +54,7 @@ export function BuildView({
   onStatusChange,
   isActive,
 }: BuildViewProps) {
+  const manifest = useStore((s) => s.manifest)
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>(isActive ? 'running' : 'loading')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -78,7 +80,7 @@ export function BuildView({
     setInstall({ done: 0, total: 0 })
 
     // Fetch the configuration summary for the details panel and the template
-    // name/path for its row in the artefacts table. Best-effort: a failure here
+    // name/path for its row in the artifacts table. Best-effort: a failure here
     // shouldn't disrupt the log stream.
     api.buildDetails(buildId).then(setDetails).catch(() => {})
 
@@ -253,7 +255,7 @@ export function BuildView({
   const hiddenLogCount = Math.max(0, logs.length - LOG_RENDER_LIMIT)
   const visibleLogs = hiddenLogCount > 0 ? logs.slice(hiddenLogCount) : logs
 
-  // Rows of the artefacts table: the build's own outputs, plus the template it
+  // Rows of the artifacts table: the build's own outputs, plus the template it
   // ran against. The template is not something the build produced, but it is
   // what the build is reproducible from, so it is offered beside the outputs
   // rather than tucked into the details panel. It keeps its own download
@@ -438,7 +440,7 @@ export function BuildView({
           >
             <span className="text-slate-400">{detailsOpen ? '▼' : '▶'}</span>
             Compose details
-            <span className="font-normal text-slate-400">— your selection, image configuration</span>
+            <span className="font-normal text-slate-400">— basic selection, image configuration</span>
           </button>
           {detailsOpen && (
             <div className="space-y-4 border-t border-slate-200 px-3 py-3 text-xs">
@@ -446,15 +448,17 @@ export function BuildView({
               {/* Selection + image configuration summary */}
               {details.summary && (
                 <div className="grid grid-cols-2 gap-3">
+                  {/* Values use the manifest's display names (e.g. "PTL (Panther Lake)"),
+                      matching the Basic/Advanced dropdowns, falling back to the raw id. */}
                   <div className="rounded bg-white p-3 shadow-sm">
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Basic Selection</p>
                     <table className="w-full">
                       <tbody>
                         {([
-                          ['Use Case', details.summary.vertical],
-                          details.summary.sku ? ['SKU', details.summary.sku] : null,
-                          ['Platform', details.summary.platform],
-                          ['OS', details.summary.os],
+                          ['Use Case', labelFor(manifest?.verticals ?? [], details.summary.vertical)],
+                          details.summary.sku ? ['SKU', labelFor(manifest?.skus ?? [], details.summary.sku)] : null,
+                          ['Platform', labelFor(manifest?.platforms ?? [], details.summary.platform)],
+                          ['OS', labelFor(manifest?.targets ?? [], details.summary.os)],
                           ['Image Type', details.summary.imageType.toUpperCase()],
                         ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
                           <tr key={k}>
@@ -493,7 +497,7 @@ export function BuildView({
               {/* Advanced-tab changes: the delta this build layered onto the
                   matched template. Collapsed by default; absent when the build
                   overrode nothing. */}
-              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} />}
+              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
 
             </div>
           )}
@@ -556,7 +560,7 @@ export function BuildView({
       {artifactRows.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-sm font-semibold text-[#00285a]">
-            {status === 'failed' || status === 'cancelled' ? 'Partial artefacts' : 'Artefacts'}
+            {status === 'failed' || status === 'cancelled' ? 'Partial artifacts' : 'Artifacts'}
           </h3>
           {(status === 'failed' || status === 'cancelled') && (
             <p className="mb-2 text-xs text-slate-500">
@@ -598,7 +602,7 @@ export function BuildView({
                   <td className="px-3 py-2 text-right">
                     <a
                       className="inline-flex rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      title="Download artefact"
+                      title="Download artifact"
                       href={a.href}
                       download={a.name}
                     >

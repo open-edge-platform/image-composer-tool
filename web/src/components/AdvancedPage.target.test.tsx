@@ -100,6 +100,16 @@ describe('AdvancedPage Target step required markers', () => {
       expect(screen.getByText(label, { selector: 'label' }).textContent).toBe(`${label} *`)
     }
   })
+
+  it('leaves SKU unmarked when the use case offers no SKU', () => {
+    useStore.setState({
+      manifest: { ...manifest, combinations: [{ ...manifest.combinations[0], sku: '' }] },
+      selection: { ...FULL, sku: '' },
+    })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    expect(screen.getByText('SKU', { selector: 'label' }).textContent).toBe('SKU')
+    expect(screen.getByText('Platform', { selector: 'label' }).textContent).toBe('Platform *')
+  })
 })
 
 describe('AdvancedPage Packages step status', () => {

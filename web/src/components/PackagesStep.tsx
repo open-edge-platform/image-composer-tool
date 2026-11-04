@@ -185,7 +185,6 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}
-                  repoLabel={repoLabelFor(edgePack.repo)}
                   repoLabelFor={repoLabelFor}
                   targetLabel={targetLabel}
                   baseLock={baseLock}
