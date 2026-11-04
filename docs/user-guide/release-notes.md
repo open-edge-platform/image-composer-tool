@@ -73,7 +73,32 @@
 - Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
 - Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
 - **Fixed**: on Ubuntu 26.04, `sudo` failed for every user with `cannot open sudoers file /run/ict-oep-installer.d` on boots where the OEP Installer's first-boot script had not run yet, such as before it started and after it had succeeded. The image's sudoers file includes a directory in `/run`, which is empty after each boot, and sudo-rs treats a missing included directory as an error. A `tmpfiles.d` entry now creates the directory at every boot.
-- **Fixed**: a Debian or Ubuntu repository whose server answers 429, 502, 503 or 504 while ICT checks for its `InRelease`, `Release.gpg`, `Release` or package index files no longer fails the build within seconds. Nor is the outage mistaken for a repository that does not publish `InRelease`: until now, a 503 on `InRelease` made ICT fall back to `Release`/`Release.gpg` files the repository may not have. ICT now repeats such a check with the same schedule package downloads use (six attempts, waiting 15 s and doubling up to 2 minutes), since Launchpad's PPA snapshot host sheds load for minutes at a time. It falls back to `Release`/`Release.gpg` only when the server reports `InRelease` missing, and a server still unavailable after the retries fails the build with that reason.
+- **Fixed**: a Debian or Ubuntu repository server that is briefly unavailable
+  no longer fails the build within seconds, and its outage is no longer
+  mistaken for a repository that does not publish `InRelease`.
+  - **Unavailable**: while ICT checks for a repository's `InRelease`,
+    `Release.gpg`, `Release` or package index files, the server answers 429,
+    502, 503 or 504, or never answers because the request times out or the
+    connection is refused, reset or closed. Launchpad's PPA snapshot host does
+    this for minutes at a time while it sheds load. A host name that does not
+    resolve still fails at once.
+  - **Retries**: ICT repeats such a check on the schedule package downloads
+    use: up to 6 attempts, waiting 15 s and doubling up to 2 minutes, and never
+    sooner than a `Retry-After` header asks. A server that asks for more than
+    2 minutes fails the check at once.
+  - **One budget per server**: all checks on one server share the schedule's
+    5¾ minutes of waiting, so a server that stays down delays the build once,
+    not once for every file checked.
+  - **Fallback**: ICT falls back to `Release`/`Release.gpg` when the server
+    reports `InRelease` missing. While the server stays unavailable, ICT relies
+    on what an earlier build left behind: the format it found, or the
+    `Release`/`Release.gpg` it cached. Without either, the build fails with
+    `repository server unavailable`.
+  - **Trade-off**: a repository server that never recovers now takes about 6
+    minutes to fail the build instead of seconds, or up to about 10 minutes if
+    every attempt times out after 30 s. Behind an HTTP proxy, that includes a
+    plain-HTTP repository whose host name does not resolve, which the proxy
+    answers with 504.
 - **Fixed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser pushed the **Back** and **Next** buttons below the bottom of the window on common laptop screens (1440×900, for example). The repository list, package list and **Selected** panel had fixed heights; they now follow the window height, so the buttons stay in view. Each list keeps a minimum height, so on a very short window the page scrolls rather than squeezing the lists below a few rows, and on a tall window the lists grow somewhat taller than before.
 - **Changed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser picks the repository to browse from a **Repository** dropdown instead of a list down the left side, so the package list now spans the full width. Whether the build uses the browsed repository is set with the **Use in builds** checkbox beside the dropdown. The dropdown groups repositories under *Always on* and *Optional* and marks each optional repository in use with ✓, and an *N of M repositories in use* count sits alongside. Package rows are more compact, with the version chips beside the package name rather than under it, so about five packages fit on a 1440×900 screen without scrolling.
 - **Changed**: Web UI wording and layout tidy-up. In a build's **Compose details**, the selection card is now titled **Basic Selection** (was *Your Selection*) and lists Use Case, SKU, Platform and OS by the same display names the dropdowns use — for example *PTL (Panther Lake)* rather than `ptl` — and the Advanced-tab changes card is titled **Advanced customization** (was *Your changes*), in the same heading style. The Edge Packs tab's base-runtime package list now reads **Included with Standard Edge Pack Profile** (and *Real-time Edge Pack Profile* once real-time is offered). The long help paragraphs under the Edge Packs domain grid and the Repositories browser are removed. The Basic tab now marks Use Case, SKU, Platform, Operating System and Kernel as required with a red asterisk, as the Advanced tab already did; **Compose Image** was already unavailable until they were all set.
