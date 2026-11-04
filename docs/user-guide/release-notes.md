@@ -6,7 +6,32 @@
 
 **New**:
 
-- **Fixed**: a Debian or Ubuntu repository whose server answers 429, 502, 503 or 504 while ICT checks for its `InRelease`, `Release.gpg`, `Release` or package index files no longer fails the build within seconds. Nor is the outage mistaken for a repository that does not publish `InRelease`: until now, a 503 on `InRelease` made ICT fall back to `Release`/`Release.gpg` files the repository may not have. ICT now repeats such a check with the same schedule package downloads use (six attempts, waiting 15 s and doubling up to 2 minutes), since Launchpad's PPA snapshot host sheds load for minutes at a time. It falls back to `Release`/`Release.gpg` only when the server reports `InRelease` missing, and a server still unavailable after the retries fails the build with that reason.
+- **Fixed**: a Debian or Ubuntu repository server that is briefly unavailable
+  no longer fails the build within seconds, and its outage is no longer
+  mistaken for a repository that does not publish `InRelease`.
+  - **Unavailable**: while ICT checks for a repository's `InRelease`,
+    `Release.gpg`, `Release` or package index files, the server answers 429,
+    502, 503 or 504, or never answers because the request times out or the
+    connection is refused, reset or closed. Launchpad's PPA snapshot host does
+    this for minutes at a time while it sheds load. A host name that does not
+    resolve still fails at once.
+  - **Retries**: ICT repeats such a check on the schedule package downloads
+    use: up to 6 attempts, waiting 15 s and doubling up to 2 minutes, and never
+    sooner than a `Retry-After` header asks. A server that asks for more than
+    2 minutes fails the check at once.
+  - **One budget per server**: all checks on one server share the schedule's
+    5¾ minutes of waiting, so a server that stays down delays the build once,
+    not once for every file checked.
+  - **Fallback**: ICT falls back to `Release`/`Release.gpg` when the server
+    reports `InRelease` missing. While the server stays unavailable, ICT relies
+    on what an earlier build left behind: the format it found, or the
+    `Release`/`Release.gpg` it cached. Without either, the build fails with
+    `repository server unavailable`.
+  - **Trade-off**: a repository server that never recovers now takes about 6
+    minutes to fail the build instead of seconds, or up to about 10 minutes if
+    every attempt times out after 30 s. Behind an HTTP proxy, that includes a
+    plain-HTTP repository whose host name does not resolve, which the proxy
+    answers with 504.
 - **Fixed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser pushed the **Back** and **Next** buttons below the bottom of the window on common laptop screens (1440×900, for example). The repository list, package list and **Selected** panel had fixed heights; they now follow the window height, so the buttons stay in view. Each list keeps a minimum height, so on a very short window the page scrolls rather than squeezing the lists below a few rows, and on a tall window the lists grow somewhat taller than before.
 - **Changed**: Web UI wording and layout tidy-up. In a build's **Compose details**, the selection card is now titled **Basic Selection** (was *Your Selection*) and lists Use Case, SKU, Platform and OS by the same display names the dropdowns use — for example *PTL (Panther Lake)* rather than `ptl` — and the Advanced-tab changes card is titled **Advanced customization** (was *Your changes*), in the same heading style. The Edge Packs tab's base-runtime package list now reads **Included with Standard Edge Pack Profile** (and *Real-time Edge Pack Profile* once real-time is offered). The long help paragraphs under the Edge Packs domain grid and the Repositories browser are removed. The Basic tab now marks Use Case, SKU, Platform, Operating System and Kernel as required with a red asterisk, as the Advanced tab already did; **Compose Image** was already unavailable until they were all set.
 - Build an OS image from the command line in a Docker container, with nothing but Docker installed on the host. Build the ICT container image, then `scripts/build-in-container.sh TEMPLATE OUTPUT_DIR` builds a template you write on the host inside it and copies the OS image and its SBOM into `OUTPUT_DIR/<system-config-name>/`, owned by you. `--mount-point` sets where `OUTPUT_DIR` is mounted inside the container, `--context` mounts a wider directory when the template references files outside its own, and two named volumes keep downloaded packages and the build's work tree for later builds. Like the Web UI container, it runs privileged. See the [CLI Quick Start (Docker)](./get-started/cli-docker-quick-start.md).
