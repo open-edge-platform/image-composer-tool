@@ -67,7 +67,16 @@ func newScriptedServer(t *testing.T, scripts map[string][]int) (*scriptedServer,
 		w.WriteHeader(status)
 	}))
 	t.Cleanup(srv.Close)
+	forgetProbeWaits(srv.URL)
 	return s, srv.URL
+}
+
+// forgetProbeWaits clears what probes have waited for rawURL's host, which an
+// earlier test's server on the same port may have left behind.
+func forgetProbeWaits(rawURL string) {
+	probeWaitedMu.Lock()
+	delete(probeWaited, probeHost(rawURL))
+	probeWaitedMu.Unlock()
 }
 
 // resetConnection drops the request's connection with a TCP reset.
@@ -239,14 +248,16 @@ func retryAfterServer(t *testing.T, retryAfter string) (string, *atomic.Int32) {
 		}
 	}))
 	t.Cleanup(srv.Close)
+	forgetProbeWaits(srv.URL)
 	return srv.URL, &requests
 }
 
 func TestProbeURLExistence_HonorsRetryAfter(t *testing.T) {
 	base, _ := retryAfterServer(t, "1")
 
+	// A 600 ms first wait, with a budget (600 ms + 1.2 s) that fits the 1 s asked for.
 	start := time.Now()
-	found, _, err := probeURLExistenceWith(base+"/f", probeSchedule{attempts: 6, backoff: time.Millisecond, maxBackoff: 5 * time.Second})
+	found, _, err := probeURLExistenceWith(base+"/f", probeSchedule{attempts: 3, backoff: 600 * time.Millisecond, maxBackoff: 5 * time.Second})
 	if err != nil || !found {
 		t.Fatalf("probeURLExistence = (%v, %v), want (true, nil)", found, err)
 	}
@@ -266,6 +277,39 @@ func TestProbeURLExistence_GivesUpWhenRetryAfterExceedsCap(t *testing.T) {
 	}
 	if n := requests.Load(); n != 1 {
 		t.Errorf("requests = %d, want 1", n)
+	}
+}
+
+// All probes of a host share one schedule's worth of waiting, so a server that
+// stays down stalls the build once, not once for every file probed on it.
+// Another host keeps a budget of its own.
+func TestProbeURLExistence_SharesOneRetryBudgetPerHost(t *testing.T) {
+	unavailable := []int{http.StatusServiceUnavailable}
+	down, downBase := newScriptedServer(t, map[string][]int{"/a": unavailable, "/b": unavailable})
+	other, otherBase := newScriptedServer(t, map[string][]int{"/c": unavailable})
+
+	for _, tt := range []struct {
+		srv      *scriptedServer
+		base     string
+		path     string
+		wantHits int
+	}{
+		{down, downBase, "/a", fastSchedule.attempts},
+		{down, downBase, "/b", 1},
+		{other, otherBase, "/c", fastSchedule.attempts},
+	} {
+		if _, _, err := probeURLExistenceWith(tt.base+tt.path, fastSchedule); !errors.Is(err, errRepoUnavailable) {
+			t.Fatalf("probe of %s: err = %v, want errRepoUnavailable", tt.path, err)
+		}
+		if n := tt.srv.count(tt.path); n != tt.wantHits {
+			t.Errorf("probe of %s made %d requests, want %d", tt.path, n, tt.wantHits)
+		}
+	}
+}
+
+func TestProbeSchedule_Budget(t *testing.T) {
+	if got, want := (probeSchedule{attempts: 6, backoff: 15 * time.Second, maxBackoff: 2 * time.Minute}).budget(), 345*time.Second; got != want {
+		t.Errorf("budget of the production schedule = %s, want %s (15+30+60+120+120 s)", got, want)
 	}
 }
 
@@ -352,7 +396,7 @@ func TestResolveReleaseURLs_ServerUnavailability(t *testing.T) {
 func TestBuildRepoConfigs_UnavailableRepositoryReportsOutage(t *testing.T) {
 	resetURLExistenceCacheForTest(t)
 	unavailable := []int{http.StatusServiceUnavailable}
-	_, base := newScriptedServer(t, map[string][]int{
+	srv, base := newScriptedServer(t, map[string][]int{
 		"/dists/noble/InRelease":                     unavailable,
 		"/dists/noble/Release.gpg":                   unavailable,
 		"/dists/noble/main/binary-amd64/Packages.gz": unavailable,
@@ -364,6 +408,11 @@ func TestBuildRepoConfigs_UnavailableRepositoryReportsOutage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "InRelease") {
 		t.Errorf("error should name the InRelease probe the server kept refusing: %v", err)
+	}
+	// Release.gpg's retries used up the host's budget, so the InRelease probe
+	// did not wait it out a second time.
+	if n := srv.count("/dists/noble/InRelease"); n != 1 {
+		t.Errorf("InRelease requests = %d, want 1", n)
 	}
 }
 

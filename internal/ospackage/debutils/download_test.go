@@ -31,6 +31,10 @@ func resetURLExistenceCacheForTest(t *testing.T) {
 	packageListURLCacheMu.Unlock()
 
 	_ = os.Remove(packageListURLCacheFilePath())
+
+	probeWaitedMu.Lock()
+	clear(probeWaited)
+	probeWaitedMu.Unlock()
 }
 
 // TestPackages tests the Packages function
