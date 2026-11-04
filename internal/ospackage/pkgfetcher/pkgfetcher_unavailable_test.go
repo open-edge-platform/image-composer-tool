@@ -65,13 +65,13 @@ func TestParseRetryAfter(t *testing.T) {
 		{"soon", 0},
 		{time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0},
 	} {
-		if got := parseRetryAfter(tt.in); got != tt.want {
-			t.Errorf("parseRetryAfter(%q) = %s, want %s", tt.in, got, tt.want)
+		if got := ParseRetryAfter(tt.in); got != tt.want {
+			t.Errorf("ParseRetryAfter(%q) = %s, want %s", tt.in, got, tt.want)
 		}
 	}
 	future := time.Now().Add(90 * time.Second).UTC().Format(http.TimeFormat)
-	if got := parseRetryAfter(future); got < 85*time.Second || got > 90*time.Second {
-		t.Errorf("parseRetryAfter(HTTP-date +90s) = %s, want about 90s", got)
+	if got := ParseRetryAfter(future); got < 85*time.Second || got > 90*time.Second {
+		t.Errorf("ParseRetryAfter(HTTP-date +90s) = %s, want about 90s", got)
 	}
 }
 
