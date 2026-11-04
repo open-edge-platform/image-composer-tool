@@ -8,6 +8,7 @@ import type {
 } from '../api/types'
 import { artifactTypeLabel } from '../api/types'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
+import { labelFor, useStore } from '../store'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
@@ -53,6 +54,7 @@ export function BuildView({
   onStatusChange,
   isActive,
 }: BuildViewProps) {
+  const manifest = useStore((s) => s.manifest)
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>(isActive ? 'running' : 'loading')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -438,7 +440,7 @@ export function BuildView({
           >
             <span className="text-slate-400">{detailsOpen ? '▼' : '▶'}</span>
             Compose details
-            <span className="font-normal text-slate-400">— your selection, image configuration</span>
+            <span className="font-normal text-slate-400">— basic selection, image configuration</span>
           </button>
           {detailsOpen && (
             <div className="space-y-4 border-t border-slate-200 px-3 py-3 text-xs">
@@ -446,15 +448,17 @@ export function BuildView({
               {/* Selection + image configuration summary */}
               {details.summary && (
                 <div className="grid grid-cols-2 gap-3">
+                  {/* Values use the manifest's display names (e.g. "PTL (Panther Lake)"),
+                      matching the Basic/Advanced dropdowns, falling back to the raw id. */}
                   <div className="rounded bg-white p-3 shadow-sm">
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Basic Selection</p>
                     <table className="w-full">
                       <tbody>
                         {([
-                          ['Use Case', details.summary.vertical],
-                          details.summary.sku ? ['SKU', details.summary.sku] : null,
-                          ['Platform', details.summary.platform],
-                          ['OS', details.summary.os],
+                          ['Use Case', labelFor(manifest?.verticals ?? [], details.summary.vertical)],
+                          details.summary.sku ? ['SKU', labelFor(manifest?.skus ?? [], details.summary.sku)] : null,
+                          ['Platform', labelFor(manifest?.platforms ?? [], details.summary.platform)],
+                          ['OS', labelFor(manifest?.targets ?? [], details.summary.os)],
                           ['Image Type', details.summary.imageType.toUpperCase()],
                         ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
                           <tr key={k}>
@@ -493,7 +497,7 @@ export function BuildView({
               {/* Advanced-tab changes: the delta this build layered onto the
                   matched template. Collapsed by default; absent when the build
                   overrode nothing. */}
-              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} />}
+              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
 
             </div>
           )}
