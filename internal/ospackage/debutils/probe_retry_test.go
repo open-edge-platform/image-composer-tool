@@ -15,13 +15,18 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
-// TestMain keeps every test in the package off the real retry schedule. Behind
-// an HTTP proxy, a test URL whose host does not resolve is answered 504, and
-// waiting out the full budget would time the package out.
+// TestMain keeps every test in the package off the real retry schedule, before
+// any test runs, so no test has to swap it out. Behind an HTTP proxy, a test URL
+// whose host does not resolve is answered 504, and waiting out the full budget
+// would time the package out. Two attempts still exercise one retry.
 func TestMain(m *testing.M) {
-	probeUnavailableBackoff, maxProbeUnavailableBackoff = time.Millisecond, 2*time.Millisecond
+	probeRetrySchedule = probeSchedule{attempts: 2, backoff: time.Millisecond, maxBackoff: 2 * time.Millisecond}
 	os.Exit(m.Run())
 }
+
+// fastSchedule is the production attempt count with millisecond waits, for
+// tests that pass the schedule in.
+var fastSchedule = probeSchedule{attempts: 6, backoff: time.Millisecond, maxBackoff: 2 * time.Millisecond}
 
 // scriptedServer answers each path with its scripted statuses in order,
 // repeating the last one, and counts the requests per path.
@@ -66,7 +71,7 @@ func TestProbeURLExistence_RetriesUnavailableStatuses(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			srv, base := newScriptedServer(t, map[string][]int{"/f": {status, status, http.StatusOK}})
 
-			found, got, err := probeURLExistence(base + "/f")
+			found, got, err := probeURLExistenceWith(base+"/f", fastSchedule)
 			if err != nil || !found || got != http.StatusOK {
 				t.Fatalf("probeURLExistence = (%v, %d, %v), want (true, 200, nil)", found, got, err)
 			}
@@ -92,7 +97,7 @@ func TestProbeURLExistence_DoesNotRetryDefiniteAnswers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, base := newScriptedServer(t, map[string][]int{"/f": {tt.status}})
 
-			found, _, err := probeURLExistence(base + "/f")
+			found, _, err := probeURLExistenceWith(base+"/f", fastSchedule)
 			if found != tt.wantFound || (err != nil) != tt.wantErr {
 				t.Fatalf("probeURLExistence = (%v, %v), want found=%v err=%v", found, err, tt.wantFound, tt.wantErr)
 			}
@@ -116,12 +121,12 @@ func TestProbeURLExistence_GivesUpWhenStillUnavailable(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			srv, base := newScriptedServer(t, map[string][]int{"/f": {status}})
 
-			found, _, err := probeURLExistence(base + "/f")
+			found, _, err := probeURLExistenceWith(base+"/f", fastSchedule)
 			if found || !errors.Is(err, errRepoUnavailable) {
 				t.Fatalf("probeURLExistence = (%v, %v), want (false, errRepoUnavailable)", found, err)
 			}
-			if n := srv.count("/f"); n != probeUnavailableAttempts {
-				t.Errorf("requests = %d, want %d", n, probeUnavailableAttempts)
+			if n := srv.count("/f"); n != fastSchedule.attempts {
+				t.Errorf("requests = %d, want %d", n, fastSchedule.attempts)
 			}
 			// A 429 reaches here with no error from probeURL; the message must
 			// still say which URL refused and with what status.
@@ -138,14 +143,11 @@ func TestProbeURLExistence_CancelledDuringBackoff(t *testing.T) {
 	defer cancel()
 	restore := runctx.SetContext(ctx)
 	defer restore()
-	backoff := probeUnavailableBackoff
-	probeUnavailableBackoff = time.Minute
-	t.Cleanup(func() { probeUnavailableBackoff = backoff })
 	_, base := newScriptedServer(t, map[string][]int{"/f": {http.StatusServiceUnavailable}})
 
 	time.AfterFunc(50*time.Millisecond, cancel)
 	start := time.Now()
-	_, _, err := probeURLExistence(base + "/f")
+	_, _, err := probeURLExistenceWith(base+"/f", probeSchedule{attempts: 6, backoff: time.Minute, maxBackoff: time.Minute})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
 	}
