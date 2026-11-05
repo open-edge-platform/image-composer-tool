@@ -449,7 +449,8 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added, never removed or downgraded. `additive-and-upgrade`: also permits upgrading a package already present in the baseline to a newer version. Downgrades and removals remain blocked in both modes (see note below) |
+| `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added. `additive-and-upgrade`: also permits upgrading baseline packages. Downgrades and removals require separate opt-ins below |
+| `allowDowngrade` | boolean | No | `false` (default), `true` | Permit resolved baseline package downgrades, including exact APT `name_version` pins. Requires `packageOperation: additive-and-upgrade`. Does not bypass dependency checks, bootloader/kernel protection, or authorize removals |
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
 | `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
@@ -460,14 +461,24 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > package already installed in the baseline may be replaced by a newer version
 > when the resolved overlay closure requires it. An exact APT `name_version` pin
 > that resolves to a version different from the baseline enters the install set
-> even when older, so the existing preflight downgrade gate rejects it rather
+> even when older, so the preflight downgrade gate checks it rather
 > than silently ignoring the pin and later reporting unsatisfied dependencies.
-> Downgrades remain blocked; the downgrade gate is unchanged.
+> Downgrades remain blocked unless `allowDowngrade: true` is explicitly set.
 > The bootloader binary remains immutable in all cases, and the kernel
 > is immutable **unless** you explicitly opt into a swap with `replaceKernel` (see
 > below) — an overlay never upgrades a kernel image in place or reinstalls the
 > bootloader, regardless of `packageOperation`. Choose `additive-only` (the
 > default) to fail the build on any version bump to a baseline package.
+>
+> **Downgrades (`allowDowngrade`).** Opt-in and valid only with
+> `packageOperation: additive-and-upgrade`. This permits downgrades anywhere in
+> the resolved install set, not just explicitly pinned requests. Review the
+> preflight downgrade actions and resulting SBOM: older vendor packages can
+> revert distribution security fixes. Debian uses `dpkg -i`; RPM uses
+> `rpm -U --oldpackage` only when the approved report contains downgrades.
+> Retained Debian dependency checks, the post-install dependency audit, and
+> bootloader/kernel protections remain enforced. No removal is authorized by
+> this flag; unresolved dependencies still fail the build.
 >
 > **Retained baseline dependencies (Debian).** Baseline `Depends` and
 > `Pre-Depends` retain their version constraints and alternatives. Under
@@ -499,7 +510,7 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 >
 > **Dependency audit.** The installer compares package-manager dependency failure
 > descriptors before and after any nonempty install or removal transaction,
-> including upgrade-only transactions. Pre-existing failures are ignored when
+> including upgrade-only and downgrade-only transactions. Pre-existing failures are ignored when
 > identifying newly introduced failures. New upgrade-only failures fail closed
 > without cascade removal, even with `allowPackageRemoval: true`.
 >

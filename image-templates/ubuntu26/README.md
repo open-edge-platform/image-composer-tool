@@ -21,11 +21,13 @@ The NVL template targets **bare-metal Ubuntu 26.04 (resolute), x86_64, non-RT**.
 It copies an installed baseline, replaces its kernel with
 `linux-image-7.3-intel_261014t080608z-resolute1` and matching headers, applies
 the cBKC's Xe/serial kernel command line, and regenerates initramfs and GRUB.
-The Intel APT snapshot is `20261023-0019`. The template matches the first
-successful partial build: **169 active userspace requests**, comprising
-49 exact vendor pins, 113 unpinned reference requests, and seven systemd
-compatibility requests. The 32 vendor GStreamer pins remain commented out
-because they require downgrades; this is **not full cBKC media parity**.
+The Intel APT snapshot is `20261023-0019`. Template version **26.04.2** restores
+all 32 vendor GStreamer requests and explicitly enables
+`overlayPolicy.allowDowngrade`. It has **201 active userspace requests**:
+81 exact vendor pins, 113 unpinned reference requests, and seven systemd
+compatibility requests. The equivalent local full-media configuration completed
+a successful 64 GiB RAW build on 2026-11-05. Full-media runtime parity remains
+unverified.
 The temporary signed
 `ubuntu-virt/lp2168017` PPA is retained for the libvirt workaround.
 
@@ -52,11 +54,12 @@ the ceiling does not account for arbitrary configuration-command downloads.
 - Included: NVL NPU driver `1.38.1.20261006-37481778717`, two GuC `70.72.0` blobs, cBKC SOF firmware/topologies, and SR-IOV toolkit `v2.1-20260309T102500Z`, fetched during composition before boot regeneration.
 - Included: bare-metal Wayland/Xwrapper settings and dracut resume module configuration **only when dracut is already installed**. Existing swap and initramfs generator are preserved; working hibernation is not guaranteed.
 - Excluded: live partition deletion, swap recreation, blanket `apt upgrade`, GRUB purge/reinstall, lab accounts/SSH keys, passwordless sudo, autologin, disabling security/update policies, lab NTP changes and scheduled reboot. VM-specific GPU udev rules are not generated from the builder's hardware.
-- Overlay preflight refuses downgrades, unlike cBKC's `--allow-downgrades`. Use a baseline with package versions no newer than the pins. Other package conflicts fail rather than removing unrelated baseline packages.
-- The seven explicit systemd requests keep integration packages aligned with upgraded libraries. `systemd-timesyncd` is not requested because the tested baseline uses chrony. Do not copy a second local parent into the catalog: the shared template already contains the tested package selection; keep baseline paths and proxy settings local.
+- Downgrades default to blocked. This template explicitly opts in because vendor GStreamer pins can sort below Ubuntu baseline versions. The opt-in covers the resolved closure, not just GStreamer; review preflight downgrade actions and security implications. Dependency checks and protected boot packages remain enforced. Other package conflicts fail rather than removing unrelated baseline packages.
+- The seven explicit systemd requests keep integration packages aligned with upgraded libraries. `systemd-timesyncd` is not requested because the tested baseline uses chrony. Do not copy a second local parent into the catalog; keep baseline paths and proxy settings local.
 - Bootloader binaries and EFI partition are preserved. Verify Secure Boot compatibility/signing of the Intel kernel separately and confirm the generated GRUB entry matches `Ubuntu, with Linux 7.3-intel` before deploying.
 - Artifact downloads require internal connectivity and currently have no independent published checksums. Out-of-repository NPU/firmware/toolkit content bypasses resolver preflight and may not appear in the overlay SBOM. NPU `.deb` dependencies must already be satisfied; `dpkg -i` fails otherwise.
-- The matching local template completed an overlay build against an installed Ubuntu 26.04 Desktop baseline and reached the desktop under QEMU/KVM with Secure Boot disabled. Its site-specific proxy block was removed from the shared template. This is not NVL hardware validation or proof of media parity. See the [first-build BOM comparison](../../docs/user-guide/nvl-bom-comparison.md).
+- The **26.04.2 full-media configuration** completed an overlay build against the installed Ubuntu 26.04 Desktop baseline in approximately 23 minutes 44 seconds, emitting a 64 GiB RAW and delta SPDX SBOM. The shared template contains the same 201 package requests, overlay policy, configuration commands, and repositories as that local build; only local baseline paths, proxy settings, and output names differ. Use this single catalog template rather than publishing the local parent/child test inputs.
+- The previous **26.04.1 partial configuration** reached the desktop under QEMU/KVM with Secure Boot disabled. The new full-media image still needs boot and media smoke tests; neither build establishes NVL hardware functionality. The local first-build BOM report, when retained, describes only the partial image.
 
 For subsequent scripts, use the workspace `cbkc-to-overlay-template` skill.
 

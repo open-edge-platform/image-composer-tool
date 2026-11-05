@@ -61,7 +61,8 @@ type installRequest struct {
 	// package-manager mode that can replace/obsolete an installed package: the rpm
 	// backend switches from `rpm -i` to `rpm -U`. The deb backend ignores it —
 	// `dpkg -i` already upgrades in place and deb has no Obsoletes mechanism.
-	upgrade bool
+	upgrade   bool
+	downgrade bool
 }
 
 // installerBackend installs prepared package artifacts into a mounted baseline
@@ -252,12 +253,13 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		// installed package — the obsoletion would silently not happen. An Obsoletes-
 		// driven removal is precisely an approved removal that is not an explicit one, so
 		// it shows up as ApprovedRemovals having more entries than ToRemove.
-		upgradeMode := report.Upgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
+		upgradeMode := report.Upgrades > 0 || report.Downgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
 		if err = backend.install(installRequest{
 			chrootPath:        rootMount,
 			artifactChrootDir: chrootArtifactDir,
 			items:             items,
 			upgrade:           upgradeMode,
+			downgrade:         report.Downgrades > 0,
 		}); err != nil {
 			// A "no space left on device" failure here means the baseline root filled up
 			// while unpacking the added packages. Overlay mode does not auto-grow the
@@ -790,14 +792,17 @@ func (b *rpmInstallerBackend) install(req installRequest) error {
 	// ActionUpgrade under the AllowUpgrade gate, blocked bootable-kernel and
 	// bootloader replacement (ruleKernelImmutable / ruleBootloaderImmutable), and
 	// gated any Obsoletes-driven removal through AllowRemoval — so no unreviewed
-	// replacement can slip through the coarser -U mode. Downgrades never reach
-	// here (preflight leaves AllowDowngrade off), so no --oldpackage is needed.
+	// replacement can slip through the coarser -U mode. Approved downgrades use
+	// --oldpackage; it is never enabled for an ordinary add/upgrade transaction.
 	//
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path rather than an rpm option.
 	op := "-i"
 	if req.upgrade {
 		op = "-U"
+	}
+	if req.downgrade {
+		op = "-U --oldpackage"
 	}
 	cmd := "rpm " + op + " -v -- " + strings.Join(paths, " ")
 	out, err := shell.ExecCmdWithStream(cmd, true, req.chrootPath, nil)

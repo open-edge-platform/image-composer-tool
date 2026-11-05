@@ -718,6 +718,8 @@ func TestInstallOverlayPackages_UpgradeFlagPropagates(t *testing.T) {
 		want   bool
 	}{
 		{"plan with an upgrade sets the flag", &PreflightReport{Upgrades: 1}, true},
+		{"downgrade sets replacement mode", &PreflightReport{Downgrades: 1}, true},
+		{"mixed versions set replacement mode", &PreflightReport{Upgrades: 1, Downgrades: 1}, true},
 		{"pure-add plan leaves the flag off", &PreflightReport{}, false},
 		// An rpm Obsoletes-driven removal is NOT an upgrade (Upgrades==0) and is
 		// absent from ToRemove (rpm -U erases it implicitly), so it shows up as
@@ -737,6 +739,9 @@ func TestInstallOverlayPackages_UpgradeFlagPropagates(t *testing.T) {
 			})
 			if backend.gotReq.upgrade != tc.want {
 				t.Errorf("installRequest.upgrade = %v, want %v", backend.gotReq.upgrade, tc.want)
+			}
+			if backend.gotReq.downgrade != (tc.report.Downgrades > 0) {
+				t.Errorf("installRequest.downgrade = %v, want %v", backend.gotReq.downgrade, tc.report.Downgrades > 0)
 			}
 		})
 	}
@@ -1532,6 +1537,42 @@ func TestInstallCommandsTerminateOptions(t *testing.T) {
 			// The "--" must precede the (quoted) leading-dash operand.
 			if idx := strings.Index(operandCmd, "--"); idx == -1 || strings.Index(operandCmd, "-weird") < idx {
 				t.Errorf("operand not protected by leading %q: %q", "--", operandCmd)
+			}
+		})
+	}
+}
+
+func TestInstallerDowngradeCommands(t *testing.T) {
+	tests := []struct {
+		name      string
+		upgrade   bool
+		downgrade bool
+		deb       bool
+		want      string
+	}{
+		{name: "rpm add", want: "rpm -i -v -- "},
+		{name: "rpm upgrade", upgrade: true, want: "rpm -U -v -- "},
+		{name: "rpm downgrade", downgrade: true, want: "rpm -U --oldpackage -v -- "},
+		{name: "rpm mixed", upgrade: true, downgrade: true, want: "rpm -U --oldpackage -v -- "},
+		{name: "deb downgrade", downgrade: true, deb: true, want: "dpkg -i --auto-deconfigure -- "},
+	}
+	for _, entry := range tests {
+		t.Run(entry.name, func(t *testing.T) {
+			capture := &capturingExecutor{}
+			stubShell(t, capture)
+			request := installRequest{chrootPath: "/mnt/root", artifactChrootDir: chrootArtifactDir,
+				items: []plannedInstall{{artifact: "package"}}, upgrade: entry.upgrade, downgrade: entry.downgrade}
+			var backend installerBackend = &rpmInstallerBackend{}
+			if entry.deb {
+				backend = &debInstallerBackend{}
+			}
+
+			if err := backend.install(request); err != nil {
+				t.Fatal(err)
+			}
+
+			if len(capture.cmds) == 0 || !strings.HasPrefix(capture.cmds[0], entry.want) {
+				t.Fatalf("commands = %v, want prefix %q", capture.cmds, entry.want)
 			}
 		})
 	}

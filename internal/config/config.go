@@ -202,21 +202,16 @@ type OverlayPolicy struct {
 	// (validate() rejects that combination).
 	ReplaceKernel *ReplaceKernel `yaml:"replaceKernel,omitempty"`
 
-	// AllowDowngrade gates whether preflight permits downgrading a baseline
-	// package to an older version. Like AllowRemoval it is intentionally NOT a
-	// YAML field (the schema rejects it via additionalProperties:false) and
-	// always carries its zero value (false): overlay mode is additive-only in
-	// v1, so downgrades are blocked by default. A future release can surface it.
-	AllowDowngrade bool `yaml:"-"`
+	AllowDowngrade bool `yaml:"allowDowngrade,omitempty"`
 
 	// AllowUpgrade gates whether preflight permits upgrading a baseline package
-	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
+	// to a newer version. It is intentionally
 	// NOT a YAML field (the schema rejects it via additionalProperties:false);
 	// it is instead derived from PackageOperation by validate(), which sets it
 	// true when packageOperation is "additive-and-upgrade" and leaves it false
 	// (the default) for "additive-only". Enabling it lets the deb backend replace
 	// an installed package in place (dpkg -i upgrades), and switches the rpm
-	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
+	// backend to `rpm -U`; downgrades and removals require separate opt-ins.
 	AllowUpgrade bool `yaml:"-"`
 }
 
@@ -1922,12 +1917,14 @@ func (p *OverlayPolicy) validate() error {
 		// Additive-only: upgrades of baseline packages stay blocked.
 		p.AllowUpgrade = false
 	case OverlayPackageOpAdditiveAndUpgrade:
-		// Opt in to upgrading already-installed baseline packages. Downgrades stay
-		// gated off (AllowDowngrade stays false).
 		p.AllowUpgrade = true
 	default:
 		return fmt.Errorf("overlayPolicy.packageOperation must be %q or %q (got %q)",
 			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
+	}
+	if p.AllowDowngrade && op != OverlayPackageOpAdditiveAndUpgrade {
+		return fmt.Errorf("overlayPolicy.allowDowngrade requires packageOperation %q (got %q)",
+			OverlayPackageOpAdditiveAndUpgrade, op)
 	}
 	// Package removal is a strictly more invasive operation than an in-place
 	// upgrade, so it is only permitted under additive-and-upgrade. Under

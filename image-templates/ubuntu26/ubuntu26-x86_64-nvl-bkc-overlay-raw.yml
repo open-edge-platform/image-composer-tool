@@ -7,7 +7,7 @@ metadata:
 
 image:
   name: ubuntu26-nvl-bkc-overlay
-  version: "26.04.1"
+  version: "26.04.2"
 
 target:
   os: ubuntu
@@ -25,6 +25,7 @@ baseline:
 # Add and upgrade packages; kernel image and headers are declared in replaceKernel, not packages.
 overlayPolicy:
   packageOperation: additive-and-upgrade
+  allowDowngrade: true
   conflictPolicy: fail
   kernelCmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
   grubDefault: "Advanced options for Ubuntu>Ubuntu, with Linux 7.3-intel"
@@ -106,42 +107,39 @@ systemConfig:
     - intel-ocloc_26.27.39122.11-0
     - libze-intel-gpu1_26.27.39122.11-0
 
-    # Partial NVL build: omit vendor GStreamer requests to avoid downgrades.
-    # Keep baseline media packages; this is NOT cBKC-equivalent media enablement.
-    # Other packages may still pull GStreamer dependencies; preflight remains enforced.
-    # Restore this entire group together only after resolving the downgrade restriction.
-    # - libgstrtspserver-1.0-dev_1.28.2-1ppa1~resolute1
-    # - libgstrtspserver-1.0-0_1.28.2-1ppa1~resolute1
-    # - gstreamer1.0-rtsp_1.28.2-1ppa1~resolute1
-    # - libgstreamer1.0-dev_1.28.2-1ppa1~resolute1
-    # - libgstreamer1.0-0_1.28.2-1ppa1~resolute1
-    # - gstreamer1.0-tools_1.28.2-1ppa1~resolute1
-    # - gir1.2-gstreamer-1.0_1.28.2-1ppa1~resolute1
-    # - gstreamer1.0-plugins-ugly_1.28.2-1ppa1~resolute1
-    # - gstreamer1.0-qt5_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-pulseaudio_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-plugins-good_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-alsa_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-gl_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-gtk3_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-plugins-base-apps_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-x_1.28.2-1ppa1~resolute2
-    # - gstreamer1.0-plugins-base_1.28.2-1ppa1~resolute2
-    # - libgstreamer-gl1.0-0_1.28.2-1ppa1~resolute2
-    # - libgstreamer-plugins-base1.0-0_1.28.2-1ppa1~resolute2
-    # - libgstreamer-plugins-base1.0-dev_1.28.2-1ppa1~resolute2
-    # - gir1.2-gst-plugins-base-1.0_1.28.2-1ppa1~resolute2
-    # - gir1.2-gst-plugins-bad-1.0_1.28.2-1ppa1~resolute10
-    # - gir1.2-gst-plugins-extra-1.0_1.28.2-1ppa1~resolute10
-    # - gstreamer1.0-opencv_1.28.2-1ppa1~resolute10
-    # - gstreamer1.0-plugins-bad-apps_1.28.2-1ppa1~resolute10
-    # - gstreamer1.0-plugins-bad_1.28.2-1ppa1~resolute10
-    # - gstreamer1.0-plugins-extra_1.28.2-1ppa1~resolute10
-    # - libgstreamer-opencv1.0-0_1.28.2-1ppa1~resolute10
-    # - libgstreamer-plugins-bad1.0-0_1.28.2-1ppa1~resolute10
-    # - libgstreamer-plugins-bad1.0-dev_1.28.2-1ppa1~resolute10
-    # - libgstreamer-plugins-extra1.0-0_1.28.2-1ppa1~resolute10
-    # - libgstreamer-plugins-extra1.0-dev_1.28.2-1ppa1~resolute10
+    # GStreamer: exact vendor pins; downgrade opt-in permits replacing newer baseline packages.
+    - libgstrtspserver-1.0-dev_1.28.2-1ppa1~resolute1
+    - libgstrtspserver-1.0-0_1.28.2-1ppa1~resolute1
+    - gstreamer1.0-rtsp_1.28.2-1ppa1~resolute1
+    - libgstreamer1.0-dev_1.28.2-1ppa1~resolute1
+    - libgstreamer1.0-0_1.28.2-1ppa1~resolute1
+    - gstreamer1.0-tools_1.28.2-1ppa1~resolute1
+    - gir1.2-gstreamer-1.0_1.28.2-1ppa1~resolute1
+    - gstreamer1.0-plugins-ugly_1.28.2-1ppa1~resolute1
+    - gstreamer1.0-qt5_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-pulseaudio_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-plugins-good_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-alsa_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-gl_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-gtk3_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-plugins-base-apps_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-x_1.28.2-1ppa1~resolute2
+    - gstreamer1.0-plugins-base_1.28.2-1ppa1~resolute2
+    - libgstreamer-gl1.0-0_1.28.2-1ppa1~resolute2
+    - libgstreamer-plugins-base1.0-0_1.28.2-1ppa1~resolute2
+    - libgstreamer-plugins-base1.0-dev_1.28.2-1ppa1~resolute2
+    - gir1.2-gst-plugins-base-1.0_1.28.2-1ppa1~resolute2
+    - gir1.2-gst-plugins-bad-1.0_1.28.2-1ppa1~resolute10
+    - gir1.2-gst-plugins-extra-1.0_1.28.2-1ppa1~resolute10
+    - gstreamer1.0-opencv_1.28.2-1ppa1~resolute10
+    - gstreamer1.0-plugins-bad-apps_1.28.2-1ppa1~resolute10
+    - gstreamer1.0-plugins-bad_1.28.2-1ppa1~resolute10
+    - gstreamer1.0-plugins-extra_1.28.2-1ppa1~resolute10
+    - libgstreamer-opencv1.0-0_1.28.2-1ppa1~resolute10
+    - libgstreamer-plugins-bad1.0-0_1.28.2-1ppa1~resolute10
+    - libgstreamer-plugins-bad1.0-dev_1.28.2-1ppa1~resolute10
+    - libgstreamer-plugins-extra1.0-0_1.28.2-1ppa1~resolute10
+    - libgstreamer-plugins-extra1.0-dev_1.28.2-1ppa1~resolute10
 
     # FFmpeg: exact cBKC command-line media processing pin.
     - ffmpeg_7:9.0.1-1ppa1~resolute1

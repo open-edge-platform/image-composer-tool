@@ -2,11 +2,101 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
 )
+
+func TestOverlayPolicyAllowDowngradeInheritance(t *testing.T) {
+	t.Parallel()
+	for _, entry := range []struct {
+		name   string
+		policy string
+		want   bool
+	}{
+		{name: "inherited opt in", want: true},
+		{name: "child disables", policy: "overlayPolicy:\n  packageOperation: additive-and-upgrade\n  allowDowngrade: false\n"},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			t.Parallel()
+			directory := t.TempDir()
+			identity := "image:\n  name: test\n  version: '1'\n" +
+				"target:\n  os: ubuntu\n  dist: ubuntu26\n  arch: x86_64\n  imageType: raw\n"
+			baseline := "baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n"
+			parent := identity + baseline +
+				"overlayPolicy:\n  packageOperation: additive-and-upgrade\n  allowDowngrade: true\n"
+			if err := os.WriteFile(filepath.Join(directory, "parent.yml"), []byte(parent), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			childPath := filepath.Join(directory, "child.yml")
+			if err := os.WriteFile(childPath, []byte("extends: parent.yml\n"+identity+baseline+entry.policy), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			merged, err := LoadAndMergeTemplate(childPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if merged.OverlayPolicy == nil || merged.OverlayPolicy.AllowDowngrade != entry.want {
+				t.Fatalf("merged policy = %+v, want allowDowngrade %v", merged.OverlayPolicy, entry.want)
+			}
+		})
+	}
+}
+
+func TestOverlayPolicyAllowDowngrade(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		policy  string
+		want    bool
+		wantErr bool
+	}{
+		{"default", `{}`, false, false},
+		{"upgrade default", `{"packageOperation":"additive-and-upgrade"}`, false, false},
+		{"opt in", `{"packageOperation":"additive-and-upgrade","allowDowngrade":true}`, true, false},
+		{"explicit false", `{"packageOperation":"additive-only","allowDowngrade":false}`, false, false},
+		{"missing operation", `{"allowDowngrade":true}`, true, true},
+		{"additive only", `{"packageOperation":"additive-only","allowDowngrade":true}`, true, true},
+		{"wrong type", `{"packageOperation":"additive-and-upgrade","allowDowngrade":"true"}`, false, true},
+	}
+	for _, entry := range cases {
+		t.Run(entry.name, func(t *testing.T) {
+			t.Parallel()
+			document := fmt.Sprintf(`{"image":{"name":"ub","version":"1"},
+				"target":{"os":"ubuntu","dist":"ubuntu26","arch":"x86_64","imageType":"raw"},
+				"baseline":{"mode":"overlay","source":{"path":"/tmp/u.raw"}},"overlayPolicy":%s}`, entry.policy)
+			if err := validate.ValidateUserTemplateJSON([]byte(document)); (err != nil) != entry.wantErr {
+				t.Fatalf("schema(%s) = %v, wantErr %v", entry.policy, err, entry.wantErr)
+			}
+			var policy OverlayPolicy
+			err := yaml.Unmarshal([]byte(entry.policy), &policy)
+			if err == nil {
+				err = policy.validate()
+			}
+			if (err != nil) != entry.wantErr {
+				t.Fatalf("validate(%s) = %v, wantErr %v", entry.policy, err, entry.wantErr)
+			}
+			if entry.wantErr {
+				return
+			}
+			encoded, err := yaml.Marshal(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded OverlayPolicy
+			if err := yaml.Unmarshal(encoded, &decoded); err != nil || decoded.AllowDowngrade != entry.want {
+				t.Fatalf("round trip = %+v, %v; want allowDowngrade %v", decoded, err, entry.want)
+			}
+		})
+	}
+}
 
 func TestValidateBaseline(t *testing.T) {
 	tests := []struct {

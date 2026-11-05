@@ -790,7 +790,7 @@
       "properties": {
         "packageOperation": {
           "type": "string",
-          "description": "Permitted package operation set. 'additive-only' only adds new packages; 'additive-and-upgrade' also permits upgrading a package already installed in the baseline to a newer version (downgrades and removals remain blocked).",
+          "description": "Permitted package operation set. 'additive-only' only adds new packages; 'additive-and-upgrade' also permits upgrading baseline packages. Downgrades and removals require separate opt-ins.",
           "enum": ["additive-only", "additive-and-upgrade"],
           "default": "additive-only"
         },
@@ -807,6 +807,11 @@
         "grubDefault": {
           "type": "string",
           "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "allowDowngrade": {
+          "type": "boolean",
+          "description": "Permit resolved baseline package downgrades only with packageOperation 'additive-and-upgrade'. Defaults to false. Does not relax dependency checks, bootloader/kernel protection, or authorize package removal.",
+          "default": false
         },
         "allowPackageRemoval": {
           "type": "boolean",
@@ -847,6 +852,10 @@
         }
       },
       "allOf": [
+        {
+          "if": { "properties": { "allowDowngrade": { "const": true } }, "required": ["allowDowngrade"] },
+          "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] }
+        },
         {
           "if": { "properties": { "allowPackageRemoval": { "const": true } }, "required": ["allowPackageRemoval"] },
           "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] }

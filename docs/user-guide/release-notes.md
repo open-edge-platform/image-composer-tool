@@ -6,6 +6,17 @@
 
 **New**:
 
+- **Added**: `overlayPolicy.allowDowngrade` explicitly permits resolved baseline
+  package downgrades with `packageOperation: additive-and-upgrade`. It defaults
+  to false and does not bypass dependency integrity, protected boot packages,
+  or removal policy. RPM uses `--oldpackage` only for approved downgrade
+  transactions; Debian uses its existing local `dpkg -i` path. NVL template
+  version 26.04.2 restores all 32 vendor GStreamer pins with this opt-in (201
+  active userspace requests). The equivalent local full-media configuration
+  completed a 64 GiB RAW build and emitted a delta SPDX SBOM. Its package set,
+  policy, repositories, and configuration commands are consolidated in the
+  single shared NVL template; site-specific paths and proxy settings stay local.
+  Full-media boot and runtime testing remain outstanding.
 - **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
   constraints and alternatives. With `packageOperation: additive-and-upgrade`,
   library upgrades that break previously satisfied requirements automatically
@@ -33,9 +44,8 @@
   or dependency-closure metadata, avoiding false extra-kernel-image ambiguity.
 - **Fixed**: under `packageOperation: additive-and-upgrade`, an exact APT
   `name_version` pin differing from the baseline now enters the install set even
-  when older. The existing preflight downgrade gate rejects it instead of
-  silently ignoring the pin and later reporting unsatisfied dependencies. The
-  downgrade gate is unchanged.
+  when older. Preflight rejects it unless `allowDowngrade` is explicitly enabled,
+  instead of silently ignoring the pin and later reporting unsatisfied dependencies.
 - Overlay templates now support `systemConfig.proxy`, reusing the create-mode
   writer for login, APT and systemd settings after build-time configuration
   commands. Add site-specific settings in a local template; the shared NVL
@@ -46,9 +56,9 @@
   NPU/GuC/SOF artifacts and SR-IOV toolkit. It consumes an
   installed GRUB baseline and uses native overlay kernel replacement and disk
   growth rather than repartitioning a running system. Lab access changes are
-  excluded. The initial validated configuration has 169 active userspace requests,
-  including seven systemd compatibility requests; 32 vendor GStreamer pins remain
-  commented out because overlay downgrades are blocked. A matching local build
+  excluded. The initial validated 26.04.1 configuration had 169 active userspace
+  requests, including seven systemd compatibility requests; 32 vendor GStreamer
+  pins were omitted because downgrades were blocked. A matching local build
   reached the desktop under QEMU/KVM with Secure Boot disabled; NVL hardware and
   full media parity remain unverified. See the [Ubuntu 26.04 template guide](../../image-templates/ubuntu26/README.md).
   A workspace `cbkc-to-overlay-template` skill covers repeatable script migration.
