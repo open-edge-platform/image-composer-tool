@@ -6,7 +6,10 @@ package oepinstaller
 
 import (
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 // SchemaVersion is the output schema version this package supports.
@@ -125,19 +128,43 @@ func (p Package) KernelSeries() string {
 
 // Repository is an apt repository group from a component document.
 type Repository struct {
-	Name              string   // repo-name, may be empty
-	GPGKey            string   // URL of the signing key
-	GPGKeyFingerprint string   // optional OpenPGP fingerprint of the key
-	KeyFile           string   // in-image path of the dearmored keyring
-	Source            string   // the deb line, as printed
-	SourceSrc         string   // optional deb-src line, as printed
-	ListFile          string   // in-image path of the sources list file
-	Preferences       []string // apt_preferences(5) lines, may be empty
-	PreferencesFile   string   // in-image path of the preferences file
-	URI               string   // repository URI from Source
-	Suite             string   // suite (codename) from Source
-	Component         string   // single component from Source
-	Architectures     []string // arch= option from Source, may be empty
+	Name              string         // repo-name, may be empty
+	GPGKey            string         // URL of the signing key
+	GPGKeyFingerprint string         // optional OpenPGP fingerprint of the key
+	KeyFile           string         // in-image path of the dearmored keyring
+	Source            string         // the deb line, as printed
+	SourceSrc         string         // optional deb-src line, as printed
+	ListFile          string         // in-image path of the sources list file
+	Preferences       []string       // apt_preferences(5) lines, may be empty
+	PreferencesFile   string         // in-image path of the preferences file
+	URI               string         // repository URI from Source
+	Suite             string         // suite (codename) from Source
+	Component         string         // single component from Source
+	Architectures     []string       // arch= option from Source, may be empty
+	Pins              []debutils.Pin // stanzas of Preferences, applied when resolving packages
+}
+
+// Pins returns the apt preferences of every repository in out, in the order
+// apt applies them: by preferences file name, each file once, with the stanzas
+// of a file in their order. It returns nil when out is nil.
+func Pins(out *Output) []debutils.Pin {
+	if out == nil {
+		return nil
+	}
+	var repos []Repository
+	seen := map[string]bool{}
+	for _, r := range out.Repositories {
+		if len(r.Pins) > 0 && !seen[r.PreferencesFile] {
+			seen[r.PreferencesFile] = true
+			repos = append(repos, r)
+		}
+	}
+	slices.SortStableFunc(repos, func(a, b Repository) int { return strings.Compare(a.PreferencesFile, b.PreferencesFile) })
+	var pins []debutils.Pin
+	for _, r := range repos {
+		pins = append(pins, r.Pins...)
+	}
+	return pins
 }
 
 // PreferenceFile is an apt preferences file that a component writes without

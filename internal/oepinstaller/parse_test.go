@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 var handheldModules = []string{"handheld_multi_modal"}
@@ -277,5 +279,52 @@ func TestPackageKernelRole(t *testing.T) {
 					p.KernelRole(), p.KernelRelease(), p.KernelSeries(), tt.role, tt.release, tt.series)
 			}
 		})
+	}
+}
+
+func TestParsePins(t *testing.T) {
+	t.Parallel()
+	pins, err := parsePins([]string{"Package: *", "Pin: origin \"edge.example.com\"", "Pin-Priority: 1001",
+		"Package: intel-oneapi-runtime-* intel-oneapi-mkl-*", "Explanation: series", "Pin: version 2025.3*",
+		"Pin-Priority: 1002"})
+	if err != nil {
+		t.Fatalf("parsePins: %v", err)
+	}
+	if len(pins) != 2 || pins[0].Origin != "edge.example.com" || pins[0].Priority != 1001 ||
+		len(pins[1].Packages) != 2 || pins[1].Version != "2025.3*" || pins[1].Priority != 1002 {
+		t.Errorf("pins = %+v", pins)
+	}
+	for _, bad := range [][]string{
+		{"Package: *", "Pin: release a=noble", "Pin-Priority: 500"},
+		{"Package: *", "Pin: origin edge.example.com", "Pin-Priority: high"},
+		{"Pin: origin edge.example.com"},
+		{"Package: *", "Pin-Priority: 500"},
+		{"Package: *", "Pin: origin h", "Pin-Priority: 1", "Section: main"},
+		{"Package: libfoo", "Pin: version 1.0*"},
+		{"Package: libfoo", "Pin: version 1.0*", "Pin-Priority: 0"},
+	} {
+		if _, err := parsePins(bad); err == nil {
+			t.Errorf("parsePins(%q) accepted", bad)
+		}
+	}
+}
+
+func TestPinsOrder(t *testing.T) {
+	t.Parallel()
+	pin := func(pkg string, priority int) []debutils.Pin {
+		return []debutils.Pin{{Packages: []string{pkg}, Version: "*", Priority: priority}}
+	}
+	out := &Output{Repositories: []Repository{
+		{PreferencesFile: "/etc/apt/preferences.d/z.pref", Pins: pin("z", 1)},
+		{PreferencesFile: "/etc/apt/preferences.d/a.pref", Pins: pin("a", 2)},
+		{PreferencesFile: "/etc/apt/preferences.d/z.pref", Pins: pin("z", 1)}, // the same file again
+		{PreferencesFile: "/etc/apt/preferences.d/m.pref"},                    // no stanzas
+	}}
+	got := Pins(out)
+	if len(got) != 2 || got[0].Packages[0] != "a" || got[1].Packages[0] != "z" {
+		t.Errorf("Pins = %+v, want a.pref's stanzas, then z.pref's once", got)
+	}
+	if Pins(nil) != nil {
+		t.Error("Pins(nil) != nil")
 	}
 }

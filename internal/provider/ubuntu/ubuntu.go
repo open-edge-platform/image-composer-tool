@@ -104,6 +104,9 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 	if err != nil {
 		return err
 	}
+	// Apply the OEP Installer's apt preferences when resolving packages; PostProcess
+	// clears them when the build ends.
+	debutils.ConfigurePins(oepinstaller.Pins(oepOutput))
 
 	// Generate apt sources file from packageRepositories
 	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
@@ -262,6 +265,8 @@ func (p *ubuntu) buildIsoImage(template *config.ImageTemplate) error {
 }
 
 func (p *ubuntu) PostProcess(template *config.ImageTemplate, err error) error {
+	// The pins are process-wide; they must not outlive the build that set them.
+	defer debutils.ConfigurePins(nil)
 	if template.IsOverlayMode() {
 		return p.overlayPostProcess(template, err)
 	}
