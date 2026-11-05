@@ -17,3 +17,9 @@ var ChrootenvSchema []byte
 //
 //go:embed os-config.schema.json
 var OsConfigSchema []byte
+
+// OEPInstallerSBOMSchema validates each document of `openedge-cli list --sbom`
+// output. It must stay identical to the OEP Installer's own validator schema.
+//
+//go:embed oep-installer-sbom.schema.json
+var OEPInstallerSBOMSchema []byte
