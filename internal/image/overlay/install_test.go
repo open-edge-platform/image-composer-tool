@@ -579,16 +579,15 @@ func TestInstallOverlayPackages_UnauditableBaselineFailsClosed(t *testing.T) {
 	}
 }
 
-// TestInstallOverlayPackages_NoAuditWithoutRemoval confirms the dependency audit
-// runs ONLY when a force-removal occurred: a pure additive build (no ToRemove)
-// never invokes it.
-func TestInstallOverlayPackages_NoAuditWithoutRemoval(t *testing.T) {
+// TestInstallOverlayPackages_AuditWithoutRemoval confirms install-only builds
+// audit before and after the transaction while tolerating unchanged baseline failures.
+func TestInstallOverlayPackages_AuditWithoutRemoval(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "curl_8.deb")
 	plan := &ResolutionPlan{
 		DownloadDir: dir,
 		ToInstall:   []ResolvedPackage{{Name: "curl", Version: "8", URL: "https://r/curl_8.deb"}},
 	}
-	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"x"}}}
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"x"}, {"x"}}}
 	h := &installHarness{}
 
 	var err error
@@ -598,14 +597,62 @@ func TestInstallOverlayPackages_NoAuditWithoutRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallOverlayPackages: %v", err)
 	}
-	if backend.auditCalls != 0 {
-		t.Errorf("no removal means no dependency audit, got %d call(s)", backend.auditCalls)
+	if backend.auditCalls != 2 {
+		t.Errorf("install-only transaction requires before/after audits, got %d call(s)", backend.auditCalls)
 	}
 }
 
 // TestInstallOverlayPackages_NoRemovalWhenToRemoveEmpty confirms the removal step
 // is skipped entirely when preflight approved no removals (the default path), so a
 // build that opted into nothing never touches removePackages.
+func TestInstallOverlayPackages_UpgradeAudit(t *testing.T) {
+	tests := []struct {
+		name         string
+		broken       [][]string
+		auditErrors  []error
+		wantError    string
+		wantInstalls int
+		wantAudits   int
+	}{
+		{name: "new failure", broken: [][]string{nil, {"consumer | Depends: library (= 1)"}},
+			wantError: "package transaction introduced", wantInstalls: 1, wantAudits: 2},
+		{name: "same preexisting failure", broken: [][]string{{"consumer | Depends: helper"}, {"consumer | Depends: helper"}},
+			wantInstalls: 1, wantAudits: 2},
+		{name: "different failure on broken package", broken: [][]string{
+			{"consumer | Depends: helper"}, {"consumer | Depends: helper", "consumer | Depends: library (= 1)"}},
+			wantError: "package transaction introduced", wantInstalls: 1, wantAudits: 2},
+		{name: "before audit unavailable", auditErrors: []error{errors.New("audit unavailable")},
+			wantError: "cannot verify dependency integrity", wantAudits: 1},
+		{name: "after audit unavailable", auditErrors: []error{nil, errors.New("audit unavailable")},
+			wantError: "failed to audit dependency integrity", wantInstalls: 1, wantAudits: 2},
+	}
+	for _, family := range []PackageManager{PackageManagerAPT, PackageManagerDNF} {
+		for _, test := range tests {
+			t.Run(string(family)+"/"+test.name, func(t *testing.T) {
+				dir := writeArtifacts(t, t.TempDir(), "library.pkg")
+				backend := &fakeInstaller{fam: family, auditBroken: test.broken, auditErr: test.auditErrors}
+				plan := &ResolutionPlan{DownloadDir: dir,
+					ToInstall: []ResolvedPackage{{Name: "library", Version: "2", URL: "https://r/library.pkg"}}}
+				report := &PreflightReport{CollateralRemovalAuthorized: true}
+				var installErr error
+
+				withStubbedInstall(t, backend, &installHarness{}, func() {
+					_, installErr = InstallOverlayPackages(&BaselineInfo{PackageManager: family}, "/mnt/root", plan, report)
+				})
+
+				if test.wantError == "" && installErr != nil || test.wantError != "" &&
+					(installErr == nil || !strings.Contains(installErr.Error(), test.wantError)) {
+					t.Fatalf("error = %v, want %q", installErr, test.wantError)
+				}
+				if backend.installCalls != test.wantInstalls || backend.auditCalls != test.wantAudits || backend.removeCalls != 0 {
+					t.Errorf("install/audit/remove calls = %d/%d/%d, want %d/%d/0", backend.installCalls,
+						backend.auditCalls, backend.removeCalls, test.wantInstalls, test.wantAudits)
+				}
+			})
+		}
+	}
+}
+
 func TestInstallOverlayPackages_NoRemovalWhenToRemoveEmpty(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "curl_8.deb")
 	plan := &ResolutionPlan{

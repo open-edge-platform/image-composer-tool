@@ -2,6 +2,8 @@ package overlay
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,7 @@ type builderSeams struct {
 	preflight     func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
 	install       func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
 	createUsers   func(*config.ImageTemplate, string) error
+	proxy         func(string, config.ProxyConfig) error
 	configure     func(*config.ImageTemplate, string) error
 	regenBoot     func(*config.ImageTemplate, *BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
 	grubRegen     func(*config.ImageTemplate, *BaselineInfo, string) error
@@ -40,6 +43,7 @@ func saveBuilderSeams() builderSeams {
 		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 		convert: builderConvertFn,
+		proxy:   builderProxyFn,
 	}
 }
 
@@ -53,6 +57,7 @@ func (s builderSeams) restore() {
 	builderAddFilesFn = s.addFiles
 	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
 	builderConvertFn = s.convert
+	builderProxyFn = s.proxy
 }
 
 // builderRecorder tracks calls through the seams and lets a test inject errors at
@@ -212,6 +217,97 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		return r.convertErr
 	}
 	return b
+}
+
+func TestBuilder_ProxyConfiguration(t *testing.T) {
+	tests := []struct {
+		name    string
+		proxy   config.ProxyConfig
+		wantErr bool
+	}{
+		{name: "unset"},
+		{name: "configured", proxy: config.ProxyConfig{HTTPProxy: "http://proxy.example.com:3128"}},
+		{name: "write failure", proxy: config.ProxyConfig{NoProxy: "localhost"}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer saveBuilderSeams().restore()
+			recorder := &builderRecorder{}
+			builder := installOverlayTestBuilder(t, recorder)
+			builder.template.SystemConfig.Proxy = test.proxy
+			called := false
+			writeErr := errors.New("proxy write failed")
+			builderProxyFn = func(root string, proxy config.ProxyConfig) error {
+				called = true
+				if root != "/wd/mnt/root" || proxy != test.proxy {
+					t.Errorf("proxy arguments = %q, %+v; want baseline root and %+v", root, proxy, test.proxy)
+				}
+				if got := recorder.calls[len(recorder.calls)-1]; got != "configure" {
+					t.Errorf("stage before proxy = %q, want configure", got)
+				}
+				if test.wantErr {
+					return writeErr
+				}
+				return nil
+			}
+			if err := builder.Preprocess(); err != nil {
+				t.Fatalf("Preprocess: %v", err)
+			}
+
+			err := builder.Build()
+
+			if test.wantErr && !errors.Is(err, writeErr) || !test.wantErr && err != nil {
+				t.Errorf("Build error = %v, want proxy failure: %v", err, test.wantErr)
+			}
+			if called != !test.proxy.IsEmpty() {
+				t.Errorf("proxy called = %v, want %v", called, !test.proxy.IsEmpty())
+			}
+			if test.wantErr && recorder.calls[len(recorder.calls)-1] != "configure" {
+				t.Errorf("build continued after proxy failure: %v", recorder.calls)
+			}
+		})
+	}
+}
+
+func TestBuilder_ProxyWritesBaselineFiles(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	builder := installOverlayTestBuilder(t, &builderRecorder{})
+	builder.template.SystemConfig.Proxy = config.ProxyConfig{
+		HTTPProxy: "http://proxy.example.com:3128", NoProxy: "mirror.example.com",
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/environment"), []byte("PATH=/usr/bin\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	builder.layout.RootMount = root
+
+	if err := builder.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	for name, expected := range map[string][]string{
+		"etc/environment": {"PATH=/usr/bin", "http_proxy=\"http://proxy.example.com:3128\"",
+			"HTTP_PROXY=\"http://proxy.example.com:3128\""},
+		"etc/apt/apt.conf.d/95ict-proxy": {"Acquire::http::Proxy \"http://proxy.example.com:3128\";",
+			"Acquire::https::Proxy::mirror.example.com \"DIRECT\";"},
+		"etc/systemd/system.conf.d/90-ict-proxy.conf": {"DefaultEnvironment=", "NO_PROXY=mirror.example.com"},
+	} {
+		content, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("reading baseline %s: %v", name, err)
+		}
+		for _, value := range expected {
+			if !strings.Contains(string(content), value) {
+				t.Errorf("baseline %s = %q, want %q", name, content, value)
+			}
+		}
+	}
 }
 
 func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {

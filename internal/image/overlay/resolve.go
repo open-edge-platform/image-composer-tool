@@ -65,9 +65,11 @@ type Repository struct {
 // Without these the overlay path would rebuild a bare PackageInfo and emit
 // degraded records (missing supplier/checksum/description).
 type ResolvedPackage struct {
-	Name    string
-	Version string
-	Arch    string
+	MultiArch   string
+	ProvidesVer []string
+	Name        string
+	Version     string
+	Arch        string
 	// URL is the artifact download URL, when known.
 	URL string
 	// Type is the package family ("deb", "rpm"), used as the SPDX package type.
@@ -116,7 +118,8 @@ type ResolutionPlan struct {
 	// DownloadDir is the cache directory the artifacts were downloaded into.
 	DownloadDir string
 	// Artifacts are the downloaded artifact filenames (sorted).
-	Artifacts []string
+	Artifacts             []string
+	CompatibilityUpgrades []string
 }
 
 // resolveRequest carries everything a resolver backend needs for one resolution.
@@ -239,13 +242,17 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 			break
 		}
 		newTargets := breaksDrivenUpgradeTargets(info.PackageManager, closure, plan, baselineByName, forcedUpgrades)
+		failures := retainedDependencyFailures(info.PackageManager, baseline, plan.ToInstall, nil, arch)
+		newTargets = append(newTargets, retainedUpgradeTargets(failures, requested, forcedUpgrades, arch)...)
+		newTargets = dedupeStrings(newTargets)
+		sort.Strings(newTargets)
 		if len(newTargets) == 0 {
 			break
 		}
 		for _, t := range newTargets {
 			forcedUpgrades[t] = true
 		}
-		log.Infof("Overlay resolution: %d baseline package(s) %v must be upgraded to satisfy a versioned Breaks/Conflicts; re-resolving",
+		log.Infof("Overlay resolution: %d baseline package(s) %v require compatibility upgrades for Breaks/Conflicts or retained dependencies; re-resolving",
 			len(newTargets), newTargets)
 	}
 
@@ -254,6 +261,12 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 	// requested set (per ResolutionPlan.Requested's contract) so the completion and
 	// provenance logs do not misclassify forced dependencies as user requests.
 	plan.Requested = append([]string(nil), requested...)
+	for _, pkg := range plan.ToInstall {
+		if forcedUpgrades[pkg.Name] {
+			plan.CompatibilityUpgrades = append(plan.CompatibilityUpgrades, pkg.Name)
+		}
+	}
+	sort.Strings(plan.CompatibilityUpgrades)
 
 	log.Infof("Overlay resolution complete: %d requested, %d in closure, %d to install (%d already present), %d artifact(s) in %s",
 		len(plan.Requested), len(plan.Closure), len(plan.ToInstall), len(plan.AlreadyPresent), len(plan.Artifacts), plan.DownloadDir)
@@ -348,8 +361,14 @@ const maxBreaksResolvePasses = 4
 // upgrade targets, de-duplicated and sorted so the resolve stays deterministic.
 func mergeRequestedWithForced(requested []string, forced map[string]bool) []string {
 	merged := append([]string(nil), requested...)
+	explicit := make(map[string]bool, len(requested))
+	for _, request := range requested {
+		explicit[requestedBaseName(PackageManagerAPT, request)] = true
+	}
 	for name := range forced {
-		merged = append(merged, name)
+		if !explicit[name] {
+			merged = append(merged, name)
+		}
 	}
 	merged = dedupeStrings(merged)
 	sort.Strings(merged)
@@ -445,6 +464,12 @@ func logToInstallProvenance(family PackageManager, plan *ResolutionPlan) {
 	requestedCount := 0
 	for _, pkg := range plan.ToInstall {
 		origin := "dependency"
+		for _, name := range plan.CompatibilityUpgrades {
+			if name == pkg.Name {
+				origin = "compatibility upgrade"
+				break
+			}
+		}
 		if requestedSet[basePackageName(pkg.Name)] {
 			origin = "requested"
 			requestedCount++
@@ -723,8 +748,12 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 	// still recognized as requested-and-present below and is eligible for upgrade;
 	// otherwise a pinned bump of a baseline package would be dropped from ToInstall.
 	requestedSet := make(map[string]bool, len(requested))
+	pinnedRequests := make(map[string]bool)
 	for _, r := range requested {
 		requestedSet[requestedBaseName(family, r)] = true
+		if family == PackageManagerAPT && strings.Contains(r, "_") {
+			pinnedRequests[r] = true
+		}
 	}
 
 	eligible := map[string]bool{}  // present baseline names approved for upgrade
@@ -738,15 +767,16 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 		work = append(work, name)
 	}
 
-	// Seed: every add (absent from the baseline) plus every requested-and-present
-	// package whose resolved version is strictly newer than the baseline's.
+	// Exact pins also reach preflight when they request a downgrade; policy decides whether it is allowed.
 	for _, p := range closure {
 		name := canonicalPackageName(p)
 		if !present[name] {
 			enqueue(name)
 			continue
 		}
-		if requestedSet[basePackageName(name)] && isNewerThanBaseline(family, name, p.Version, baselineByName) {
+		pinnedChange := pinnedRequests[name+"_"+p.Version] && p.Version != baselineByName[name].Version
+		if pinnedChange || (requestedSet[basePackageName(name)] &&
+			isNewerThanBaseline(family, name, p.Version, baselineByName)) {
 			eligible[name] = true
 			enqueue(name)
 		}
@@ -861,10 +891,14 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 	for _, p := range in.closure {
 		name := canonicalPackageName(p)
 		rp := ResolvedPackage{
+			MultiArch: p.MultiArch, ProvidesVer: p.ProvidesVer,
 			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
 			Type: p.Type, Description: p.Description, Origin: p.Origin,
 			License: p.License, Checksums: p.Checksums, Provides: p.Provides,
 			InstalledSizeBytes: p.InstalledSizeBytes, HasInstalledSize: p.HasInstalledSize,
+		}
+		if in.family == PackageManagerAPT && rp.Arch == "noarch" {
+			rp.Arch = "all"
 		}
 		resolved = append(resolved, rp)
 		if !present[name] {

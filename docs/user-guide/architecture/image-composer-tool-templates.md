@@ -360,7 +360,7 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > now setting any of them in an overlay template **fails the build up front** with
 > a message naming every offending section. Configure them in the baseline image
 > (a `create`-mode build) instead. The overlay-supported `systemConfig` inputs are
-> `packages`, `users`, `configurations`, and `additionalFiles`.
+> `packages`, `users`, `proxy`, `configurations`, and `additionalFiles`.
 >
 > **Users in overlay.** `systemConfig.users` is provisioned onto the baseline. A
 > requested user that **already exists in the baseline image fails the build up
@@ -458,13 +458,34 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
-> when the resolved overlay closure requires it. Downgrades are still rejected at
-> preflight. The bootloader binary remains immutable in all cases, and the kernel
+> when the resolved overlay closure requires it. An exact APT `name_version` pin
+> that resolves to a version different from the baseline enters the install set
+> even when older, so the existing preflight downgrade gate rejects it rather
+> than silently ignoring the pin and later reporting unsatisfied dependencies.
+> Downgrades remain blocked; the downgrade gate is unchanged.
+> The bootloader binary remains immutable in all cases, and the kernel
 > is immutable **unless** you explicitly opt into a swap with `replaceKernel` (see
 > below) — an overlay never upgrades a kernel image in place or reinstalls the
 > bootloader, regardless of `packageOperation`. Choose `additive-only` (the
 > default) to fail the build on any version bump to a baseline package.
-
+>
+> **Retained baseline dependencies (Debian).** Baseline `Depends` and
+> `Pre-Depends` retain their version constraints and alternatives. Under
+> `additive-and-upgrade`, if a library upgrade breaks a previously satisfied
+> requirement, the planner automatically adds affected retained native-architecture
+> baseline packages as internal upgrade targets. This reuses the bounded
+> `Breaks`-driven repair loop, with at most four additional resolution passes.
+> Internal targets do not change `Requested`; `CompatibilityUpgrades` records
+> only the resulting forced installs. Preflight blocks newly unsatisfied retained
+> dependencies that remain unresolved, including unavailable or unchanged repair
+> candidates and blocking pins. Explicit pins are not relaxed; this is not a
+> blanket upgrade, removal, or downgrade authorization. RPM baseline
+> reverse-dependency auto-repair is not implemented.
+>
+> Upgraded packages retain versioned `Provides` and `Multi-Arch` metadata for
+> dependency checks. The parsed metadata cache version is bumped so older entries
+> are re-parsed rather than reused without that metadata.
+>
 > **Package removal (`allowPackageRemoval`).** Opt-in, and permitted **only under
 > `packageOperation: additive-and-upgrade`** — removal is more invasive than an
 > in-place upgrade, so pairing it with the default `additive-only` is rejected at
@@ -476,15 +497,22 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > a stock baseline. Bootloader and bootable-kernel packages are still never
 > removed, so the flag cannot break the boot path.
 >
+> **Dependency audit.** The installer compares package-manager dependency failure
+> descriptors before and after any nonempty install or removal transaction,
+> including upgrade-only transactions. Pre-existing failures are ignored when
+> identifying newly introduced failures. New upgrade-only failures fail closed
+> without cascade removal, even with `allowPackageRemoval: true`.
+>
 > **Cascade removal of orphaned reverse-dependencies.** A conflict-driven removal
 > can leave an unrelated baseline package that only `Depends:` on the removed one
 > with an unmet dependency (for example, the Debian cloud image's
 > `cloud-initramfs-growroot` depends on `initramfs-tools`). When
-> `allowPackageRemoval` is enabled, the post-install dependency audit turns into a
-> bounded cascade: each baseline package that is broken *after* a removal but was
+> `allowPackageRemoval` is enabled and an explicitly authorized removal occurred,
+> the post-install dependency audit permits a bounded cascade: each baseline
+> package that is broken *after* a removal but was
 > whole *before* it is itself removed, transitively, until the package manager's
-> own check (`apt-get check` / `dnf check`) reports the dependency tree is whole
-> again. A dependency that an alternative still satisfies is never treated as broken, so
+> own check (`apt-get check` / `dnf check`) reports no newly introduced failures.
+> A dependency that an alternative still satisfies is never treated as broken, so
 > nothing is over-removed. The cascade still fails **closed**: if resolving the
 > breakage would require removing a bootloader/kernel-image package or a package
 > the overlay is installing, the build fails instead. Cascade removals are folded
@@ -527,15 +555,20 @@ plus `allowPackageRemoval: true`) to it.
 >    can write `linux-image-*-oem` instead of pinning an exact version. The pattern must
 >    resolve to **exactly one** bootable kernel image: a value that matches no kernel
 >    (a typo, or a userspace-only package) or several kernels (an over-broad glob)
->    fails preflight, which lists what it matched so you can narrow it;
+>    fails preflight, which lists what it matched so you can narrow it. A Debian
+>    `name_version` request whose name and version match resolved or
+>    dependency-closure metadata is treated as the canonical package name for
+>    kernel-image checks, not as an extra kernel image;
 > 2. any `additionalPackages` (e.g. the matching `linux-headers-*` package) are
 >    resolved and installed alongside `package`, following the same rules as
 >    `package` itself;
 > 3. the baseline kernel **family** — the bootable image plus its meta-package,
 >    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
->    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
->    and removed, so the emitted image ships **only** the new kernel and whatever
->    `additionalPackages` you named;
+>    `linux-image-generic`, `linux-modules-*`, `linux-main-modules-*`,
+>    `linux-headers-*`) — is auto-detected and removed, except for packages in the
+>    replacement dependency-closure keep-set. Ubuntu `linux-main-modules-*` packages
+>    are kernel companions, not additional bootable images; their removal is
+>    authorized only by a valid explicit kernel replacement;
 > 4. the GRUB config is regenerated so the removed kernel's menu entry is dropped
 >    and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` when you do
 >    not set `grubDefault` explicitly).
@@ -1146,6 +1179,14 @@ bundled on the ISO, so this section only affects the running system.
 | `noProxy` | string | `NO_PROXY`: comma-separated hosts, domains, or CIDRs, no spaces |
 
 A layer that `extends` another replaces an inherited `proxy` section as a whole. An empty `proxy: {}` clears the inherited proxy.
+
+Supported in both create and overlay templates. Overlay uses the same proxy
+writer after `configurations`, preserving unrelated `/etc/environment` entries.
+An absent or empty proxy block leaves the baseline's proxy files untouched;
+it does not clear proxy settings already present in the baseline. Overlay builds
+must run with permission to write the mounted baseline (normally via `sudo -E`).
+For overlay templates, set these values in YAML; proxy CLI overrides remain
+create-mode only. Build-host proxy environment variables are not changed.
 
 The values are written to:
 

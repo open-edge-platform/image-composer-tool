@@ -209,7 +209,8 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// preRemovalBroken holds the failure descriptors already present before the
 	// removal, so the post-install audit acts only on NEW ones.
 	var preRemovalBroken map[string]bool
-	if len(report.ToRemove) > 0 {
+	auditRequired := len(pkgs) > 0 || len(report.ToRemove) > 0
+	if auditRequired {
 		// Fail CLOSED when the audit cannot be established: a force-removal
 		// (--force-depends / --nodeps) with no working whole-database integrity check
 		// could silently leave unrelated baseline packages broken. Rather than run the
@@ -218,9 +219,8 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		// so this is a clean refusal, not a partial state.
 		broken, _, aerr := backend.auditDependencies(rootMount)
 		if aerr != nil {
-			return nil, fmt.Errorf("overlay install: cannot verify dependency integrity for the requested package removal(s) — "+
-				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, dnf for rpm) "+
-				"or drop allowPackageRemoval so no baseline package is removed", aerr)
+			return nil, fmt.Errorf("overlay install: cannot verify dependency integrity for the requested package transaction: "+
+				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, dnf for rpm)", aerr)
 		}
 		preRemovalBroken = make(map[string]bool, len(broken))
 		for _, f := range broken {
@@ -228,10 +228,11 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		}
 		if len(broken) > 0 {
 			sort.Strings(broken)
-			log.Warnf("Overlay install: the baseline already has %d unmet-dependency failure(s) BEFORE the overlay (%s); only NEW failures introduced by the removal will fail the build",
+			log.Warnf("Overlay install: the baseline already has %d unmet-dependency failure(s) BEFORE the overlay (%s); only NEW failures introduced by the transaction will fail the build",
 				len(broken), strings.Join(broken, "; "))
 		}
-
+	}
+	if len(report.ToRemove) > 0 {
 		log.Infof("Overlay install: removing %d baseline package(s) before install (conflict-driven and/or kernel replacement): %s",
 			len(report.ToRemove), strings.Join(report.ToRemove, ", "))
 		if err = backend.removePackages(rootMount, report.ToRemove); err != nil {
@@ -280,7 +281,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		}
 	}
 
-	// After a force-removal, re-audit the whole installed set's dependency graph. A
+	// After a package transaction, re-audit the whole installed set's dependency graph. A
 	// removal permitted by allowPackageRemoval can orphan an UNRELATED baseline package
 	// that only DEPENDS on the removed one — a reverse-dependency the replacement does
 	// not satisfy (e.g. cloud-initramfs-growroot depends on the removed initramfs-tools).
@@ -308,7 +309,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// set is NOT removed — the build aborts with an actionable error instead, because
 	// removing it would break an invariant stronger than the cascade.
 	var cascadeRemoved []string
-	if len(report.ToRemove) > 0 {
+	if auditRequired {
 		toInstallNames := make(map[string]bool, len(pkgs))
 		for _, p := range pkgs {
 			toInstallNames[p.Name] = true
@@ -324,7 +325,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 			if aerr != nil {
 				// The audit could not run post-install even though it ran pre-removal:
 				// surface it rather than silently skipping the integrity guarantee.
-				return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after removals: %w", aerr)
+				return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after package transaction: %w", aerr)
 			}
 			var newlyBroken []string
 			for _, f := range broken {
@@ -336,6 +337,12 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 				break // dependency tree is whole again
 			}
 			sort.Strings(newlyBroken)
+			if len(report.ToRemove) == 0 {
+				return nil, fmt.Errorf("overlay install: package transaction introduced %d unmet dependency failure(s) "+
+					"that were satisfied before the overlay (%s); upgrade the affected packages with compatible dependencies; "+
+					"no removal cascade is authorized for an install-only transaction:%s",
+					len(newlyBroken), strings.Join(newlyBroken, "; "), formatCommandOutput(out))
+			}
 
 			// Resolve each broken descriptor to two values, refusing to cascade past a
 			// protected (bootloader/kernel) or to-install package:
@@ -370,9 +377,9 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 				// requires the operator to opt in via allowPackageRemoval, so fail closed here
 				// rather than silently purging an unrelated baseline package.
 				if !report.CollateralRemovalAuthorized {
-					return nil, fmt.Errorf("overlay install: the approved removal(s) orphaned %d baseline package(s) that were satisfied before the overlay (%s), "+
+					return nil, fmt.Errorf("overlay install: the package transaction broke dependencies of %d baseline package(s) that were satisfied before the overlay (%s), "+
 						"and removing %q is not authorized — a kernel replacement self-authorizes only its own kernel-family swap, not collateral packages; "+
-						"enable allowPackageRemoval to cascade-remove orphaned packages, or add the missing dependency to the overlay:%s",
+						"upgrade the affected packages or add the missing dependency; allowPackageRemoval is required only for intentional collateral removals:%s",
 						len(newlyBroken), strings.Join(newlyBroken, "; "), name, formatCommandOutput(out))
 				}
 				operand := name

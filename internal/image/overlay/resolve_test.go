@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -75,6 +76,162 @@ func rpmProviderRepo() config.ProviderRepoConfig {
 		Component: "base",
 		Enabled:   true,
 		GPGCheck:  true,
+	}
+}
+
+func TestBuildResolutionPlanRetainedMetadata(t *testing.T) {
+	t.Parallel()
+	provided := []string{"virtual (= 3)"}
+
+	plan := buildResolutionPlan(planInput{family: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{{PkgName: "provider", Version: "2", Arch: "amd64",
+			MultiArch: "foreign", ProvidesVer: provided}},
+	})
+
+	if len(plan.ToInstall) != 1 || plan.ToInstall[0].MultiArch != "foreign" ||
+		!reflect.DeepEqual(plan.ToInstall[0].ProvidesVer, provided) {
+		t.Fatalf("ToInstall = %+v, want preserved Multi-Arch and versioned capabilities", plan.ToInstall)
+	}
+}
+
+func TestBuildResolutionPlanDebAllArchitecture(t *testing.T) {
+	t.Parallel()
+	for _, oldArch := range []string{"amd64", "all"} {
+		t.Run(oldArch, func(t *testing.T) {
+			t.Parallel()
+			baseline := []BaselinePackage{
+				{Name: "library", Version: "1", Arch: oldArch, Installed: true},
+				{Name: "consumer", Version: "1", Arch: "amd64", Installed: true,
+					Requirements: parseDebDependsField("consumer", "library (= 1)")},
+			}
+
+			plan := buildResolutionPlan(planInput{family: PackageManagerAPT, requested: []string{"library"},
+				allowUpgrade: true, present: baselinePresenceSet(baseline), baselineByName: baselineVersionIndex(baseline),
+				closure: []ospackage.PackageInfo{{PkgName: "library", Version: "2", Arch: "noarch"}},
+			})
+
+			if len(plan.ToInstall) != 1 || plan.ToInstall[0].Arch != "all" {
+				t.Fatalf("ToInstall = %+v, want one normalized all-architecture package", plan.ToInstall)
+			}
+			failures := retainedDependencyFailures(PackageManagerAPT, baseline, plan.ToInstall, nil, "amd64")
+			if len(failures) != 1 {
+				t.Fatalf("failures = %+v, want exact dependency broken by architecture %s -> all upgrade", failures, oldArch)
+			}
+			baseline[1].Requirements = parseDebDependsField("consumer", "library (>= 1)")
+			if failures := retainedDependencyFailures(PackageManagerAPT, baseline, plan.ToInstall, nil, "amd64"); len(failures) != 0 {
+				t.Fatalf("satisfied minimum dependency wrongly blocked: %+v", failures)
+			}
+		})
+	}
+}
+
+type retainedBackend struct {
+	candidates map[string]ospackage.PackageInfo
+	calls      int
+	seeds      [][]string
+}
+
+func (backend *retainedBackend) family() PackageManager { return PackageManagerAPT }
+
+func (backend *retainedBackend) resolveAndDownload(request resolveRequest) ([]ospackage.PackageInfo, []string, error) {
+	backend.calls++
+	backend.seeds = append(backend.seeds, append([]string(nil), request.seed...))
+	var closure []ospackage.PackageInfo
+	for _, seed := range request.seed {
+		name := requestedBaseName(PackageManagerAPT, seed)
+		candidate, exists := backend.candidates[name]
+		if !exists {
+			return nil, nil, fmt.Errorf("no repository candidate for %s", name)
+		}
+		closure = append(closure, candidate)
+	}
+	return closure, nil, nil
+}
+
+func TestResolveOverlayPackages_RetainedDependencyRepair(t *testing.T) {
+	tests := []struct {
+		name        string
+		chain       int
+		unchanged   bool
+		missing     bool
+		pinned      bool
+		additive    bool
+		wantCalls   int
+		wantBlocked bool
+		wantError   bool
+	}{
+		{name: "transitive repair", chain: 2, wantCalls: 3},
+		{name: "unchanged candidate", chain: 1, unchanged: true, wantCalls: 2, wantBlocked: true},
+		{name: "missing candidate", chain: 1, missing: true, wantCalls: 2, wantError: true},
+		{name: "explicit pin", chain: 1, pinned: true, wantCalls: 1, wantBlocked: true},
+		{name: "additive only", chain: 1, additive: true, wantCalls: 0},
+		{name: "bounded repair", chain: maxBreaksResolvePasses + 1,
+			wantCalls: maxBreaksResolvePasses + 1, wantBlocked: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &retainedBackend{candidates: map[string]ospackage.PackageInfo{
+				"library": {PkgName: "library", Version: "2", Arch: "amd64"},
+			}}
+			baseline := []BaselinePackage{{Name: "library", Version: "1", Arch: "amd64", Installed: true}}
+			dependency := "library"
+			for index := 0; index < test.chain; index++ {
+				name := fmt.Sprintf("consumer%d", index)
+				baseline = append(baseline, BaselinePackage{
+					Name: name, Version: "1", Arch: "amd64", Installed: true,
+					Requirements: parseDebDependsField(name, dependency+" (= 1)"),
+				})
+				if !test.missing {
+					version := "2"
+					if test.unchanged || test.pinned {
+						version = "1"
+					}
+					backend.candidates[name] = ospackage.PackageInfo{PkgName: name, Version: version, Arch: "amd64"}
+				}
+				dependency = name
+			}
+			template := &config.ImageTemplate{
+				Target:       config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+				SystemConfig: config.SystemConfig{Packages: []string{"library"}},
+				OverlayPolicy: &config.OverlayPolicy{AllowUpgrade: true,
+					PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade},
+			}
+			if test.pinned {
+				template.SystemConfig.Packages = append(template.SystemConfig.Packages, "consumer0_1")
+			}
+			if test.additive {
+				template.OverlayPolicy = &config.OverlayPolicy{}
+			}
+			var plan *ResolutionPlan
+			var resolveErr error
+
+			withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+				plan, resolveErr = ResolveOverlayPackages(template, aptInfo(), baseline)
+			})
+
+			if (resolveErr != nil) != test.wantError || backend.calls != test.wantCalls {
+				t.Fatalf("error = %v, calls = %d; want error %v, calls %d",
+					resolveErr, backend.calls, test.wantError, test.wantCalls)
+			}
+			if test.wantError {
+				if !strings.Contains(resolveErr.Error(), "consumer0") {
+					t.Errorf("missing candidate diagnostic = %v, want consumer0", resolveErr)
+				}
+				return
+			}
+			report := EvaluatePreflight(PreflightInput{Family: PackageManagerAPT, Baseline: baseline,
+				Resolved: plan.ToInstall, Policy: *template.OverlayPolicy})
+			if report.Blocked != test.wantBlocked {
+				t.Fatalf("blocked = %v, want %v: %+v", report.Blocked, test.wantBlocked, report.Violations)
+			}
+			if expected := overlayRequestedPackages(template); !reflect.DeepEqual(plan.Requested, expected) {
+				t.Errorf("Requested = %v, want original requests sorted as %v", plan.Requested, expected)
+			}
+			if test.name == "transitive repair" &&
+				!reflect.DeepEqual(plan.CompatibilityUpgrades, []string{"consumer0", "consumer1"}) {
+				t.Errorf("compatibility upgrades = %v, want both consumers", plan.CompatibilityUpgrades)
+			}
+		})
 	}
 }
 
@@ -827,6 +984,37 @@ func TestRequestedBaseName(t *testing.T) {
 // ("coreutils") — newer than the baseline — is marked upgrade-eligible rather than
 // skipped on the pin-suffix mismatch (the reported bug where pinning silently
 // suppressed the upgrade).
+func TestUpgradeEligibleNames_VersionPinnedDowngrade(t *testing.T) {
+	t.Parallel()
+	packageName := "libgstreamer-plugins-extra1.0-0"
+	version := "1.28.2-1ppa1~resolute10"
+	closure := []ospackage.PackageInfo{{PkgName: packageName, Version: version, Arch: "amd64"}}
+	present := map[string]bool{packageName: true}
+	baseline := map[string]BaselinePackage{
+		packageName: {Name: packageName, Version: "1.28.2-1ubuntu1", Arch: "amd64"},
+	}
+
+	eligible := upgradeEligibleNames(PackageManagerAPT, []string{packageName + "_" + version}, closure, present, baseline)
+
+	if !eligible[packageName] {
+		t.Fatalf("exact downgrade pin was discarded before preflight: %v", eligible)
+	}
+	plan := buildResolutionPlan(planInput{
+		family: PackageManagerAPT, requested: []string{packageName + "_" + version},
+		closure: closure, present: present, baselineByName: baseline, allowUpgrade: true,
+	})
+	for _, allowDowngrade := range []bool{false, true} {
+		report := EvaluatePreflight(PreflightInput{
+			Family: PackageManagerAPT, Baseline: []BaselinePackage{installedDeb(packageName, "1.28.2-1ubuntu1")},
+			Resolved: plan.ToInstall, Policy: config.OverlayPolicy{AllowDowngrade: allowDowngrade},
+		})
+		if report.Downgrades != 1 || report.Blocked == allowDowngrade {
+			t.Errorf("allowDowngrade=%v: downgrades=%d blocked=%v, want one downgrade and blocked=%v",
+				allowDowngrade, report.Downgrades, report.Blocked, !allowDowngrade)
+		}
+	}
+}
+
 func TestUpgradeEligibleNames_VersionPinnedRequest(t *testing.T) {
 	requested := []string{"coreutils_9.4-3ubuntu6.2"}
 	closure := []ospackage.PackageInfo{

@@ -23,6 +23,7 @@ type VersionConstraint struct {
 // alternative carries no version requirement (mere presence satisfies it).
 type DependencyAlternative struct {
 	Name       string
+	Arch       string
 	Constraint *VersionConstraint
 }
 
@@ -344,8 +345,8 @@ func parseDebDependsField(pkgName, field string) []ArtifactDependency {
 }
 
 // parseDebAlternative parses one deb dependency alternative ("libc6 (>= 2.34)")
-// into a name and optional version constraint. Architecture qualifiers (":amd64",
-// ":any") and build-profile annotations ("<!nocheck>") are stripped.
+// into a name, architecture qualifier, and optional version constraint.
+// Build-profile annotations ("<!nocheck>") are stripped.
 func parseDebAlternative(alt string) (DependencyAlternative, bool) {
 	alt = strings.TrimSpace(alt)
 	if alt == "" {
@@ -372,13 +373,15 @@ func parseDebAlternative(alt string) (DependencyAlternative, bool) {
 	if sp := strings.IndexAny(name, " \t"); sp != -1 {
 		name = name[:sp]
 	}
+	var arch string
 	if colon := strings.Index(name, ":"); colon != -1 {
+		arch = name[colon+1:]
 		name = name[:colon]
 	}
 	if name == "" {
 		return DependencyAlternative{}, false
 	}
-	return DependencyAlternative{Name: name, Constraint: constraint}, true
+	return DependencyAlternative{Name: name, Arch: arch, Constraint: constraint}, true
 }
 
 // parseRPMRequires parses `rpm -qpR` output into dependency edges. File

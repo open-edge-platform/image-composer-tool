@@ -1712,9 +1712,6 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	}
 	// These sections are applied by the create-mode configuration step,
 	// which an overlay build does not run.
-	if !sc.Proxy.IsEmpty() {
-		offending = append(offending, "proxy")
-	}
 	if len(sc.Provisioning.Scripts) > 0 || sc.Provisioning.BeforeLogin != nil {
 		offending = append(offending, "provisioning")
 	}
