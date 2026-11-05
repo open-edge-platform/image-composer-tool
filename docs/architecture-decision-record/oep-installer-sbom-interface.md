@@ -345,8 +345,9 @@ install samples on top of the blueprint with `openedge-cli install
   `/etc/sudoers.d/` drop-in and does not change any sudo rights the user
   already has. The unit adds it at the start of each attempt and removes it
   whenever the attempt ends, on success or failure, including when the unit
-  is stopped for a reboot. A `tmpfiles.d` rule also deletes it early in every
-  boot, so a power loss or crash cannot leave it in place.
+  is stopped for a reboot. The grant file is in `/run`, which a fixed
+  `/etc/sudoers.d/` entry includes, so a power loss or crash cannot leave it in
+  place after a reboot, including on an immutable image whose `/etc` persists.
 - **Proxy.** The unit inherits the image's proxy settings (`http_proxy`,
   `https_proxy`, `no_proxy`).
 - **Retries and reboots.** The unit runs on every boot until the command exits
