@@ -176,10 +176,13 @@ export function SelectedPackages({
           </button>
         )}
       </div>
+      {/* The list's cap tracks the viewport so the rail, which starts level
+          with the search box, still ends above the Back/Next row (25rem is the
+          chrome above and below it); below the floor the page scrolls instead. */}
       {total === 0 ? (
         <p className="px-3 py-8 text-center text-[12px] text-slate-500">No packages added yet.</p>
       ) : (
-        <div className="max-h-[520px] overflow-y-auto">
+        <div className="max-h-[clamp(240px,calc(100vh-25rem),520px)] overflow-y-auto">
           {/* After the user's own picks, before the imported-template list:
               a newly picked package should land in view above this, and the
               imported template's own list is the long, mostly-static one

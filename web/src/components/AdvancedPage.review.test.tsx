@@ -58,13 +58,13 @@ beforeEach(() => {
 })
 
 describe('AdvancedPage review', () => {
-  it('shows Your changes open and no delta YAML', async () => {
+  it('shows Advanced customization open and no delta YAML', async () => {
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
     // Next stays disabled until the compose response seeds the Image Name.
     await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
-    const changes = await screen.findByRole('button', { name: /Your changes/ })
+    const changes = await screen.findByRole('button', { name: /Advanced customization/ })
     expect(changes.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('vim')).toBeTruthy()
     expect(screen.getByText('intel-graphics')).toBeTruthy()
