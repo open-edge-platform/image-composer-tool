@@ -81,6 +81,23 @@ type PackageRepository struct {
 	Component          string   `yaml:"component,omitempty"`          // Repository component (e.g., "main", "restricted")
 	Priority           int      `yaml:"priority,omitempty"`           // Repository priority (higher numbers = higher priority)
 	AllowPackages      []string `yaml:"allowPackages,omitempty"`      // Optional: specific packages to include from this repo (pinning)
+
+	// The OEP Installer integration sets these for the repositories it
+	// imports: ICT writes the repository's sources list, keyring, and
+	// preferences at these in-image paths, with this content, instead of its
+	// own generated files, so openedge-cli rewriting them on first boot
+	// changes nothing.
+	ListFile        string   `yaml:"-"` // in-image sources list path
+	SourceLines     []string `yaml:"-"` // sources list lines, written as given
+	KeyFile         string   `yaml:"-"` // in-image dearmored keyring path
+	PreferencesFile string   `yaml:"-"` // in-image apt preferences path
+	Preferences     string   `yaml:"-"` // apt preferences content, written as given
+}
+
+// hasOwnFiles reports whether the repository's apt files are written at
+// paths it names rather than ICT's generated locations.
+func (r PackageRepository) hasOwnFiles() bool {
+	return r.ListFile != ""
 }
 
 // ProviderRepoConfig represents the repository configuration for a provider

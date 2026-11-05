@@ -1191,6 +1191,35 @@ func Resolve(req []ospackage.PackageInfo, all []ospackage.PackageInfo) ([]ospack
 	return needed, nil
 }
 
+// versionPrefixConstraints maps each package with a "name_version*" request to
+// its version prefixes.
+func versionPrefixConstraints(requests []string) map[string][]string {
+	constraints := map[string][]string{}
+	for _, r := range requests {
+		if name, prefix, ok := splitVersionPrefixRequest(r); ok {
+			constraints[name] = append(constraints[name], prefix)
+		}
+	}
+	return constraints
+}
+
+// applyVersionPrefixes drops the packages of pkgs, matched by a glob, whose
+// version does not match an explicit "name_version*" request for the package,
+// so the result does not depend on the order of the requests.
+func applyVersionPrefixes(pkgs []ospackage.PackageInfo, constraints map[string][]string) []ospackage.PackageInfo {
+	var out []ospackage.PackageInfo
+	for _, pkg := range pkgs {
+		ok := true
+		for _, prefix := range constraints[pkg.Name] {
+			ok = ok && versionHasPrefix(pkg.Version, prefix)
+		}
+		if ok {
+			out = append(out, pkg)
+		}
+	}
+	return out
+}
+
 // MatchRequested matches requested packages
 func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
@@ -1201,10 +1230,28 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	gotMissingPkg := false
 	gotMissingKernelPkg := false
 	selectedKernelPackages = nil
+	prefixes := versionPrefixConstraints(requests)
 
 	for _, want := range requests {
+		if name, prefix, ok := splitVersionPrefixRequest(want); ok {
+			pkg, found := resolveVersionPrefix(name, prefix, all)
+			if !found {
+				requestedPkgs = append(requestedPkgs, want)
+				log.Warnf("requested package '%q' not found in repo", want)
+				gotMissingPkg = true
+				continue
+			}
+			key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
+			if _, dup := seen[key]; !dup {
+				seen[key] = struct{}{}
+				out = append(out, pkg)
+			}
+			continue
+		}
 		if isGlobPattern(want) {
 			pkgs, found := ResolveWildcardPackageConflicts(want, all)
+			pkgs = applyVersionPrefixes(pkgs, prefixes)
+			found = found && len(pkgs) > 0
 			if !found {
 				requestedPkgs = append(requestedPkgs, want)
 				log.Warnf("requested package '%q' not found in repo", want)

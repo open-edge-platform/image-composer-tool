@@ -4,7 +4,10 @@
 // docs/architecture-decision-record/oep-installer-sbom-interface.md.
 package oepinstaller
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // SchemaVersion is the output schema version this package supports.
 const SchemaVersion = "1"
@@ -29,9 +32,31 @@ const (
 	PackageRemoval
 )
 
-// kernelPackagePrefixes identify kernel packages, which the image template
-// selects rather than the OEP Installer.
-var kernelPackagePrefixes = []string{"linux-image-", "linux-headers-", "linux-modules-", "linux-generic"}
+// KernelRole classifies a kernel-related pkg-list entry. The image template
+// selects the kernel, so ICT checks these entries against it instead of
+// installing them as ordinary packages.
+type KernelRole int
+
+const (
+	// KernelNone is not a kernel package.
+	KernelNone KernelRole = iota
+	// KernelImage is a kernel image for a release, e.g. linux-image-7.0.0-38-generic.
+	KernelImage
+	// KernelMeta is a meta-package without a full release, e.g.
+	// linux-image-generic-7.0, which would pull in the newest kernel it names.
+	KernelMeta
+	// KernelExtra is headers, modules, or tools for a release, e.g.
+	// linux-headers-7.0.0-38-generic, installed for the template's kernel.
+	KernelExtra
+)
+
+// kernelReleaseRe matches a name ending in a kernel release, such as
+// "7.0.0-38-generic" or "6.18-intel": major.minor[.patch] and a suffix.
+var kernelReleaseRe = regexp.MustCompile(`(?:^|-)(\d+\.\d+(?:\.\d+)?-[A-Za-z0-9.+~-]+)$`)
+
+// kernelSeriesRe extracts the series from a meta-package such as
+// linux-image-generic-7.0 (flavour, then major.minor).
+var kernelSeriesRe = regexp.MustCompile(`^linux-(?:image|headers|modules|tools)-[a-z][a-z0-9]*-(\d+\.\d+)$`)
 
 // Package is one pkg-list entry.
 type Package struct {
@@ -43,15 +68,59 @@ type Package struct {
 
 // IsKernel reports whether the entry names kernel packages.
 func (p Package) IsKernel() bool {
+	return p.KernelRole() != KernelNone
+}
+
+// KernelRole classifies the entry. linux-image-* and linux-generic* names are
+// kernel images when they end in a release and meta-packages otherwise.
+// linux-headers-*, linux-modules-*, and linux-tools-* names are extras when
+// they end in a release, meta-packages when they name a flavour (for example
+// linux-headers-generic), and ordinary packages otherwise (linux-tools-common).
+func (p Package) KernelRole() KernelRole {
 	if p.Kind == PackageURL || p.Kind == PackageRemoval {
-		return false
+		return KernelNone
 	}
-	for _, prefix := range kernelPackagePrefixes {
-		if strings.HasPrefix(p.Name, prefix) {
-			return true
+	release := kernelReleaseRe.MatchString(p.Name)
+	switch {
+	case strings.HasPrefix(p.Name, "linux-image-"):
+		if release {
+			return KernelImage
 		}
+		return KernelMeta
+	case strings.HasPrefix(p.Name, "linux-generic"):
+		return KernelMeta
+	case strings.HasPrefix(p.Name, "linux-headers-"), strings.HasPrefix(p.Name, "linux-modules-"),
+		strings.HasPrefix(p.Name, "linux-tools-"):
+		if release {
+			return KernelExtra
+		}
+		if strings.HasSuffix(p.Name, "-common") {
+			return KernelNone
+		}
+		return KernelMeta
 	}
-	return false
+	return KernelNone
+}
+
+// KernelRelease returns the release a KernelImage or KernelExtra entry names,
+// for example "7.0.0-38-generic".
+func (p Package) KernelRelease() string {
+	if role := p.KernelRole(); role != KernelImage && role != KernelExtra {
+		return ""
+	}
+	return kernelReleaseRe.FindStringSubmatch(p.Name)[1]
+}
+
+// KernelSeries returns the series a KernelMeta entry names, for example "7.0"
+// for linux-image-generic-7.0, or "" when the name has none.
+func (p Package) KernelSeries() string {
+	if p.KernelRole() != KernelMeta {
+		return ""
+	}
+	if m := kernelSeriesRe.FindStringSubmatch(p.Name); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // Repository is an apt repository group from a component document.
