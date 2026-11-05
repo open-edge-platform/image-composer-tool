@@ -678,7 +678,8 @@ function TargetStep({
       />
       <Select
         label="SKU"
-        labelSuffix={REQUIRED}
+        // SKU is optional where the manifest offers none for this use case.
+        labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
         placeholder="-- Select SKU --"
         value={selection.sku}
         options={opts.skus}
