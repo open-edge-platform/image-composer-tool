@@ -1,11 +1,19 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { HelpMenu } from './HelpMenu'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { HelpMenu, versionLabel, versionReport } from './HelpMenu'
 import { UserGuidePage } from './UserGuidePage'
 import { guideHref, guideTopicFromHash, guideTopics } from '../guide/topics'
+
+const mockApi = vi.hoisted(() => ({ getVersion: vi.fn() }))
+vi.mock('../api/client', () => ({ api: mockApi }))
+
+beforeEach(() => {
+  mockApi.getVersion.mockReset()
+  mockApi.getVersion.mockResolvedValue({ version: 'ict-2026.3-rc1.1', commit: 'a1b2c3d', buildDate: '2026-11-02' })
+})
 
 const pageTitle = (name: string) => screen.getByRole('heading', { level: 1, name })
 
@@ -43,6 +51,88 @@ describe('HelpMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Help' }))
     fireEvent.pointerDown(document.body)
     expect(screen.queryByRole('link')).toBeNull()
+  })
+})
+
+describe('HelpMenu version', () => {
+  const release = { version: 'ict-2026.3-rc1.1', commit: 'a1b2c3d', buildDate: '2026-11-02' }
+  const dev = { version: '0.1.0', commit: 'unknown', buildDate: 'unknown' }
+  const writeText = vi.fn(async () => {})
+
+  beforeEach(() => {
+    writeText.mockClear()
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+  })
+
+  it('formats the badge, dropping the tag prefix', () => {
+    expect(versionLabel(release)).toBe('v2026.3-rc1.1')
+    expect(versionLabel({ ...release, version: 'v1.2.0' })).toBe('v1.2.0')
+    expect(versionReport(release)).toBe('Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)')
+  })
+
+  it('labels an unstamped build as a development build', () => {
+    expect(versionLabel(dev)).toBe('Development build')
+    expect(versionReport(dev)).toBe('Image Composer Tool v0.1.0 (development build)')
+    expect(versionReport({ ...dev, commit: 'a1b2c3d' })).toBe('Image Composer Tool v0.1.0 (a1b2c3d)')
+  })
+
+  it('shows a version footer with details on hover, and copies the report', async () => {
+    render(<HelpMenu active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    const badge = await screen.findByText('v2026.3-rc1.1')
+    // The commit and date are reachable from the keyboard, and announced: the
+    // badge is focusable and described by the tooltip holding them.
+    expect(badge.getAttribute('tabindex')).toBe('0')
+    const tooltip = screen.getByRole('tooltip', { hidden: true })
+    expect(tooltip.textContent).toBe('a1b2c3d · 2026-11-02')
+    expect(badge.getAttribute('aria-describedby')).toBe(tooltip.id)
+    expect(screen.getByText('Version')).toBeTruthy()
+
+    const copy = screen.getByRole('button', { name: 'Copy version details' })
+    await act(async () => fireEvent.click(copy))
+    expect(writeText).toHaveBeenCalledWith('Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)')
+    expect(copy.textContent).toBe('Copied')
+    expect(screen.getByText('Version details copied')).toBeTruthy()
+  })
+
+  it('offers no copy button where the clipboard is unavailable', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    render(<HelpMenu active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    expect(await screen.findByText('v2026.3-rc1.1')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Copy version details' })).toBeNull()
+  })
+
+  it('retries a failed fetch when the menu opens, without refetching once loaded', async () => {
+    // The page loaded while the server was down: the first fetch fails.
+    mockApi.getVersion.mockRejectedValueOnce(new Error('server restarting'))
+    render(<HelpMenu active={false} />)
+    await act(async () => {})
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(1)
+
+    // The server is back; opening the menu tries again and shows the version.
+    const toggle = screen.getByRole('button', { name: 'Help' })
+    fireEvent.click(toggle)
+    expect(await screen.findByText('v2026.3-rc1.1')).toBeTruthy()
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(2)
+
+    // Once loaded, closing and reopening does not fetch again.
+    fireEvent.click(toggle)
+    fireEvent.click(toggle)
+    await act(async () => {})
+    expect(mockApi.getVersion).toHaveBeenCalledTimes(2)
+  })
+
+  it('still offers the guide when the version cannot be fetched', async () => {
+    mockApi.getVersion.mockRejectedValue(new Error('offline'))
+    render(<HelpMenu active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    await act(async () => {})
+    expect(screen.getByRole('link', { name: 'User Guide' })).toBeTruthy()
+    expect(screen.queryByText('Version')).toBeNull()
   })
 })
 

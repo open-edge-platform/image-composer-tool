@@ -32,6 +32,15 @@ export interface Combination {
   template: string
 }
 
+// Build metadata of the running server (GET /version). The web UI is embedded in
+// the same binary, so this is the UI's version too. An unstamped development
+// build reports "unknown" for commit and buildDate.
+export interface VersionInfo {
+  version: string
+  commit: string
+  buildDate: string
+}
+
 export interface Manifest {
   combinations: Combination[]
   verticals: Option[]
