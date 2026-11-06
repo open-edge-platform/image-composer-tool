@@ -10,6 +10,10 @@
   - [Global Options](#global-options)
   - [Commands](#commands)
     - [Build Command](#build-command)
+      - [Build flags](#build-flags)
+      - [Overlay builds](#overlay-builds)
+      - [ISO build artifacts](#iso-build-artifacts)
+      - [Build cancellation](#build-cancellation)
     - [Validate Command](#validate-command)
     - [Resolve Command](#resolve-command)
     - [Inspect Command](#inspect-command)
@@ -21,6 +25,7 @@
       - [config show](#config-show)
     - [Version Command](#version-command)
     - [Install-Completion Command](#install-completion-command)
+    - [AI Command](#ai-command)
     - [Serve Command](#serve-command)
       - [Serving privileged builds](#serving-privileged-builds)
       - [Data overrides](#data-overrides)
@@ -31,9 +36,12 @@
     - [Inspecting and Comparing Images](#inspecting-and-comparing-images)
     - [Validating Templates](#validating-templates)
     - [Resolving Templates](#resolving-templates)
+    - [Generating Templates with AI](#generating-templates-with-ai)
   - [Configuration Files](#configuration-files)
     - [Global Configuration File](#global-configuration-file)
     - [Image Template File](#image-template-file)
+    - [Overlay Mode](#overlay-mode)
+    - [Template Extends](#template-extends)
   - [Exit Codes](#exit-codes)
   - [Troubleshooting](#troubleshooting)
     - [Common Issues](#common-issues)
@@ -140,7 +148,7 @@ image-composer-tool build [flags] TEMPLATE_FILE
 
 - `TEMPLATE_FILE` - Path to the YAML image template file (required)
 
-**Flags:**
+#### Build flags
 
 | Flag | Description |
 | ---- | ----------- |
@@ -197,7 +205,9 @@ sudo -E image-composer-tool build \
   image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 ```
 
-**ISO build artifacts:** besides the `.iso`, an ISO build writes the SPDX SBOM
+#### ISO build artifacts
+
+Besides the `.iso`, an ISO build writes the SPDX SBOM
 of the system the ISO installs (`spdx_manifest_*.json`), a composition manifest
 (`<image-name>-<version>.composition.json`) listing the base OS, repositories,
 packages with versions, kernel, and every additional file with its SHA-256, and
@@ -205,9 +215,18 @@ the merged template (`template-dump.yaml`), all in the build output directory.
 
 **Note:** The build command typically requires sudo privileges for operations like creating loopback devices and mounting filesystems.
 
-**Baseline image formats (overlay mode):** `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd`, and `vhdx`. Non-RAW baselines are converted to RAW with `qemu-img` before mounting, so `qemu-img` must be installed on the host when a non-RAW format is used (the build fails clearly if it is missing). The declared format is verified against the image's actual format; a mismatch aborts the build. The user-supplied baseline is never modified — conversion writes into the build workspace.
+#### Overlay builds
 
-**Cancellation semantics:** Sending `SIGINT` (Ctrl+C) or `SIGTERM` to a running build triggers cooperative cleanup before the tool exits:
+Set `baseline.mode: overlay` in the template to layer packages onto an existing
+baseline image instead of building one from scratch. See
+[Overlay Mode](#overlay-mode) for the template side. The `--baseline-image` and
+`--inspect` flags above apply only to overlay builds.
+
+**Baseline image formats:** `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd`, and `vhdx`. Non-RAW baselines are converted to RAW with `qemu-img` before mounting, so `qemu-img` must be installed on the host when a non-RAW format is used (the build fails clearly if it is missing). The declared format is verified against the image's actual format; a mismatch aborts the build. The user-supplied baseline is never modified — conversion writes into the build workspace.
+
+#### Build cancellation
+
+Sending `SIGINT` (Ctrl+C) or `SIGTERM` to a running build triggers cooperative cleanup before the tool exits:
 
 1. The signal cancels an ambient `context.Context` that is bound to every subsequent shell subprocess. Because those subprocesses are spawned into their own process group, a single `SIGTERM` to the negative process-group id reaps `bash`, `sudo`, and the real tool (`mmdebstrap`, `apt`, `mksquashfs`, `losetup`, `mkfs.*`, `xorriso`, `dracut`, `ukify`, `sbsign`, `qemu-img`, …) together. Every ICT-spawned tool terminates on `SIGTERM`, so the group exits cooperatively. If the leader (`bash` acting as the group's `cmd.Process`) has not exited within 5 s, the Go runtime's `WaitDelay` escalation sends `SIGKILL` to that leader specifically — `WaitDelay` does not broadcast `SIGKILL` to the whole process group. The group is expected to be gone by then via the earlier `SIGTERM`; the leader-level `SIGKILL` is a backstop for a wedged pipe on the leader itself, not a group-wide kill.
 2. Pure-Go HTTP work (DEB/RPM package downloads and repository metadata fetches) observes the same ambient context: `http.Client.Do` calls carry the ctx via `http.NewRequestWithContext`, in-flight requests cancel as soon as it fires, and the retry backoff aborts within one delay quantum instead of running to completion. This covers `pkgfetcher.FetchPackages`, `rpmutils.fetchURLWithRetry`, and `debutils.checkFileExists`.
@@ -227,12 +246,18 @@ Validate an image template file without building it. This allows checking for
 errors in your template before committing to a full build process.
 
 ```bash
-image-composer-tool validate TEMPLATE_FILE
+image-composer-tool validate [flags] TEMPLATE_FILE
 ```
 
 **Arguments:**
 
 - `TEMPLATE_FILE` - Path to the YAML image template file to validate (required)
+
+**Flags:**
+
+| Flag | Description |
+| ---- | ----------- |
+| `--merged` | Validate the template after it is merged with its `extends` chain (if any) and, for create-mode templates, the OS defaults: the same merge `build` performs. Overlay templates (`baseline.mode: overlay`) are not merged with OS defaults, because the baseline image governs disk, bootloader, kernel and base packages. Also checks that every user in `systemConfig.users` has a usable credential, and prints a summary of the merged result (packages, users, kernel, disk). |
 
 **Description:**
 
@@ -251,6 +276,9 @@ image-composer-tool validate my-image-template.yml
 
 # Validate with verbose output
 image-composer-tool --log-level debug validate my-image-template.yml
+
+# Validate the build-ready template (after merging with OS defaults)
+image-composer-tool validate --merged my-image-template.yml
 ```
 
 See also:
@@ -278,7 +306,7 @@ image-composer-tool resolve [flags] TEMPLATE_FILE
 
 | Flag | Description |
 |---|---|
-| `--full` | Include OS defaults in the output, showing exactly what will be built |
+| `--full` | Include OS defaults in the output, showing exactly what will be built (create mode; overlay templates get no OS defaults) |
 
 **Description:**
 
@@ -290,7 +318,9 @@ template does not use `extends:`, the command prints
 When `--full` is passed, resolve additionally folds the extends chain on top of
 the OS default configuration — OS defaults are the base layer and the extends
 chain overrides them (leaf wins). This is the same merge the `build` command
-runs, so the output shows exactly what the tool would build. `--full`
+runs, so the output shows exactly what the tool would build. Overlay templates
+(`baseline.mode: overlay`) are the exception: OS defaults are not applied to
+them, so `--full` prints the extends-chain result only. `--full`
 suppresses the "nothing to resolve" short-circuit, so it also works for
 templates that do not use `extends:`.
 
@@ -610,7 +640,7 @@ image-composer-tool version
 Install shell completion for the image-composer-tool command. Supports bash, zsh, fish, and PowerShell.
 
 ```bash
-image-composer-tool install-completion [flags]
+image-composer-tool completion install [flags]
 ```
 
 **Flags:**
@@ -624,13 +654,13 @@ image-composer-tool install-completion [flags]
 
 ```bash
 # Auto-detect shell and install completion
-image-composer-tool install-completion
+image-composer-tool completion install
 
 # Install completion for specific shell
-image-composer-tool install-completion --shell bash
+image-composer-tool completion install --shell bash
 
 # Force reinstall
-image-composer-tool install-completion --force
+image-composer-tool completion install --force
 ```
 
 **Post-Installation Steps:**
@@ -660,6 +690,60 @@ Fish automatically loads completions from the standard location. Just restart yo
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 . $PROFILE
 ```
+
+### AI Command
+
+Generate an image template from a natural-language description. The command
+uses retrieval-augmented generation (RAG): it finds the closest templates in
+your template directory by semantic search, then asks an AI provider to write a
+new template based on them.
+
+```bash
+image-composer-tool ai [flags] [QUERY]
+```
+
+**Arguments:**
+
+- `QUERY` - Description of the image you want (required, except with `--clear-cache` or `--cache-stats`)
+
+**Flags:**
+
+| Flag | Description |
+| ---- | ----------- |
+| `--provider STRING` | AI provider: `ollama` (default) or `openai`. |
+| `--templates-dir DIR` | Directory containing the template files used as the knowledge base. |
+| `--output NAME_OR_PATH` | Save the generated template. A bare name is saved as `<templates-dir>/<name>.yml` (`image-templates` unless `--templates-dir` is set). A value with a file extension or a path separator is treated as a path and saved there, with `.yml` appended if it has no extension. |
+| `--search-only` | Only list the matching templates; do not generate one. |
+| `--clear-cache` | Clear the embedding cache. |
+| `--cache-stats` | Show embedding cache statistics. |
+
+**Description:**
+
+With Ollama running locally, no configuration is needed. To use OpenAI, set the
+`OPENAI_API_KEY` environment variable **and** pass `--provider openai`. The
+command starts from built-in defaults and applies only `--provider` and
+`--templates-dir`; the `ai:` section of the global configuration file is not
+read, so models, timeouts and cache settings cannot currently be changed. The
+generated template is not built automatically; run
+[`validate`](#validate-command) on it before [`build`](#build-command).
+
+**Example:**
+
+```bash
+# Generate a template from a description
+image-composer-tool ai "create a minimal edge image for elxr with docker support"
+
+# Generate and save to image-templates/my-custom-image.yml
+image-composer-tool ai "create a minimal edge image" --output my-custom-image
+
+# Find relevant templates without generating
+image-composer-tool ai --search-only "cloud deployment with monitoring"
+```
+
+See also:
+
+- [AI-Powered Template Generation](../get-started/ai-template-generation.md)
+  for provider setup and example queries
 
 ### Serve Command
 
@@ -873,6 +957,17 @@ image-composer-tool resolve image-templates/azl3/azl3-x86_64-edge-raw.yml --full
 image-composer-tool resolve my-template.yml --full > merged.yml
 ```
 
+### Generating Templates with AI
+
+```bash
+# Generate a template and save it under image-templates/
+image-composer-tool ai "minimal ubuntu server with ssh" --output my-server
+
+# Check it, then build it
+image-composer-tool validate --merged image-templates/my-server.yml
+sudo -E image-composer-tool build image-templates/my-server.yml
+```
+
 ## Configuration Files
 
 ### Global Configuration File
@@ -961,6 +1056,71 @@ For the complete field-by-field reference including all nested fields, valid
 values, validation rules, and merge behavior, see the
 [Image Template Reference](./image-composer-tool-templates.md).
 
+### Overlay Mode
+
+By default a build creates the image from scratch. In **overlay mode** the
+build instead copies an existing baseline disk image into the workspace and
+installs additional packages into it, without rebuilding the base. The baseline
+is never modified in place.
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /images/ubuntu24-base.raw   # or `url:` for an https-hosted image
+```
+
+- `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd` and `vhdx`.
+- `overlayPolicy` (optional) controls which package operations are allowed and
+  kernel replacement.
+- On the CLI, `build --baseline-image FILE` overrides the baseline path and
+  `build --inspect` writes a post-build inspection report.
+- An overlay build always emits a `*.delta.spdx.json` SBOM (the packages it
+  added). It also emits `*.complete.spdx.json` (baseline plus delta) only when a
+  baseline SBOM is available; without one, the complete file is skipped because
+  it would be identical to the delta. Use [`compare`](#compare-command) to diff
+  the baseline and overlay images.
+
+See the [`baseline`](./image-composer-tool-templates.md#baseline) and
+[`overlayPolicy`](./image-composer-tool-templates.md#overlaypolicy) field
+reference, and [Composing templates](../../../image-templates/COMPOSITION.md#overlay-mode)
+for a walkthrough.
+
+### Template Extends
+
+A template can inherit from another with the top-level `extends:` field, so you
+only write what differs from the parent:
+
+```yaml
+extends: "ubuntu24-x86_64-minimal-raw.yml"   # relative to this template's directory
+
+image:
+  name: my-image
+  version: "24.04"
+
+target:
+  os: ubuntu      # must match the parent's target
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  packages:
+    - htop        # added on top of the parent's packages
+```
+
+- Every template in the chain must still contain `image` and `target`, and the
+  targets must match the parent's.
+- A template has at most one parent, so the chain is a simple line from root to leaf.
+- Merge rules apply at every level of the chain; the child (leaf) wins.
+- To see the result, run [`resolve`](#resolve-command) (the chain only) or
+  `resolve --full` (the chain on top of the OS defaults), or
+  [`validate --merged`](#validate-command).
+
+See [Template Extends (Inheritance)](./image-composer-tool-templates.md#template-extends-inheritance)
+for syntax, rules and merge behavior, and
+[Composing templates](../../../image-templates/COMPOSITION.md#extends).
+
 ## Exit Codes
 
 The tool provides consistent exit codes that can be used in scripting and
@@ -1030,4 +1190,11 @@ image-composer-tool --log-level error build template.yml
 - [Build Process](./image-composer-tool-build-process.md) - Detailed information about the build stages
 - [Templates](./image-composer-tool-templates.md) - Template structure and usage
 - [Caching](./image-composer-tool-caching.md) - How caching works
+- [Multi-Repo Support](./image-composer-tool-multi-repo-support.md) - Using additional package repositories
+- [Image Manifest Specification](./image-manifest-specification.md) - Composition manifest emitted by ISO builds
+- [Usage Guide](../get-started/usage-guide.md) - Task-oriented CLI walkthroughs
+- [AI-Powered Template Generation](../get-started/ai-template-generation.md) - Setup and configuration for the `ai` command
+- [Unattended ISO Provisioning](../get-started/unattended-iso-provisioning.md) - Unattended ISO installs
+- [Web UI Quick Start](../get-started/web-ui-quick-start.md) - Using `serve`
+- [CLI Docker Quick Start](../get-started/cli-docker-quick-start.md) - Running the CLI in Docker
 - [Coding Style](./image-composer-tool-coding-style.md) - Development guidelines

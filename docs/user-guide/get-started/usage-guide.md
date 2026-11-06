@@ -490,10 +490,10 @@ ICT may run is present in the image.
 
 ```bash
 # Auto-detect shell and install completion
-./image-composer-tool install-completion
+./image-composer-tool completion install
 
 # Or specify a shell: bash, zsh, fish, powershell
-./image-composer-tool install-completion --shell bash
+./image-composer-tool completion install --shell bash
 ```
 
 After installing, reload your shell configuration (e.g., `source ~/.bashrc`).
