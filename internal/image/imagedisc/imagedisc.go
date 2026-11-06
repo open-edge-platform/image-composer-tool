@@ -1101,11 +1101,14 @@ func diskPartitionCreate(
 			log.Errorf("Failed to format partition %d with fs type %s: %v", partitionNum, partitionInfo.FsType, err)
 			return "", fmt.Errorf("failed to format partition %d with fs type %s: %w", partitionNum, partitionInfo.FsType, err)
 		}
-		cmdStr = fmt.Sprintf("swapon %s", diskPartDev)
-		_, err = shell.ExecCmd(cmdStr, true, shell.HostPath, nil)
-		if err != nil {
-			log.Errorf("Failed to enable swap on partition %d: %v", partitionNum, err)
-			return "", fmt.Errorf("failed to enable swap on partition %d: %w", partitionNum, err)
+		// On a loop device (an image being built) the swap would be the build host's, and outlive the build.
+		if !strings.HasPrefix(diskPath, "/dev/loop") {
+			cmdStr = fmt.Sprintf("swapon %s", diskPartDev)
+			_, err = shell.ExecCmd(cmdStr, true, shell.HostPath, nil)
+			if err != nil {
+				log.Errorf("Failed to enable swap on partition %d: %v", partitionNum, err)
+				return "", fmt.Errorf("failed to enable swap on partition %d: %w", partitionNum, err)
+			}
 		}
 	}
 

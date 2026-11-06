@@ -2140,6 +2140,53 @@ func TestDiskPartitionsCreate_GPTLabelFailureWithOutput(t *testing.T) {
 	}
 }
 
+// TestDiskPartitionCreate_SwapEnabledOnlyOffLoopDevices checks that a swap partition is
+// formatted but not enabled when the disk is a loop device (an image being built on the
+// build host), while a real target disk still gets swapon.
+func TestDiskPartitionCreate_SwapEnabledOnlyOffLoopDevices(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	swap := config.PartitionInfo{
+		ID:     "swap",
+		Start:  "1025MiB",
+		End:    "5121MiB",
+		FsType: "linux-swap",
+		Type:   "linux-swap",
+	}
+	tests := []struct {
+		diskPath   string
+		wantSwapon bool
+	}{
+		{diskPath: "/dev/loop5", wantSwapon: false},
+		{diskPath: "/dev/sda", wantSwapon: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.diskPath, func(t *testing.T) {
+			diskName, _ := GetDiskNameFromDiskPath(tt.diskPath)
+			shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+				{Pattern: fmt.Sprintf("cat /sys/block/%s/queue/hw_sector_size", diskName), Output: "512\n"},
+				{Pattern: fmt.Sprintf("cat /sys/block/%s/queue/physical_block_size", diskName), Output: "4096\n"},
+				{Pattern: "sgdisk"},
+				{Pattern: "sudo sync"},
+				{Pattern: "partx -u"},
+				{Pattern: "mkswap"},
+				{Pattern: "swapon", Error: errors.New("swapon ran")},
+			})
+
+			_, err := diskPartitionCreate(tt.diskPath, 2, swap, "gpt", "primary")
+			gotSwapon := err != nil && strings.Contains(err.Error(), "swapon ran")
+			if gotSwapon != tt.wantSwapon {
+				t.Fatalf("swapon ran = %v, want %v (err: %v)", gotSwapon, tt.wantSwapon, err)
+			}
+			if !tt.wantSwapon && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 // TestDiskPartitionCreate_SGDiskFailureWithOutput tests the error path when sgdisk fails
 // with command output, ensuring the trimmed output is included in the returned error.
 func TestDiskPartitionCreate_SGDiskFailureWithOutput(t *testing.T) {
