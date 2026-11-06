@@ -359,6 +359,11 @@ type Bootloader struct {
 	// BootOrder. Boot entries themselves are kept, except earlier entries
 	// labelled exactly ICT, which are replaced.
 	BootEntryPolicy string `yaml:"bootEntryPolicy,omitempty"`
+	// TimeoutSec is how long GRUB shows its menu before booting the default
+	// entry, written to GRUB_TIMEOUT in /etc/default/grub. A pointer so that
+	// unset (keep the OS default) is distinguishable from 0 (boot at once).
+	// GRUB provider only, create-mode builds.
+	TimeoutSec *int `yaml:"timeoutSec,omitempty"`
 }
 
 // ImmutabilityConfig holds the immutability configuration

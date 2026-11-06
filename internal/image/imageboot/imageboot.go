@@ -387,6 +387,20 @@ func updateInitramfsForGrub(installRoot, kernelVersion string, template *config.
 	return nil
 }
 
+// setGrubTimeout rewrites GRUB_TIMEOUT in the generated /etc/default/grub when the
+// template sets bootloader.timeoutSec; with it unset the default from the asset stays.
+func setGrubTimeout(grubDefaultsPath string, timeoutSec *int) error {
+	if timeoutSec == nil {
+		return nil
+	}
+	replacement := fmt.Sprintf("GRUB_TIMEOUT=%d", *timeoutSec)
+	if err := file.ReplaceRegexInFile("^GRUB_TIMEOUT=.*$", replacement, grubDefaultsPath); err != nil {
+		log.Errorf("Failed to set GRUB_TIMEOUT in boot configuration: %v", err)
+		return fmt.Errorf("failed to set GRUB_TIMEOUT in boot configuration: %w", err)
+	}
+	return nil
+}
+
 func updateBootConfigTemplate(installRoot, rootDevID, bootUUID, bootPrefix, hashDevID, rootHashPH string, template *config.ImageTemplate) error {
 	log.Infof("Updating boot configurations")
 
@@ -410,6 +424,10 @@ func updateBootConfigTemplate(installRoot, rootDevID, bootUUID, bootPrefix, hash
 		if err := file.ReplacePlaceholdersInFile("{{.Hostname}}", template.GetImageName(), configFinalPath); err != nil {
 			log.Errorf("Failed to replace Hostname in boot configuration: %v", err)
 			return fmt.Errorf("failed to replace Hostname in boot configuration: %w", err)
+		}
+
+		if err := setGrubTimeout(configFinalPath, bootloaderConfig.TimeoutSec); err != nil {
+			return err
 		}
 	case "systemd-boot":
 		configAssetPath = filepath.Join(configDir, "image", "efi", "bootParams.conf")
