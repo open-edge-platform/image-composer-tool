@@ -690,7 +690,10 @@ image-composer-tool serve [flags]
 **Description:**
 
 `serve` resolves `--templates-dir`, `--work-dir`, and the global configuration
-file relative to its working directory. Start it from the repository root;
+file relative to its working directory. Every build it starts gets the configuration file the
+server loaded, as an absolute `--config` path, so builds use the server's
+settings (such as `oep_installer.token_file`) and not a file found from root's
+home directory under `sudo`. Start it from the repository root;
 started from elsewhere, template selections fail with
 `matched template file not found on disk`.
 

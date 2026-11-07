@@ -39,6 +39,11 @@ type Config struct {
 	WorkDir      string // base directory for per-build work/output directories
 	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
 	ManifestPath string // optional manifest file; empty uses the embedded copy
+	// ConfigPath is the global configuration file the server loaded, passed to
+	// every build with --config so builds use the same settings (such as
+	// oep_installer.token_file) instead of discovering a file of their own,
+	// which under sudo would search root's home directory. Empty passes none.
+	ConfigPath string
 	// PackageReposPath is an optional repository-catalog file; empty uses the
 	// embedded copy.
 	PackageReposPath string
