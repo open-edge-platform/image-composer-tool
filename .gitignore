@@ -28,3 +28,6 @@ workspace/
 # child's own directory) and removed once resolved/built. Should never be
 # committed if one is ever left behind by a crashed server.
 image-templates/.ict-adv-*.yml
+
+# GitHub token for docker-compose.yml's oep_installer_token secret
+/oep-installer-token

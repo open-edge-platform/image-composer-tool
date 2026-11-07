@@ -77,3 +77,13 @@ ai:
   #   semantic_weight: 0.70   # Embedding similarity (0.0-1.0)
   #   keyword_weight: 0.20    # Keyword matching (0.0-1.0)
   #   package_weight: 0.10    # Package matching (0.0-1.0)
+
+# OEP Installer downloads (optional)
+# Templates with a systemConfig.oepInstaller section download the OEP Installer
+# CLI and its package list from GitHub. For files in a private repository, name
+# a file holding a GitHub token with read access. Keep it owned by root with
+# mode 0600; ICT sends the token only to GitHub hosts. The
+# ICT_OEP_INSTALLER_TOKEN and ICT_OEP_INSTALLER_TOKEN_FILE environment variables
+# take precedence over this setting.
+# oep_installer:
+#   token_file: "/etc/image-composer-tool/oep-installer-token"

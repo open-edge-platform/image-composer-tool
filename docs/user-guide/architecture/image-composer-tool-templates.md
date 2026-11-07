@@ -1366,10 +1366,21 @@ copies the CLI to `/usr/local/share/oep-installer/` and adds `sudo` to the
 image's packages. Samples that run on top of a blueprint are not part of the
 image; install them afterwards with `openedge-cli install <sample>`.
 
-To download from a private GitHub repository, set `ICT_OEP_INSTALLER_TOKEN`
-to a GitHub token with read access, for example the one the GitHub CLI stores
+To download from a private GitHub repository, provide a GitHub token with
+read access, for example the one the GitHub CLI stores
 (`gh config get -h github.com oauth_token`, or `gh auth token` on newer
-versions). ICT sends the token only to GitHub hosts. Behind a proxy that
+versions). ICT uses the first of these that is set:
+
+1. `ICT_OEP_INSTALLER_TOKEN`: the token itself, for a build run from a shell.
+2. `ICT_OEP_INSTALLER_TOKEN_FILE`: the path of a file holding the token, such
+   as a mounted Docker or Kubernetes secret.
+3. `oep_installer.token_file` in the global configuration file: the path of a
+   file holding the token. Use this for the Web UI with `serve --sudo`, which
+   does not pass the variables above through `sudo`.
+
+Keep a token file owned by root with mode `0600`; ICT warns when other users
+can read it. ICT sends the token only to GitHub hosts and never logs it.
+Behind a proxy that
 inspects TLS traffic, the build host must trust the proxy's root certificate
 (for example in `/usr/local/share/ca-certificates/`, followed by
 `update-ca-certificates`), or the download fails with a certificate error.
