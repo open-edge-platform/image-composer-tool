@@ -102,6 +102,14 @@ image or corrupt generated configuration:
   is immutable.
 * A `password` value that is already a crypt(3) hash is always set as a hash,
   so a pre-hashed password can never become the literal login password.
+* The GitHub token for OEP Installer files in private repositories is read at
+  build time from `ICT_OEP_INSTALLER_TOKEN`, or from a file that
+  `ICT_OEP_INSTALLER_TOKEN_FILE` or the global configuration's
+  `oep_installer.token_file` names. The file form keeps the token off command
+  lines (the Web UI's `serve --sudo` passes only a path) and out of
+  `docker inspect`; ICT warns when other users can read the file. The token is
+  sent only to GitHub hosts, is never logged, and is not written to the image
+  or to the template carried on the ISO.
 * The template carried on the ISO references provisioning inputs through
   their on-ISO copies; build-host paths of scripts, cloud-init files, and SSH
   key files are not included.

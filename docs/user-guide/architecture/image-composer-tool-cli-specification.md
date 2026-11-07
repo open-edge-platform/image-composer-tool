@@ -925,6 +925,7 @@ logging:
 | `config_dir` | string | Directory for configuration files. Default: "./config" |
 | `temp_dir` | string | Temporary directory. Default: system temp directory |
 | `logging.level` | string | Log level (debug/info/warn/error). Default: "info" |
+| `oep_installer.token_file` | string | File holding a GitHub token with read access, for templates whose `systemConfig.oepInstaller` files are in a private repository. The `ICT_OEP_INSTALLER_TOKEN` and `ICT_OEP_INSTALLER_TOKEN_FILE` environment variables take precedence. Keep the file owned by root with mode 0600. Not set by default |
 
 ### Image Template File
 
