@@ -1,0 +1,21 @@
+# Let NetworkManager manage all devices on this system. Without this,
+# cloud-init's generated netplan config falls back to netplan's default
+# renderer (systemd-networkd), which does configure the interface
+# correctly (DHCP succeeds, connectivity works), but then `nmcli device
+# status` reports it as "unmanaged" since NetworkManager correctly stays
+# out of the way of the interface networkd owns — confusing validation
+# tooling and operators that check `nmcli` for network health.
+#
+# It also decides whether the network is up on the very first boot. With the
+# renderer left at networkd, cloud-init renders the network-config for
+# systemd-networkd during its local stage, after systemd has built the boot
+# transaction, so networkd is never started on that boot while NetworkManager
+# has no profile for the interface: no DHCP lease, and network-online.target
+# is still reached immediately (NetworkManager-wait-online has nothing to wait
+# for). First-boot provisioning that needs the network then fails, and only a
+# later boot, where netplan's generator already finds /etc/netplan, brings it
+# up. With NetworkManager as the renderer the generated profile is read by
+# NetworkManager as it starts, so DHCP completes on the first boot.
+network:
+  version: 2
+  renderer: NetworkManager
