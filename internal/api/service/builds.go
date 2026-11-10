@@ -1037,6 +1037,9 @@ func (s *Service) buildCommand(templatePath, workDir, cacheDir string, overlay b
 	// cache isolated under the build root, so concurrent/repeat builds don't share
 	// (root-owned) state and cleanup is a single directory removal.
 	ictArgs := []string{"build", templatePath, "--work-dir", workDir, "--cache-dir", cacheDir}
+	if s.cfg.ConfigPath != "" {
+		ictArgs = append(ictArgs, "--config", s.cfg.ConfigPath)
+	}
 
 	// Forward the server's own proxy configuration into systemConfig.proxy so
 	// images built on a proxied network can still reach the network during

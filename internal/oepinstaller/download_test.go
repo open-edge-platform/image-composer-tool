@@ -95,6 +95,7 @@ func TestDownloadHint(t *testing.T) {
 	withToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "secret")
 	other, _ := newDownloadRequest(context.Background(), "https://example.com/f", "")
 	if hint := downloadHint(noToken, http.StatusNotFound); !strings.Contains(hint, TokenEnv) ||
+		!strings.Contains(hint, TokenFileEnv) || !strings.Contains(hint, tokenFileConfig) ||
 		!strings.Contains(hint, "private repository") {
 		t.Errorf("hint without token = %q", hint)
 	}
@@ -106,6 +107,62 @@ func TestDownloadHint(t *testing.T) {
 	}
 	if hint := downloadHint(noToken, http.StatusInternalServerError); hint != "" {
 		t.Errorf("hint for a server error = %q", hint)
+	}
+}
+
+// TestResolveToken is not parallel: it sets environment variables and the
+// global configuration.
+func TestResolveToken(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string, mode os.FileMode) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	envFile := write("env-token", "from-env-file\n", 0o600)
+	cfgFile := write("cfg-token", "  from-config  \n", 0o600)
+	empty := write("empty", " \n", 0o600)
+	shared := write("shared", "readable-by-all", 0o644)
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(cfgFile, link); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, env, envFile, cfgFile, want, wantErr string
+	}{
+		{"nothing set", "", "", "", "", ""},
+		{"environment", "from-env", envFile, cfgFile, "from-env", ""},
+		{"file from the environment", "", envFile, cfgFile, "from-env-file", ""},
+		{"file from the configuration, trimmed", "", "", cfgFile, "from-config", ""},
+		{"symlink to a file", "", link, "", "from-config", ""},
+		{"readable by others still works", "", shared, "", "readable-by-all", ""},
+		{"empty file", "", empty, "", "", "is empty"},
+		{"missing file", "", filepath.Join(dir, "missing"), "", "", TokenFileEnv},
+		{"missing configured file", "", "", filepath.Join(dir, "missing"), "", tokenFileConfig},
+		{"directory", "", dir, "", "", "not a regular file"},
+	}
+	orig := *config.Global()
+	t.Cleanup(func() { config.SetGlobal(&orig) })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(TokenEnv, tt.env)
+			t.Setenv(TokenFileEnv, tt.envFile)
+			cfg := orig
+			cfg.OEPInstaller.TokenFile = tt.cfgFile
+			config.SetGlobal(&cfg)
+			got, err := resolveToken()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveToken() = %q, %v; want an error containing %q", got, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("resolveToken() = %q, %v; want %q", got, err, tt.want)
+			}
+		})
 	}
 }
 
