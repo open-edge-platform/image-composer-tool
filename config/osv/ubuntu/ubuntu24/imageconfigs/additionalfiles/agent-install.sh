@@ -28,14 +28,23 @@ esac
 #   OPENVINO_RELEASE_FALLBACK=1    # 1 = newest openvino-* meta if target not in apt yet
 #   OPENVINO_REPO_TRACK=2025       # Intel apt path …/openvino/${OPENVINO_REPO_TRACK}
 #   INSTALL_OPEN_MODEL_ZOO=1       # git clone open_model_zoo (tag OPEN_MODEL_ZOO_TAG)
+#   INSTALL_INTEL_GPU_REPO=1       # add repositories.intel.com/gpu for up-to-date Level Zero (L0) runtime
+#   INTEL_GPU_REPO_COMPONENT=unified  # Intel GPU repo component (unified | client)
+#   INSTALL_PYTORCH_XPU=1          # pip install torch+XPU backend in the agent venv
+#   PYTORCH_XPU_INDEX_URL=https://download.pytorch.org/whl/xpu
+#   INSTALL_DOCKER_COMPAT=1        # install podman-docker so 'docker …' commands run via podman
+#   ENABLE_PODMAN_SOCKET=1         # enable podman.socket for Docker-compatible API access
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
 #   SUPERCLAW_CTL_URL=…/superclaw-ctl-v1.0.0-linux-x86-64.tar.gz
 #   SUPERCLAW_CTL_PREFIX=/opt/superclaw
 #   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"  # skips Playwright only; Hermes may still install Node
 #   HERMES_INSTALL_AS_USER=         # optional; empty = install as script user (root → /usr/local/…)
 #   AGENT_INSTALL_PROXY_MODE=auto   # auto | on | off — see configure_network_proxy
-#   AGENT_INSTALL_HTTP_PROXY=http://proxy-dmz.intel.com:911
-#   AGENT_INSTALL_HTTPS_PROXY=http://proxy-dmz.intel.com:912
+#   AGENT_INSTALL_HTTP_PROXY=       # no default; set to your proxy, e.g. http://proxy.example.com:911
+#   AGENT_INSTALL_HTTPS_PROXY=      # no default; set to your proxy, e.g. http://proxy.example.com:912
+# Proxy precedence: existing http_proxy/https_proxy env (use sudo -E) wins. AGENT_INSTALL_* only
+# apply when set and mode=on, or as an auto-mode fallback after a failed direct probe. No proxy
+# URLs are baked in, so the script works unchanged outside any specific corporate network.
 #
 # Rerunnable: apt-get update/install every run; stamped custom steps every run (FORCE=1 default).
 # Set FORCE=0 to skip completed stamp steps. Requires: network, root, writable apt/dpkg.
@@ -43,7 +52,7 @@ esac
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_REV="2026-06-29-intel-openvino-2026.2-omz-v14"
+readonly SCRIPT_REV="2026-07-08-no-proxy-defaults-v18"
 readonly LOG_TAG="agent-install"
 readonly STAMP_DIR="/var/lib/agent-install/done"
 readonly LOG_FILE="/var/log/agent-install.log"
@@ -65,8 +74,8 @@ readonly OPEN_MODEL_ZOO_GIT_URL="${OPEN_MODEL_ZOO_GIT_URL:-https://github.com/op
 OPEN_MODEL_ZOO_TAG="${OPEN_MODEL_ZOO_TAG:-}"
 
 AGENT_INSTALL_PROXY_MODE="${AGENT_INSTALL_PROXY_MODE:-auto}"
-AGENT_INSTALL_HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY:-http://proxy-dmz.intel.com:911}"
-AGENT_INSTALL_HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY:-http://proxy-dmz.intel.com:912}"
+AGENT_INSTALL_HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY:-}"
+AGENT_INSTALL_HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY:-}"
 AGENT_INSTALL_NO_PROXY="${AGENT_INSTALL_NO_PROXY:-}"
 AGENT_INSTALL_PROXY_PROBE_URL="${AGENT_INSTALL_PROXY_PROBE_URL:-https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB}"
 
@@ -75,6 +84,18 @@ INSTALL_OPENCLAW="${INSTALL_OPENCLAW:-1}"
 INSTALL_SUPERCLAW_CTL="${INSTALL_SUPERCLAW_CTL:-0}"
 INSTALL_OPEN_MODEL_ZOO="${INSTALL_OPEN_MODEL_ZOO:-1}"
 INTEL_PACKAGE_POLICY="${INTEL_PACKAGE_POLICY:-release}"
+
+# Up-to-date Intel GPU Level Zero (L0) runtime: Ubuntu's stock libze-intel-gpu1 lags badly.
+INSTALL_INTEL_GPU_REPO="${INSTALL_INTEL_GPU_REPO:-1}"
+readonly INTEL_GPU_REPO_COMPONENT="${INTEL_GPU_REPO_COMPONENT:-unified}"
+
+# PyTorch with Intel GPU (XPU) backend, installed into the agent venv from the XPU wheel index.
+INSTALL_PYTORCH_XPU="${INSTALL_PYTORCH_XPU:-1}"
+readonly PYTORCH_XPU_INDEX_URL="${PYTORCH_XPU_INDEX_URL:-https://download.pytorch.org/whl/xpu}"
+
+# Docker CLI compatibility via podman-docker: 'docker …' commands run through podman.
+INSTALL_DOCKER_COMPAT="${INSTALL_DOCKER_COMPAT:-1}"
+ENABLE_PODMAN_SOCKET="${ENABLE_PODMAN_SOCKET:-1}"
 
 # Used only when INTEL_PACKAGE_POLICY=pinned (exact deb names; OpenVINO uses release-style meta names).
 INTEL_PINNED_PACKAGES=(
@@ -119,6 +140,10 @@ PACKAGES=(
 	xpu-smi
 
 	podman
+	podman-docker
+	uidmap
+	slirp4netns
+	fuse-overlayfs
 )
 
 log() {
@@ -152,11 +177,17 @@ sync_proxy_env_from_existing() {
 	fi
 }
 
-apply_agent_install_default_proxy() {
-	export http_proxy="${AGENT_INSTALL_HTTP_PROXY}"
-	export https_proxy="${AGENT_INSTALL_HTTPS_PROXY}"
-	export HTTP_PROXY="${http_proxy}"
-	export HTTPS_PROXY="${https_proxy}"
+agent_install_proxy_urls_configured() {
+	[[ -n "${AGENT_INSTALL_HTTP_PROXY}" || -n "${AGENT_INSTALL_HTTPS_PROXY}" ]]
+}
+
+apply_agent_install_configured_proxy() {
+	if [[ -n "${AGENT_INSTALL_HTTP_PROXY}" ]]; then
+		export http_proxy="${AGENT_INSTALL_HTTP_PROXY}" HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY}"
+	fi
+	if [[ -n "${AGENT_INSTALL_HTTPS_PROXY}" ]]; then
+		export https_proxy="${AGENT_INSTALL_HTTPS_PROXY}" HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY}"
+	fi
 	if [[ -n "${AGENT_INSTALL_NO_PROXY}" ]]; then
 		export no_proxy="${AGENT_INSTALL_NO_PROXY}"
 		export NO_PROXY="${no_proxy}"
@@ -177,7 +208,7 @@ network_https_reachable() {
 	fi
 }
 
-# auto: keep user/sudo env; else direct probe; else Intel DMZ defaults. off: never set. on: always set if unset.
+# auto: keep user/sudo env; else direct probe; else configured AGENT_INSTALL_* proxy. off: never set. on: apply configured proxy.
 configure_network_proxy() {
 	local mode="${AGENT_INSTALL_PROXY_MODE}"
 	local probe="${AGENT_INSTALL_PROXY_PROBE_URL}"
@@ -194,8 +225,12 @@ configure_network_proxy() {
 		return 0
 		;;
 	on)
-		apply_agent_install_default_proxy
-		log "Network proxy: mode=on — set http_proxy=${http_proxy}, https_proxy=${https_proxy}"
+		if agent_install_proxy_urls_configured; then
+			apply_agent_install_configured_proxy
+			log "Network proxy: mode=on — set http_proxy=${http_proxy:-<unset>}, https_proxy=${https_proxy:-<unset>}"
+		else
+			log "WARN: mode=on but no proxy configured; export http_proxy/https_proxy (sudo -E) or set AGENT_INSTALL_HTTP_PROXY/AGENT_INSTALL_HTTPS_PROXY"
+		fi
 		return 0
 		;;
 	auto)
@@ -215,14 +250,19 @@ configure_network_proxy() {
 		return 0
 	fi
 
-	log "Network proxy: direct probe failed for ${probe}; trying default Intel DMZ proxy"
-	apply_agent_install_default_proxy
-	if network_https_reachable "${probe}" "0"; then
-		log "Network proxy: using defaults (http_proxy=${http_proxy}, https_proxy=${https_proxy})"
+	if ! agent_install_proxy_urls_configured; then
+		log "WARN: direct probe failed for ${probe} and no proxy configured; continuing direct (export http_proxy/https_proxy or set AGENT_INSTALL_HTTP_PROXY/AGENT_INSTALL_HTTPS_PROXY)"
 		return 0
 	fi
 
-	log "WARN: HTTPS still failing via default proxy; unsetting auto-proxy (set http_proxy/https_proxy manually)"
+	log "Network proxy: direct probe failed for ${probe}; trying configured proxy"
+	apply_agent_install_configured_proxy
+	if network_https_reachable "${probe}" "0"; then
+		log "Network proxy: using configured proxy (http_proxy=${http_proxy:-<unset>}, https_proxy=${https_proxy:-<unset>})"
+		return 0
+	fi
+
+	log "WARN: HTTPS still failing via configured proxy; unsetting auto-proxy (set http_proxy/https_proxy manually)"
 	unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
 }
 
@@ -253,6 +293,15 @@ detect_intel_ubuntu_suite() {
 	esac
 }
 
+# repositories.intel.com/gpu uses Ubuntu codenames (noble/jammy), not the ubuntu24/ubuntu22 suites.
+detect_intel_gpu_codename() {
+	case "$(detect_intel_ubuntu_suite)" in
+	ubuntu24) echo "noble" ;;
+	ubuntu22) echo "jammy" ;;
+	*) return 1 ;;
+	esac
+}
+
 intel_apt_sources_ok() {
 	local suite
 	suite="$(detect_intel_ubuntu_suite)" || return 1
@@ -261,6 +310,12 @@ intel_apt_sources_ok() {
 	[[ -f /etc/apt/sources.list.d/intel-dlstreamer.list ]] || return 1
 	grep -qF "dlstreamer/${suite} ${suite} main" /etc/apt/sources.list.d/intel-dlstreamer.list || return 1
 	[[ -f /etc/apt/sources.list.d/intel-oneapi.list ]] || return 1
+	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
+		local gpu_codename
+		gpu_codename="$(detect_intel_gpu_codename)" || return 0
+		[[ -f /etc/apt/sources.list.d/intel-gpu.list ]] || return 1
+		grep -qF "gpu/ubuntu ${gpu_codename} ${INTEL_GPU_REPO_COMPONENT}" /etc/apt/sources.list.d/intel-gpu.list || return 1
+	fi
 	return 0
 }
 
@@ -290,6 +345,7 @@ remove_ict_duplicate_intel_apt_lines() {
 configure_intel_apt_repos_files() {
 	local suite="$1"
 	local dls_base="$2"
+	local gpu_codename="$3"
 
 	remove_ict_duplicate_intel_apt_lines
 
@@ -314,6 +370,16 @@ EOF
 		cat >/etc/apt/sources.list.d/intel-dlstreamer.list <<EOF
 deb [arch=${INTEL_APT_ARCH} signed-by=/usr/share/keyrings/intel-dls.gpg] ${dls_base} ${suite} main
 EOF
+
+		if [[ -n '${gpu_codename}' ]]; then
+			curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key \
+				| gpg --batch --yes --dearmor -o /usr/share/keyrings/intel-graphics.gpg
+			cat >/etc/apt/sources.list.d/intel-gpu.list <<EOF
+deb [arch=${INTEL_APT_ARCH} signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${gpu_codename} ${INTEL_GPU_REPO_COMPONENT}
+EOF
+		else
+			rm -f /etc/apt/sources.list.d/intel-gpu.list
+		fi
 	"
 }
 
@@ -343,6 +409,16 @@ run_once_step_intel_apt_repos() {
 	dls_base="https://apt.repos.intel.com/edgeai/dlstreamer/${suite}"
 	log "Intel apt suite: ${suite} (arch=${INTEL_APT_ARCH})"
 
+	local gpu_codename=""
+	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
+		gpu_codename="$(detect_intel_gpu_codename || true)"
+		if [[ -n "${gpu_codename}" ]]; then
+			log "Intel GPU (Level Zero) repo: repositories.intel.com/gpu/ubuntu ${gpu_codename} ${INTEL_GPU_REPO_COMPONENT}"
+		else
+			log "WARN: could not map suite to Intel GPU repo codename; skipping L0 runtime repo"
+		fi
+	fi
+
 	if [[ -f "${STAMP_DIR}/intel-apt-repos" ]]; then
 		log "Removing obsolete stamp intel-apt-repos (wrong noble/jammy suite lists)"
 		rm -f "${STAMP_DIR}/intel-apt-repos"
@@ -358,7 +434,7 @@ run_once_step_intel_apt_repos() {
 	fi
 
 	log "Step 'intel-apt-repos-v2' start"
-	configure_intel_apt_repos_files "${suite}" "${dls_base}"
+	configure_intel_apt_repos_files "${suite}" "${dls_base}" "${gpu_codename}"
 	touch "${stamp}"
 	log "Step 'intel-apt-repos-v2' ok"
 }
@@ -425,6 +501,21 @@ run_once_step_open_model_zoo() {
 	log "Open Model Zoo git tag: ${omz_tag} (override with OPEN_MODEL_ZOO_TAG=…)"
 }
 
+run_once_step_docker_compat() {
+	run_once_step "docker-compat" "
+		set -euo pipefail
+		# podman-docker prints an 'Emulate Docker CLI using podman' MOTD on every 'docker' call;
+		# the presence of /etc/containers/nodocker quiets it.
+		install -d -m 0755 /etc/containers
+		touch /etc/containers/nodocker
+		# Expose a Docker-compatible API socket for tools that talk to /run/podman/podman.sock
+		# (docker compose, testcontainers, DOCKER_HOST). Best-effort: no systemd in some chroots.
+		if [[ '${ENABLE_PODMAN_SOCKET}' == '1' ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+			systemctl enable --now podman.socket || echo '[docker-compat] WARN: could not enable podman.socket' >&2
+		fi
+	"
+}
+
 run_once_step_agent_python_venv() {
 	run_once_step "agent-python-venv" "
 		set -euo pipefail
@@ -436,6 +527,11 @@ run_once_step_agent_python_venv() {
 			langgraph \\
 			openai \\
 			openai-agents
+		if [[ '${INSTALL_PYTORCH_XPU}' == '1' ]]; then
+			# PyTorch Intel GPU (XPU) backend; wheels bundle the needed runtime libs.
+			'${AGENT_VENV}/bin/pip' install --index-url '${PYTORCH_XPU_INDEX_URL}' \\
+				torch torchvision torchaudio
+		fi
 	"
 }
 
@@ -782,6 +878,10 @@ main() {
 	install_apt_packages
 	run_once_step_open_model_zoo
 
+	if [[ "${INSTALL_DOCKER_COMPAT}" == "1" ]]; then
+		run_once_step_docker_compat
+	fi
+
 	if [[ "${INSTALL_HERMES}" == "1" ]]; then
 		run_once_step_hermes
 	fi
@@ -796,6 +896,15 @@ main() {
 
 	log "=== ${SCRIPT_NAME} complete ==="
 	log "Python agent venv: ${AGENT_VENV}/bin/activate"
+	if [[ "${INSTALL_PYTORCH_XPU}" == "1" ]]; then
+		log "PyTorch XPU: ${AGENT_VENV}/bin/python -c 'import torch; print(torch.xpu.is_available())'"
+	fi
+	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
+		log "Level Zero runtime: dpkg -l libze1 libze-intel-gpu1 | grep ^ii (from repositories.intel.com/gpu)"
+	fi
+	if [[ "${INSTALL_DOCKER_COMPAT}" == "1" ]]; then
+		log "Docker CLI: 'docker' runs via podman (podman-docker); try 'docker run --rm hello-world'"
+	fi
 	if [[ "${INSTALL_OPEN_MODEL_ZOO}" == "1" ]]; then
 		log "Open Model Zoo: ${OPEN_MODEL_ZOO_DIR} (source /etc/profile.d/open-model-zoo.sh; see log for git tag)"
 	fi
