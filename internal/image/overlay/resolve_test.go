@@ -1015,6 +1015,49 @@ func TestUpgradeEligibleNames_VersionPinnedDowngrade(t *testing.T) {
 	}
 }
 
+func TestUpgradeEligibleNames_VersionPinnedComparison(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		baseline    string
+		pinned      string
+		wantInstall int
+	}{
+		{name: "identical", baseline: "2.12-1", pinned: "2.12-1"},
+		{name: "explicit zero epoch", baseline: "2.12-1", pinned: "0:2.12-1"},
+		{name: "implicit zero epoch", baseline: "0:2.12-1", pinned: "2.12-1"},
+		{name: "leading revision zero", baseline: "2.12-1", pinned: "2.12-01"},
+		{name: "upgrade", baseline: "2.12-1", pinned: "2.12-2", wantInstall: 1},
+		{name: "downgrade", baseline: "2.12-2", pinned: "2.12-1", wantInstall: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			baseline := installedDeb("grub-common", tc.baseline)
+			closure := []ospackage.PackageInfo{{PkgName: "grub-common", Version: tc.pinned, Arch: "amd64"}}
+
+			plan := buildResolutionPlan(planInput{
+				family: PackageManagerAPT, requested: []string{"grub-common_" + tc.pinned},
+				closure: closure, present: map[string]bool{"grub-common": true}, allowUpgrade: true,
+				baselineByName: map[string]BaselinePackage{"grub-common": baseline},
+			})
+			report := EvaluatePreflight(PreflightInput{
+				Family: PackageManagerAPT, Baseline: []BaselinePackage{baseline}, Resolved: plan.ToInstall,
+				Policy: config.OverlayPolicy{AllowUpgrade: true, AllowDowngrade: true},
+			})
+
+			if len(plan.ToInstall) != tc.wantInstall {
+				t.Errorf("baseline %q pin %q: ToInstall = %v, want %d package(s)",
+					tc.baseline, tc.pinned, plan.ToInstall, tc.wantInstall)
+			}
+			if report.Blocked != (tc.wantInstall > 0) {
+				t.Errorf("baseline %q pin %q: blocked = %v, want %v (bootloader immutability)",
+					tc.baseline, tc.pinned, report.Blocked, tc.wantInstall > 0)
+			}
+		})
+	}
+}
+
 func TestUpgradeEligibleNames_VersionPinnedRequest(t *testing.T) {
 	requested := []string{"coreutils_9.4-3ubuntu6.2"}
 	closure := []ospackage.PackageInfo{
