@@ -98,10 +98,13 @@ func retainedRequirementSatisfied(owner BaselinePackage, requirement ArtifactDep
 }
 
 func retainedArchMatches(required string, owner, candidate BaselinePackage, nativeArch string) bool {
+	if candidate.Arch == "all" {
+		candidate.Arch = nativeArch
+	}
 	if required == "any" {
 		return candidate.MultiArch == "allowed"
 	}
-	if candidate.Arch == "all" || candidate.Arch == "" {
+	if candidate.Arch == "" {
 		return true
 	}
 	if required == "native" {

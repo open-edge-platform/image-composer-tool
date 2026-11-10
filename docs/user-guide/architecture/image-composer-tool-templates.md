@@ -499,7 +499,10 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > reverse-dependency auto-repair is not implemented.
 >
 > Upgraded packages retain versioned `Provides` and `Multi-Arch` metadata for
-> dependency checks. The parsed metadata cache version is bumped so older entries
+> dependency checks. An `Architecture: all` candidate is treated as the baseline's
+> native architecture, not implicitly as `Multi-Arch: foreign`; architecture
+> qualifiers and `Multi-Arch` rules still apply to direct and virtual dependencies.
+> The parsed metadata cache version is bumped so older entries
 > are re-parsed rather than reused without that metadata.
 >
 > **Package removal (`allowPackageRemoval`).** Opt-in, and permitted **only under
