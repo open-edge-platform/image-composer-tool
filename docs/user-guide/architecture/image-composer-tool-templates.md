@@ -462,6 +462,8 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > that resolves to a version different from the baseline enters the install set
 > even when older, so the existing preflight downgrade gate rejects it rather
 > than silently ignoring the pin and later reporting unsatisfied dependencies.
+> Pins use Debian version comparison rather than literal spelling: equivalent
+> versions such as `2.12-1` and `0:2.12-1` leave the baseline package untouched.
 > Downgrades remain blocked; the downgrade gate is unchanged.
 > The bootloader binary remains immutable in all cases, and the kernel
 > is immutable **unless** you explicitly opt into a swap with `replaceKernel` (see

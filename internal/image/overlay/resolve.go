@@ -774,7 +774,11 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 			enqueue(name)
 			continue
 		}
-		pinnedChange := pinnedRequests[name+"_"+p.Version] && p.Version != baselineByName[name].Version
+		pinnedChange := false
+		if pinnedRequests[name+"_"+p.Version] {
+			cmp, err := comparePkgVersions(family, p.Version, baselineByName[name].Version)
+			pinnedChange = err != nil || cmp != 0
+		}
 		if pinnedChange || (requestedSet[basePackageName(name)] &&
 			isNewerThanBaseline(family, name, p.Version, baselineByName)) {
 			eligible[name] = true

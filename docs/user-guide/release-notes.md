@@ -36,6 +36,8 @@
   when older. The existing preflight downgrade gate rejects it instead of
   silently ignoring the pin and later reporting unsatisfied dependencies. The
   downgrade gate is unchanged.
+  Pins that compare equal under Debian version rules (for example, `2.12-1` and
+  `0:2.12-1`) remain no-ops, preventing an unclassified bootloader reinstall.
 - Overlay templates now support `systemConfig.proxy`, reusing the create-mode
   writer for login, APT and systemd settings after build-time configuration
   commands. Add site-specific settings in a local or internal template. Build
