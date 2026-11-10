@@ -220,7 +220,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		broken, _, aerr := backend.auditDependencies(rootMount)
 		if aerr != nil {
 			return nil, fmt.Errorf("overlay install: cannot verify dependency integrity for the requested package transaction: "+
-				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, dnf for rpm)", aerr)
+				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, rpm for rpm)", aerr)
 		}
 		preRemovalBroken = make(map[string]bool, len(broken))
 		for _, f := range broken {
@@ -293,7 +293,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// Because the policy already consented to removing a baseline package, that consent
 	// cascades to the reverse-dependencies the removal orphaned: each newly-broken
 	// baseline package is removed too, transitively, until the dependency tree is whole.
-	// The package manager's own audit (apt-get check / dnf check) is the ground truth, so
+	// The package manager's own audit (apt-get check / rpm dependency verification) is the ground truth, so
 	// only genuinely-unsatisfiable packages are removed — an alternative dependency the
 	// baseline still satisfies is never mistaken for breakage (which a static reverse-dep
 	// walk over the first-alternative-only baseline metadata could not guarantee).
@@ -836,30 +836,62 @@ func (b *rpmInstallerBackend) removePackages(chrootPath string, names []string) 
 	return nil
 }
 
-// auditDependencies runs `dnf check --dependencies`, which inspects the local
-// rpmdb (no network, no metadata refresh) and exits non-zero listing broken
-// dependencies when an installed package requires something no installed package
-// provides — the collateral damage an `rpm -e --nodeps` removal can leave. A clean
-// run returns an empty set; a non-zero exit whose output carries the broken-
-// dependency marker returns the offending package names parsed from the report;
-// any other failure (dnf absent from the baseline, etc.) is returned as an error so
-// the caller skips the check rather than misreporting.
+// auditDependencies verifies dependencies using only the local rpmdb, including
+// on tdnf-only baselines. File checks and verify scripts are disabled. Tool or
+// parsing failures are errors so the caller fails closed before any transaction.
 func (b *rpmInstallerBackend) auditDependencies(chrootPath string) ([]string, string, error) {
-	out, err := shell.ExecCmdSilent("dnf check --dependencies", true, chrootPath, nil)
-	if err == nil {
-		return nil, out, nil // dependency tree is satisfied
+	cmd := "rpm -Va --nofiles --noscripts --nodigest --nosignature"
+	out, err := shell.ExecCmdSilent(cmd, true, chrootPath, []string{"LC_ALL=C"})
+	broken, parseErr := parseRPMDependencyFailures(out)
+	if parseErr != nil {
+		return nil, out, fmt.Errorf("rpm dependency verification report: %w%s", parseErr, formatCommandOutput(out))
 	}
-	if hasUnmetDependencyMarker(out) {
-		broken := parseUnmetDependencyFailures(out)
-		if len(broken) == 0 {
-			// Marked broken but nothing parseable (e.g. a bare "Depsolve Error"): treat
-			// as an integrity-check failure rather than a clean empty result, so the
-			// caller never mistakes an unparseable breakage report for "no new breakage".
-			return nil, out, fmt.Errorf("dnf check reported broken dependencies but no package could be parsed from the report%s", formatCommandOutput(out))
+	if err != nil && len(broken) == 0 {
+		return nil, out, fmt.Errorf("rpm dependency verification could not run: %w%s", err, formatCommandOutput(out))
+	}
+	return broken, out, nil
+}
+
+func parseRPMDependencyFailures(out string) ([]string, error) {
+	var failures []string
+	seen := make(map[string]bool)
+	identity := ""
+	pending := false
+	for _, line := range strings.Split(out, "\n") {
+		text := strings.TrimSpace(line)
+		if text == "" {
+			continue
 		}
-		return broken, out, nil // genuine broken dependencies
+		if strings.HasPrefix(text, "Unsatisfied dependencies for ") && strings.HasSuffix(text, ":") {
+			if pending {
+				return nil, fmt.Errorf("missing requirements for %s", identity)
+			}
+			nevra := strings.TrimSuffix(strings.TrimPrefix(text, "Unsatisfied dependencies for "), ":")
+			identity = rpmNameArch(nevra)
+			if identity == "" || identity == nevra || len(strings.Fields(nevra)) != 1 {
+				return nil, fmt.Errorf("invalid package identity %q", nevra)
+			}
+			pending = true
+			continue
+		}
+		requirement, owner, ok := strings.Cut(text, " is needed by ")
+		owner = strings.TrimPrefix(owner, "(installed) ")
+		if identity == "" || !strings.HasPrefix(line, "\t") || !ok ||
+			strings.TrimSpace(requirement) == "" || rpmNameArch(owner) != identity {
+			return nil, fmt.Errorf("unrecognized dependency diagnostic %q", text)
+		}
+		pending = false
+		descriptor := identity + " | " + strings.TrimSpace(requirement)
+		if !seen[descriptor] {
+			seen[descriptor] = true
+			failures = append(failures, descriptor)
+		}
 	}
-	return nil, out, fmt.Errorf("dnf check could not run: %w%s", err, formatCommandOutput(out))
+	if pending {
+		return nil, fmt.Errorf("missing requirements for %s", identity)
+	}
+	sort.Strings(failures)
+	return failures, nil
 }
 
 func (b *rpmInstallerBackend) verifyInstalled(chrootPath string, pkgs []ResolvedPackage) ([]string, error) {

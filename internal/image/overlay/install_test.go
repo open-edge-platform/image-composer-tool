@@ -602,6 +602,40 @@ func TestInstallOverlayPackages_AuditWithoutRemoval(t *testing.T) {
 	}
 }
 
+func TestInstallOverlayPackages_RPMOnlyBaseline(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dnf.rpm")
+	plan := &ResolutionPlan{DownloadDir: dir,
+		ToInstall: []ResolvedPackage{{Name: "dnf", Version: "1", URL: "https://r/dnf.rpm"}}}
+	executor := &capturingExecutor{}
+	stubShell(t, executor)
+	var result *InstallResult
+	var err error
+
+	withStubbedInstall(t, &rpmInstallerBackend{}, &installHarness{}, func() {
+		result, err = InstallOverlayPackages(&BaselineInfo{PackageManager: PackageManagerDNF},
+			"/mnt/root", plan, passedReport())
+	})
+
+	if err != nil {
+		t.Fatalf("RPM-only additive overlay installing dnf: %v", err)
+	}
+	if !reflect.DeepEqual(result.Installed, []string{"dnf"}) {
+		t.Errorf("installed = %v, want [dnf]", result.Installed)
+	}
+	if len(executor.cmds) != 4 {
+		t.Fatalf("commands = %v, want pre-audit, install, query, post-audit", executor.cmds)
+	}
+	wantAudit := "rpm -Va --nofiles --noscripts --nodigest --nosignature"
+	if executor.cmds[0] != wantAudit || executor.cmds[3] != wantAudit {
+		t.Errorf("before/after commands = %v, want RPM-native audits", executor.cmds)
+	}
+	for _, cmd := range executor.cmds {
+		if !strings.HasPrefix(cmd, "rpm ") {
+			t.Errorf("RPM-only baseline must not need dnf or tdnf: %q", cmd)
+		}
+	}
+}
+
 // TestInstallOverlayPackages_NoRemovalWhenToRemoveEmpty confirms the removal step
 // is skipped entirely when preflight approved no removals (the default path), so a
 // build that opted into nothing never touches removePackages.
@@ -1209,9 +1243,13 @@ type stubExecutor struct {
 	shell.Executor // embedded so unused methods panic if ever called
 	out            string
 	err            error
+	cmd            string
+	chroot         string
+	env            []string
 }
 
-func (s *stubExecutor) ExecCmdSilent(string, bool, string, []string) (string, error) {
+func (s *stubExecutor) ExecCmdSilent(cmd string, _ bool, chroot string, env []string) (string, error) {
+	s.cmd, s.chroot, s.env = cmd, chroot, env
 	return s.out, s.err
 }
 
@@ -1374,18 +1412,17 @@ func TestAuditDependencies_DistinguishesBrokenFromToolFailure(t *testing.T) {
 		{
 			name:    "rpm broken",
 			backend: &rpmInstallerBackend{},
-			out:     "package foo-1.0-1.x86_64 requires bar, but none of the providers can be installed\nfoo-1.0-1.x86_64 has broken dependencies",
-			err:     errors.New("exit status 1"),
-			// NEVRA reduced to name.arch; two distinct failures (the requires + the bare
-			// "has broken dependencies"), sorted.
-			wantBroken: []string{"foo.x86_64 | ", "foo.x86_64 | bar, but none of the providers can be installed"},
+			out: "Unsatisfied dependencies for foo-1.0-1.x86_64:\n" +
+				"\tbar >= 2 is needed by (installed) foo-1.0-1.x86_64\n" +
+				"\tquux is needed by (installed) foo-1.0-1.x86_64\n",
+			err:        errors.New("exit status 1"),
+			wantBroken: []string{"foo.x86_64 | bar >= 2", "foo.x86_64 | quux"},
 		},
-		{name: "rpm tool absent", backend: &rpmInstallerBackend{}, out: "bash: dnf: command not found", err: errors.New("exit status 127"), wantErr: true},
+		{name: "rpm tool absent", backend: &rpmInstallerBackend{}, out: "bash: rpm: command not found", err: errors.New("exit status 127"), wantErr: true},
 		{
-			// A bare "Depsolve Error" carries the broken marker but no parseable package.
 			name:    "rpm broken-but-unparseable",
 			backend: &rpmInstallerBackend{},
-			out:     "Error: Depsolve Error occurred",
+			out:     "Unsatisfied dependencies for foo-1.0-1.x86_64:\n",
 			err:     errors.New("exit status 1"),
 			wantErr: true,
 		},
@@ -1405,6 +1442,72 @@ func TestAuditDependencies_DistinguishesBrokenFromToolFailure(t *testing.T) {
 			}
 			if !reflect.DeepEqual(broken, tc.wantBroken) {
 				t.Errorf("broken = %v, want %v", broken, tc.wantBroken)
+			}
+		})
+	}
+}
+
+func TestRPMAuditCommand(t *testing.T) {
+	executor := &stubExecutor{}
+	stubShell(t, executor)
+
+	_, _, err := (&rpmInstallerBackend{}).auditDependencies("/mnt/root")
+
+	if err != nil {
+		t.Fatalf("auditDependencies: %v", err)
+	}
+	if executor.cmd != "rpm -Va --nofiles --noscripts --nodigest --nosignature" || executor.chroot != "/mnt/root" {
+		t.Errorf("command/chroot = %q/%q, want dependency-only RPM verification in /mnt/root",
+			executor.cmd, executor.chroot)
+	}
+	if !reflect.DeepEqual(executor.env, []string{"LC_ALL=C"}) {
+		t.Errorf("audit environment = %v, want [LC_ALL=C]", executor.env)
+	}
+}
+
+func TestParseRPMDependencyFailures(t *testing.T) {
+	t.Parallel()
+	report := func(nevra, requirement string) string {
+		return fmt.Sprintf("Unsatisfied dependencies for %s:\n\t%s is needed by (installed) %s\n",
+			nevra, requirement, nevra)
+	}
+	before := report("foo-1.0-1.x86_64", "bar >= 2")
+	after := report("foo-1.1-2.x86_64", "bar >= 2")
+	tests := []struct {
+		name    string
+		out     string
+		want    []string
+		wantErr bool
+	}{
+		{name: "healthy"},
+		{name: "missing requirement", out: before, want: []string{"foo.x86_64 | bar >= 2"}},
+		{name: "version churn", out: after, want: []string{"foo.x86_64 | bar >= 2"}},
+		{name: "duplicate", out: before + before, want: []string{"foo.x86_64 | bar >= 2"}},
+		{name: "multiple packages and requirements", out: before + report("foo-1.0-1.x86_64", "quux") +
+			report("consumer-1.0-1.noarch", "(other >= 1 or /usr/bin/helper)"),
+			want: []string{"consumer.noarch | (other >= 1 or /usr/bin/helper)",
+				"foo.x86_64 | bar >= 2", "foo.x86_64 | quux"}},
+		{name: "database failure", out: "error: cannot open Packages database", wantErr: true},
+		{name: "mixed database failure", out: before + "error: rpmdb iteration failed\n", wantErr: true},
+		{name: "unrecognized requirement", out: before + "\tunknown diagnostic\n", wantErr: true},
+		{name: "missing header", out: "\tbar is needed by (installed) foo-1.0-1.x86_64\n", wantErr: true},
+		{name: "empty block", out: "Unsatisfied dependencies for foo-1.0-1.x86_64:\n", wantErr: true},
+		{name: "empty block before valid block", out: "Unsatisfied dependencies for empty-1-1.noarch:\n" + before,
+			wantErr: true},
+		{name: "invalid identity", out: report("", "bar"), wantErr: true},
+		{name: "wrong owner", out: strings.Replace(before, "(installed) foo", "(installed) other", 1), wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseRPMDependencyFailures(tc.out)
+
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseRPMDependencyFailures(%q) error = %v, wantErr %v", tc.out, err, tc.wantErr)
+			}
+			if !tc.wantErr && !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("parseRPMDependencyFailures(%q) = %v, want %v", tc.out, got, tc.want)
 			}
 		})
 	}
