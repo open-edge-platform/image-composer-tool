@@ -17,7 +17,7 @@ require (
 	github.com/sassoftware/go-rpmutils v0.4.0
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/ulikunitz/xz v0.5.17
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.58.0
