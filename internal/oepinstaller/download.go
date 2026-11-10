@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,11 +17,20 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 )
 
 // TokenEnv names the environment variable with a GitHub token for downloading
 // from private repositories. It is optional and sent only to GitHub hosts.
 const TokenEnv = "ICT_OEP_INSTALLER_TOKEN"
+
+// TokenFileEnv names the environment variable with the path of a file holding
+// the token, such as a mounted secret. TokenEnv takes precedence over it, and
+// it over the global configuration's oep_installer.token_file.
+const TokenFileEnv = "ICT_OEP_INSTALLER_TOKEN_FILE"
+
+// tokenFileConfig names the global configuration setting in messages.
+const tokenFileConfig = "oep_installer.token_file"
 
 // maxDownloadSize bounds a downloaded file; the CLI and its output are scripts
 // and text of a few hundred kilobytes.
@@ -35,9 +45,13 @@ var httpClient = network.GetSecureHTTPClient
 
 // Download fetches rawURL and verifies that its contents match wantSHA256.
 func Download(rawURL, wantSHA256 string) ([]byte, error) {
+	token, err := resolveToken()
+	if err != nil {
+		return nil, fmt.Errorf("downloading %s: %w", rawURL, err)
+	}
 	ctx, cancel := context.WithTimeout(runctx.Context(), downloadTimeout)
 	defer cancel()
-	req, err := newDownloadRequest(ctx, rawURL, os.Getenv(TokenEnv))
+	req, err := newDownloadRequest(ctx, rawURL, token)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +75,56 @@ func Download(rawURL, wantSHA256 string) ([]byte, error) {
 		return nil, fmt.Errorf("downloading %s: SHA-256 is %s, want %s", rawURL, got, wantSHA256)
 	}
 	return data, nil
+}
+
+// resolveToken returns the GitHub token from the first source that is set:
+// TokenEnv, the file TokenFileEnv names, or the file the global configuration's
+// oep_installer.token_file names. It returns "" when none is set. A file that is
+// set but missing, unreadable, not a regular file, or empty is an error.
+func resolveToken() (string, error) {
+	if token := os.Getenv(TokenEnv); token != "" {
+		logger.Logger().Debugf("OEP Installer: using the GitHub token from %s", TokenEnv)
+		return token, nil
+	}
+	path, source := os.Getenv(TokenFileEnv), TokenFileEnv
+	if path == "" {
+		path, source = config.Global().OEPInstaller.TokenFile, tokenFileConfig
+	}
+	if path == "" {
+		return "", nil
+	}
+	token, err := readTokenFile(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("reading the GitHub token file that %s names: %w", source, err)
+	}
+	logger.Logger().Debugf("OEP Installer: using the GitHub token from the file that %s names", source)
+	return token, nil
+}
+
+// readTokenFile reads a token from path, which may be a symlink (Kubernetes
+// mounts secrets that way) to a regular file. A file that group or others can
+// read gets a warning, not an error: Docker mounts secrets with mode 0444.
+func readTokenFile(path string) (string, error) {
+	info, err := security.CheckSymlink(path, security.ResolveSymlinks)
+	if err != nil {
+		return "", err
+	}
+	if !info.FileInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a regular file", path)
+	}
+	if info.FileInfo.Mode().Perm()&0o077 != 0 {
+		logger.Logger().Warnf("OEP Installer: the GitHub token file %s can be read by other users (mode %04o); "+
+			"restrict it to its owner with chmod 600", path, info.FileInfo.Mode().Perm())
+	}
+	data, err := os.ReadFile(info.ResolvedPath)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return "", fmt.Errorf("%s is empty", path)
+	}
+	return token, nil
 }
 
 // newDownloadRequest builds the GET request, adding token as a bearer token
@@ -89,10 +153,10 @@ func downloadHint(req *http.Request, status int) string {
 		return ""
 	}
 	if req.Header.Get("Authorization") == "" {
-		return fmt.Sprintf(" (the file may be in a private repository; set %s to a GitHub token with read access)",
-			TokenEnv)
+		return fmt.Sprintf(" (the file may be in a private repository; provide a GitHub token with read access in "+
+			"%s, or in a file that %s or the global configuration's %s names)", TokenEnv, TokenFileEnv, tokenFileConfig)
 	}
-	return fmt.Sprintf(" (check the URL, and that the token in %s has read access to the repository)", TokenEnv)
+	return " (check the URL, and that the GitHub token has read access to the repository)"
 }
 
 // Load downloads the published output that o names, verifies its digest, and
