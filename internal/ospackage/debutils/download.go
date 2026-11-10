@@ -306,24 +306,6 @@ func requirementCandidates(required string) []string {
 	return candidates
 }
 
-func isDebRequirementInCache(
-	required string,
-	cachedPackageInfos []ospackage.PackageInfo,
-) bool {
-	required = strings.TrimSpace(required)
-	if required == "" {
-		return true
-	}
-
-	for _, pkg := range cachedPackageInfos {
-		if strings.TrimSpace(pkg.Name) == required {
-			return true
-		}
-	}
-
-	return false
-}
-
 func debMetadataBuildPaths() []string {
 	buildPaths := make([]string, 0, 1+len(RepoCfgs)+len(UserRepoCfgs)+len(LocalUserRepoCfgs))
 	seen := make(map[string]struct{})
@@ -371,77 +353,43 @@ func loadDebPackageInfosFromMetadataCache() []ospackage.PackageInfo {
 	return infos
 }
 
-func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool, []string, []string, error) {
+// isDebPackageCacheOutdated reports whether any of the required .deb files is
+// absent from cacheDir. requiredFiles are the exact .deb file names the current
+// resolve selected (name, version and arch included), so a cached file for an
+// older version of the same package does not satisfy the requirement. It
+// returns the missing file names and the required files that are cached, in the
+// order given; unrelated .deb files in cacheDir are not reported.
+func isDebPackageCacheOutdated(requiredFiles []string, cacheDir string) (bool, []string, []string, error) {
 	pattern := filepath.Join(cacheDir, "*.deb")
 	cachedPaths, err := filepath.Glob(pattern)
 	if err != nil {
 		return false, nil, nil, fmt.Errorf("glob %q: %w", pattern, err)
 	}
 
-	metadataInfos := loadDebPackageInfosFromMetadataCache()
 	cachedFileSet := make(map[string]struct{}, len(cachedPaths))
-	cachedPackageNames := make(map[string]struct{}, len(cachedPaths))
-	cachedPackageInfos := make([]ospackage.PackageInfo, 0, len(cachedPaths))
-	cachedFiles := make([]string, 0, len(cachedPaths))
 	for _, p := range cachedPaths {
-		base := filepath.Base(p)
-		cachedFiles = append(cachedFiles, base)
-		cachedFileSet[base] = struct{}{}
+		cachedFileSet[filepath.Base(p)] = struct{}{}
 	}
 
-	// Preferred path: use previously parsed local metadata and only keep entries
-	// that have a corresponding .deb in the cache directory.
-	for _, pkg := range metadataInfos {
-		if pkg.Name == "" || pkg.URL == "" {
-			continue
-		}
-		base := debFileName(pkg.URL)
-		if _, ok := cachedFileSet[base]; !ok {
-			continue
-		}
-		cachedPackageInfos = append(cachedPackageInfos, pkg)
-		cachedPackageNames[pkg.Name] = struct{}{}
-		if pkg.Version != "" {
-			cachedPackageNames[pkg.Name+"_"+stripDebEpoch(pkg.Version)] = struct{}{}
-		}
-	}
-
-	// Fallback path when metadata cache is unavailable: derive minimal info from files.
-	if len(cachedPackageInfos) == 0 {
-		for _, p := range cachedPaths {
-			base := filepath.Base(p)
-			name, version := parseDebFileName(base)
-			if name == "" {
-				continue
-			}
-			cachedPackageNames[name] = struct{}{}
-			cachedPackageInfos = append(cachedPackageInfos, ospackage.PackageInfo{
-				Name:    name,
-				Version: version,
-				URL:     p,
-				Type:    "deb",
-			})
-		}
-	}
-
-	missingSet := make(map[string]struct{})
-	var missing []string
-	for _, req := range requiredPackages {
+	seen := make(map[string]struct{}, len(requiredFiles))
+	var missing, present []string
+	for _, req := range requiredFiles {
 		req = strings.TrimSpace(req)
 		if req == "" {
 			continue
 		}
-		if isDebRequirementInCache(req, cachedPackageInfos) {
+		if _, dup := seen[req]; dup {
 			continue
 		}
-		if _, seen := missingSet[req]; seen {
-			continue
+		seen[req] = struct{}{}
+		if _, ok := cachedFileSet[req]; ok {
+			present = append(present, req)
+		} else {
+			missing = append(missing, req)
 		}
-		missingSet[req] = struct{}{}
-		missing = append(missing, req)
 	}
 
-	return len(missing) > 0, missing, cachedFiles, nil
+	return len(missing) > 0, missing, present, nil
 }
 
 // clearDebMetadataCache removes packages.parsed.json from every configured repo
@@ -511,7 +459,7 @@ func clearDebPackageCache(cacheDir string) error {
 // cache hit recover the full metadata (canonical repo URL, Maintainer/Origin,
 // checksums, description, epoch-qualified version) for a cached artifact instead
 // of the bare name/version parseable from the filename alone. It mirrors the
-// name→info matching isDebPackageCacheOutdated does, so the two stay in step.
+// filename matching isDebPackageCacheOutdated does, so the two stay in step.
 func debMetadataInfosByCachedFile() map[string]ospackage.PackageInfo {
 	metadataInfos := loadDebPackageInfosFromMetadataCache()
 	byFile := make(map[string]ospackage.PackageInfo, len(metadataInfos))
@@ -1490,9 +1438,12 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	log.Infof("sorted %d packages for installation", len(sorted_pkgs))
 
 	if len(sorted_pkgs) > 0 {
+		// Key the cache check on the exact .deb file name (which carries the
+		// version) so a cached older version of a package is not mistaken for
+		// the one just resolved.
 		requiredPackages := make([]string, 0, len(sorted_pkgs))
 		for _, pkg := range sorted_pkgs {
-			requiredPackages = append(requiredPackages, pkg.Name)
+			requiredPackages = append(requiredPackages, debFileName(pkg.URL))
 		}
 
 		handledPkgList, handledInfos, handled, handledErr := handleDebCacheRetry(
