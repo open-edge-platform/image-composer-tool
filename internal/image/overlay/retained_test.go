@@ -184,6 +184,21 @@ func TestRetainedTransactionRegressions(t *testing.T) {
 			oldArch: "amd64", newArch: "all", wantFailure: true},
 		{name: "all becomes architecture", requirement: "library (= 1)", ownerArch: "amd64",
 			oldArch: "all", newArch: "amd64", wantFailure: true},
+		{name: "all is not implicitly foreign", requirement: "library (>= 1)", ownerArch: "i386",
+			oldArch: "i386", newArch: "all", wantFailure: true},
+		{name: "all does not match explicit foreign arch", requirement: "library:i386 (>= 1)", ownerArch: "amd64",
+			oldArch: "i386", newArch: "all", wantFailure: true},
+		{name: "all foreign satisfies foreign consumer", requirement: "library (>= 1)", ownerArch: "i386",
+			oldArch: "i386", newArch: "all", multiArch: "foreign"},
+		{name: "all satisfies native qualifier", requirement: "library:native (>= 1)", ownerArch: "i386",
+			oldArch: "amd64", newArch: "all"},
+		{name: "all satisfies explicit native arch", requirement: "library:amd64 (>= 1)", ownerArch: "i386",
+			oldArch: "amd64", newArch: "all"},
+		{name: "all allowed satisfies any qualifier", requirement: "library:any (>= 1)", ownerArch: "i386",
+			oldArch: "i386", newArch: "all", multiArch: "allowed"},
+		{name: "all virtual provider is not implicitly foreign", requirement: "virtual (>= 3)", ownerArch: "i386",
+			oldArch: "i386", newArch: "all", provided: "virtual (= 3)",
+			newProvided: []string{"virtual (= 3)"}, wantFailure: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -205,6 +220,44 @@ func TestRetainedTransactionRegressions(t *testing.T) {
 
 			if (len(failures) > 0) != test.wantFailure {
 				t.Fatalf("failures = %+v, wantFailure %v", failures, test.wantFailure)
+			}
+		})
+	}
+}
+
+func TestRetainedArchMatchesArchitectureAll(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		required  string
+		ownerArch string
+		multiArch string
+		want      bool
+	}{
+		{name: "native consumer", ownerArch: "amd64", want: true},
+		{name: "all consumer", ownerArch: "all", want: true},
+		{name: "foreign consumer", ownerArch: "i386"},
+		{name: "foreign helper", ownerArch: "i386", multiArch: "foreign", want: true},
+		{name: "allowed is not foreign", ownerArch: "i386", multiArch: "allowed"},
+		{name: "explicit native", required: "amd64", ownerArch: "i386", want: true},
+		{name: "explicit foreign", required: "i386", ownerArch: "i386"},
+		{name: "foreign cannot override explicit arch", required: "i386", ownerArch: "i386", multiArch: "foreign"},
+		{name: "native qualifier", required: "native", ownerArch: "i386", want: true},
+		{name: "any requires allowed", required: "any", ownerArch: "i386"},
+		{name: "any allowed", required: "any", ownerArch: "i386", multiArch: "allowed", want: true},
+		{name: "foreign cannot satisfy any", required: "any", ownerArch: "i386", multiArch: "foreign"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			owner := BaselinePackage{Arch: test.ownerArch}
+			candidate := BaselinePackage{Arch: "all", MultiArch: test.multiArch}
+
+			got := retainedArchMatches(test.required, owner, candidate, "amd64")
+
+			if got != test.want {
+				t.Errorf("retainedArchMatches(%q, %+v, %+v, amd64) = %v, want %v",
+					test.required, owner, candidate, got, test.want)
 			}
 		})
 	}

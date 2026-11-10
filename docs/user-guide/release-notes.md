@@ -18,6 +18,9 @@
   authorized. RPM baseline reverse-dependency auto-repair is not implemented.
   Upgraded versioned `Provides` and `Multi-Arch` metadata are preserved, and the
   parsed metadata cache version is bumped to re-parse older entries.
+  Retained-dependency checks treat `Architecture: all` as the native architecture
+  before applying qualifiers and `Multi-Arch` rules, so an unannotated `all`
+  replacement cannot hide newly broken foreign-architecture dependencies.
 - **Fixed**: Ubuntu `linux-main-modules-*` packages are classified as kernel
   companions, not extra bootable kernel images. Old companions are removable
   only under a valid explicit kernel replacement, preserving the replacement
