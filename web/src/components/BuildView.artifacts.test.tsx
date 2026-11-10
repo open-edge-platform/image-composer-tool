@@ -1,11 +1,12 @@
 // Artifact-table tests for BuildView.
 //
-// The artifact type shown to the user must be whatever the server reported. The
-// UI previously applied an `uppercase` CSS class to a value it never questioned,
-// which hid the real bug — every artifact reaching it was already typed "image"
-// server-side — so these tests pin the contract at the UI boundary: each row
-// shows its own type, and the reloaded-history view agrees with the live
-// completion view.
+// The Artifact column must follow whatever type the server reported: "Image"
+// for an image, "Bill of Materials" for an SBOM, and any other type shown as
+// itself. The UI previously applied an `uppercase` CSS class to a value it never
+// questioned, which hid the real bug — every artifact reaching it was already
+// typed "image" server-side — so these tests pin the contract at the UI
+// boundary: each row shows its own type, and the reloaded-history view agrees
+// with the live completion view.
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Artifact } from '../api/types'
@@ -92,11 +93,20 @@ const DETAILS = {
   hasLogFile: true,
 }
 
-// typeOf returns the rendered Type cell for the row naming `artifactName`.
+// typeOf returns the rendered Artifact cell for the row naming `artifactName`.
 function typeOf(artifactName: string): string {
   const row = screen.getByText(artifactName).closest('tr')
   if (!row) throw new Error(`no row for ${artifactName}`)
-  return within(row).getAllByRole('cell')[1].textContent ?? ''
+  return within(row).getAllByRole('cell')[0].textContent ?? ''
+}
+
+// cellsOf returns every cell's text for the row naming `artifactName`.
+function cellsOf(artifactName: string): string[] {
+  const row = screen.getByText(artifactName).closest('tr')
+  if (!row) throw new Error(`no row for ${artifactName}`)
+  return within(row)
+    .getAllByRole('cell')
+    .map((c) => c.textContent?.trim() ?? '')
 }
 
 // downloadHrefOf returns the row's download link target.
@@ -112,7 +122,7 @@ function rowNames(): string[] {
   return screen
     .getAllByRole('row')
     .slice(1) // drop the header
-    .map((r) => within(r).getAllByRole('cell')[0]?.textContent?.trim() ?? '')
+    .map((r) => within(r).getAllByRole('cell')[1]?.textContent?.trim() ?? '')
 }
 
 // Renders the view and lets its mount-time loads settle. The component fires
@@ -149,8 +159,8 @@ describe('BuildView artifact types', () => {
     await renderBuildView(false)
 
     await screen.findByText(IMAGE_ARTIFACT.name)
-    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('IMAGE')
-    expect(typeOf(SBOM_ARTIFACT.name)).toBe('SBOM')
+    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('Image')
+    expect(typeOf(SBOM_ARTIFACT.name)).toBe('Bill of Materials')
   })
 
   it('shows each artifact with the type the server reported (live completion)', async () => {
@@ -165,8 +175,8 @@ describe('BuildView artifact types', () => {
     })
 
     await screen.findByText(IMAGE_ARTIFACT.name)
-    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('IMAGE')
-    expect(typeOf(SBOM_ARTIFACT.name)).toBe('SBOM')
+    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('Image')
+    expect(typeOf(SBOM_ARTIFACT.name)).toBe('Bill of Materials')
   })
 
   it('does not relabel an SBOM as an image when it is the only artifact', async () => {
@@ -174,8 +184,8 @@ describe('BuildView artifact types', () => {
     await renderBuildView(false)
 
     await screen.findByText(SBOM_ARTIFACT.name)
-    expect(typeOf(SBOM_ARTIFACT.name)).toBe('SBOM')
-    expect(screen.queryByText('IMAGE')).toBeNull()
+    expect(typeOf(SBOM_ARTIFACT.name)).toBe('Bill of Materials')
+    expect(screen.queryByText('Image')).toBeNull()
   })
 
   it('surfaces a type it does not recognise instead of defaulting it to IMAGE', async () => {
@@ -197,7 +207,7 @@ describe('BuildView artifact types', () => {
     await screen.findByText(future.name)
     expect(typeOf(future.name)).toBe('ATTESTATION')
     expect(typeOf(unknown.name)).toBe('UNKNOWN')
-    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('IMAGE')
+    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('Image')
   })
 
   it('reports a missing type as UNKNOWN rather than IMAGE', async () => {
@@ -227,7 +237,55 @@ describe('BuildView artifact types', () => {
     const fromLive = arts.map((a) => typeOf(a.name))
 
     expect(fromLive).toEqual(fromHistory)
-    expect(fromLive).toEqual(['IMAGE', 'SBOM'])
+    expect(fromLive).toEqual(['Image', 'Bill of Materials'])
+  })
+})
+
+describe('BuildView artifacts table layout', () => {
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    FakeEventSource.last = null
+    buildDetails.mockResolvedValue(DETAILS)
+    buildArtifacts.mockResolvedValue([IMAGE_ARTIFACT, SBOM_ARTIFACT])
+    logFileText.mockResolvedValue('')
+  })
+
+  it('is headed Artifacts, with Artifact, Name, Size, Location and Actions columns', async () => {
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy()
+    expect(
+      screen.getAllByRole('columnheader').map((h) => h.textContent?.trim()),
+    ).toEqual(['Artifact', 'Name', 'Size', 'Location', 'Actions'])
+  })
+
+  it('shows each row as kind, file name, size, location, then the download', async () => {
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    expect(cellsOf(IMAGE_ARTIFACT.name)).toEqual([
+      'Image',
+      IMAGE_ARTIFACT.name,
+      IMAGE_ARTIFACT.size,
+      IMAGE_ARTIFACT.path,
+      '',
+    ])
+    expect(cellsOf(SBOM_ARTIFACT.name)).toEqual([
+      'Bill of Materials',
+      SBOM_ARTIFACT.name,
+      SBOM_ARTIFACT.size,
+      SBOM_ARTIFACT.path,
+      '',
+    ])
+  })
+
+  it('is headed Partial artifacts after a failed build', async () => {
+    buildDetails.mockResolvedValue({ ...DETAILS, status: 'failed', errMsg: 'boom' })
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    expect(screen.getByRole('heading', { name: 'Partial artifacts' })).toBeTruthy()
   })
 })
 

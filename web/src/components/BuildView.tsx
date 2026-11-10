@@ -6,7 +6,7 @@ import type {
   BuildStatus,
   ResidualIssue,
 } from '../api/types'
-import { artifactTypeLabel } from '../api/types'
+import { artifactKindLabel } from '../api/types'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { labelFor, useStore } from '../store'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
@@ -548,25 +548,25 @@ export function BuildView({
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="bg-[#e6f2fa] text-left">
+                <th className="px-3 py-2">Artifact</th>
                 <th className="px-3 py-2">Name</th>
-                <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Size</th>
-                <th className="px-3 py-2">Path</th>
+                <th className="px-3 py-2">Location</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {artifacts.map((a) => (
                 <tr key={a.path} className="border-b border-slate-200">
+                  <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-700">{artifactKindLabel(a.type)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
-                  <td className="px-3 py-2">{artifactTypeLabel(a.type)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                   <td className="px-3 py-2">
-                    {/* Click path (or hover copy icon) to copy to clipboard */}
+                    {/* Click location (or hover copy icon) to copy to clipboard */}
                     {a.path ? (
                       <button
                         className="group flex max-w-full items-center gap-1.5 text-left font-mono text-xs text-slate-500 hover:text-slate-800"
-                        title="Click to copy path"
+                        title="Click to copy location"
                         onClick={() => copyPath(a.path as string)}
                       >
                         <span className="break-all">{a.path}</span>
