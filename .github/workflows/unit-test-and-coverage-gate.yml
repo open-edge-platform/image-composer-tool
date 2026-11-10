@@ -1,6 +1,11 @@
 name: Unit Tests and Coverage
 
 on:
+  workflow_call:
+    inputs:
+      disable_ratchet:
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -15,7 +20,7 @@ on:
         required: false
 
 concurrency:
-  group: unit-tests-${{ github.ref }}
+  group: unit-tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -138,7 +143,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Auto-update coverage threshold (ratchet)
-        if: success() && github.ref != 'refs/heads/main'
+        if: success() && !inputs.disable_ratchet && github.ref_type == 'branch' && github.ref != 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}

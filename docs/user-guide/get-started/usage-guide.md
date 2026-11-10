@@ -7,6 +7,7 @@ command reference, see the
 ## Table of Contents
 
   - [Binary Location](#binary-location)
+  - [Debian Package CI](#debian-package-ci)
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
@@ -30,6 +31,52 @@ command reference, see the
   - [Related Documentation](#related-documentation)
 
 ---
+
+## Debian Package CI
+
+The [Debian Package workflow](../../../.github/workflows/ci-debian.yml) runs
+on `ict-*` tag pushes, manual dispatch, and pull requests targeting `main`.
+It reuses the existing pre-merge security, Go lint, and unit-test/coverage
+workflows before building natively with Go and `dpkg-deb`. Docker and Earthly
+are not required for package creation. Coverage ratcheting is disabled
+for package runs; existing standalone test workflows retain their behavior.
+Fuzz and OS-image workflows remain separate.
+
+The `ict` amd64 package includes the ICT CLI, live-installer, OS configurations
+under `/etc/image-composer-tool`, and upstream example templates. Configuration
+files are conffiles: removal retains local edits and purge deletes them.
+CI verifies installation, CLI version, configuration, removal, and purge in
+Ubuntu 24.04 and Debian 12 containers. It does not compose an OS image.
+
+Scans include the shared workflow's Gitleaks, Trivy, Zizmor and Bandit checks,
+plus govulncheck and CodeQL's extended Go security queries. CodeQL analysis
+and report generation must succeed before packaging; findings are uploaded
+to GitHub code scanning for review. Existing scan/coverage reports and the package/SBOM artifact
+are linked individually in the Publish summary. GitHub Actions downloads are
+ZIP archives; no external publishing is configured.
+
+Tags such as `ict-2026.3` produce version `2026.3`; `ict-2026.3-rc1` produces
+`2026.3~rc1` and a GitHub prerelease. The workflow must exist at the tagged
+commit. After all gates pass, a tag run uploads the `.deb`, SPDX SBOM and
+checksums to GitHub Releases. Release filenames replace `~` with `.`, while
+the version inside the package retains `~`. Reruns replace assets on the same
+release and do not mark it as latest. PR and branch-based manual runs publish
+Actions artifacts only. Manual dispatch requires the workflow on the default
+branch.
+
+To build locally with Go 1.26.1 or newer and `dpkg-deb`:
+
+```bash
+bash scripts/build-deb.sh --version 2026.3
+sudo apt install ./dist/ict_2026.3_amd64.deb
+```
+
+Without `--version`, the script creates a snapshot version. Use `--output`
+to select an output directory. It produces one amd64 `.deb`, `SHA256SUMS`,
+and `image-composer-tool.version`. Both binaries are built directly from Go
+sources; no UI container or OS image is built. Clean-container install tests
+in CI still use Docker, and the reused coverage workflow still uses Earthly.
+The existing Earthfile targets are unchanged.
 
 ## Binary Location
 

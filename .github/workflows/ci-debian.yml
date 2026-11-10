@@ -1,0 +1,258 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+name: Debian Package
+
+on:
+  push:
+    tags: ['ict-*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: debian-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  security:
+    uses: ./.github/workflows/pre-merge.yml
+    with:
+      run_govulncheck: true
+
+  lint:
+    uses: ./.github/workflows/go-lint.yml
+
+  tests:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/unit-test-and-coverage-gate.yml
+    with:
+      disable_ratchet: true
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@0499de31b99561a6d14a36a5f662c2a54f91beee #v4.31.2
+        with:
+          languages: go
+          build-mode: manual
+          queries: security-extended
+      - name: Build Go sources
+        run: go build -a ./...
+      - name: Analyze Go sources
+        uses: github/codeql-action/analyze@0499de31b99561a6d14a36a5f662c2a54f91beee #v4.31.2
+        with:
+          category: /language:go/debian
+          output: codeql-results
+      - name: Verify CodeQL report
+        run: |
+          jq -e '
+            .version == "2.1.0" and
+            (.runs | length > 0) and
+            any(.runs[];
+              .tool.driver.name == "CodeQL" and
+              (.results | type == "array"))
+          ' codeql-results/go.sarif > /dev/null
+      - name: Upload CodeQL report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 #v7.0.2
+        with:
+          name: scan-codeql
+          path: codeql-results/
+          if-no-files-found: error
+          retention-days: 30
+
+  build:
+    needs: [security, lint, tests, codeql]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == tag ]]; then
+            version="${GITHUB_REF_NAME#ict-}"
+            version="$(printf '%s' "${version}" | sed -E 's/-(alpha|beta|rc|dev|preview)/~\1/')"
+          else
+            base="$(sed -nE 's/^## Version ([0-9][0-9.]*)[[:space:]]*$/\1/p' docs/user-guide/release-notes.md | head -1)"
+            version="${base}~snapshot.${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:8}"
+          fi
+          if [[ ! "${version}" =~ ^[0-9][0-9A-Za-z.+~]*$ ]]; then
+            echo "::error::Invalid Debian package version: ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Build Debian package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/build-deb.sh --version "${VERSION}"
+      - name: Inspect package and checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          file="dist/ict_${VERSION}_amd64.deb"
+          test "$(dpkg-deb -f "${file}" Package)" = ict
+          test "$(dpkg-deb -f "${file}" Version)" = "${VERSION}"
+          test "$(dpkg-deb -f "${file}" Architecture)" = amd64
+          dpkg-deb --contents "${file}"
+          (cd dist && sha256sum "ict_${VERSION}_amd64.deb" > SHA256SUMS)
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 #0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: spdx-json
+          output: dist/sbom.spdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 #v7.0.2
+        with:
+          name: ict-deb-amd64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  install:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:24.04', 'debian:12']
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 #v6.0.0
+        with:
+          name: ict-deb-amd64
+          path: dist
+      - name: Install, validate, remove and purge
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          docker run --rm -v "${PWD}/dist:/dist:ro" -e VERSION \
+            "${IMAGE}" bash -euo pipefail -c '
+              rm -f /etc/dpkg/dpkg.cfg.d/excludes
+              apt-get update -qq
+              apt-get install -y --no-install-recommends "/dist/ict_${VERSION}_amd64.deb"
+              test "$(dpkg-query -W -f="\${Version}" ict)" = "${VERSION}"
+              image-composer-tool version | grep -F "${VERSION}"
+              command -v live-installer
+              test -s /etc/image-composer-tool/config.yml
+              test -s /usr/share/doc/ict/LICENSE
+              test -n "$(ls -A /etc/image-composer-tool/config)"
+              test -n "$(ls -A /usr/share/image-composer-tool/examples)"
+              image-composer-tool --help
+              printf "\n# retained edit\n" >> /etc/image-composer-tool/config.yml
+              dpkg -r ict
+              ! command -v image-composer-tool
+              grep -q "retained edit" /etc/image-composer-tool/config.yml
+              dpkg --purge ict
+              test ! -e /etc/image-composer-tool/config.yml
+            '
+
+  publish:
+    needs: [build, install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Publish download list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" > artifacts.json
+          {
+            echo "## Published artifacts"
+            echo
+            echo "Build and installation tests passed on Ubuntu 24.04 and Debian 12."
+            echo
+            echo "| Artifact | Download |"
+            echo "|---|---|"
+            jq -r --arg base "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" '
+              .[].artifacts[] | select(.expired == false) |
+              "| " + .name + " | [Download](" + $base + "/artifacts/" + (.id|tostring) + ") |"
+            ' artifacts.json
+            echo
+            echo "Each GitHub Actions artifact downloads as a ZIP."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ict-')
+    needs: [build, install, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 #v6.0.0
+        with:
+          name: ict-deb-amd64
+          path: dist
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          name="ict_${VERSION//\~/.}_amd64.deb"
+          mkdir release-assets
+          cp "dist/ict_${VERSION}_amd64.deb" "release-assets/${name}"
+          cp dist/sbom.spdx.json release-assets/
+          (cd release-assets && sha256sum "${name}" sbom.spdx.json > SHA256SUMS)
+          args=(--verify-tag --latest=false)
+          [[ "${VERSION}" != *'~'* ]] || args+=(--prerelease)
+          encoded="$(jq -rn --arg tag "${TAG}" '$tag|@uri')"
+          status="$(curl -sS -o release.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${encoded}")"
+          case "${status}" in
+            200)
+              gh release upload "${TAG}" release-assets/* --clobber --repo "${GITHUB_REPOSITORY}"
+              ;;
+            404)
+              gh release create "${TAG}" release-assets/* "${args[@]}" \
+                --title "ICT ${VERSION}" \
+                --notes "Debian amd64 package, SBOM and checksums. Scans and install tests passed. Reports: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                --repo "${GITHUB_REPOSITORY}"
+              ;;
+            *)
+              echo "::error::Release lookup failed: HTTP ${status}"
+              exit 1
+              ;;
+          esac
