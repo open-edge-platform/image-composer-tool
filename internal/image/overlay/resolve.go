@@ -752,7 +752,14 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 	for _, r := range requested {
 		requestedSet[requestedBaseName(family, r)] = true
 		if family == PackageManagerAPT && strings.Contains(r, "_") {
-			pinnedRequests[r] = true
+			candidate, ok := closureByName[requestedBaseName(family, r)]
+			if !ok {
+				continue
+			}
+			candidate.Name = canonicalPackageName(candidate)
+			if _, matched := debutils.ResolveTopPackageConflicts(r, []ospackage.PackageInfo{candidate}); matched {
+				pinnedRequests[candidate.Name] = true
+			}
 		}
 	}
 
@@ -775,7 +782,7 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 			continue
 		}
 		pinnedChange := false
-		if pinnedRequests[name+"_"+p.Version] {
+		if pinnedRequests[name] {
 			cmp, err := comparePkgVersions(family, p.Version, baselineByName[name].Version)
 			pinnedChange = err != nil || cmp != 0
 		}

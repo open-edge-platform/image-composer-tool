@@ -462,6 +462,9 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > that resolves to a version different from the baseline enters the install set
 > even when older, so the existing preflight downgrade gate rejects it rather
 > than silently ignoring the pin and later reporting unsatisfied dependencies.
+> Pin matching follows the Debian resolver, including omitted epochs (for example,
+> `qemu-system_9.0` resolving to `4:9.0`) and artifact basenames such as
+> `qemu-system_9.0_amd64`.
 > Pins use Debian version comparison rather than literal spelling: equivalent
 > versions such as `2.12-1` and `0:2.12-1` leave the baseline package untouched.
 > Downgrades remain blocked; the downgrade gate is unchanged.
