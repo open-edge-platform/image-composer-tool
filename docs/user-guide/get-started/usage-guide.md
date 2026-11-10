@@ -50,8 +50,9 @@ Ubuntu 24.04 and Debian 12 containers. It does not compose an OS image.
 
 Scans include the shared workflow's Gitleaks, Trivy, Zizmor and Bandit checks,
 plus govulncheck and CodeQL's extended Go security queries. CodeQL analysis
-and report generation must succeed before packaging; findings are uploaded
-to GitHub code scanning for review. Existing scan/coverage reports and the package/SBOM artifact
+and report generation must succeed before packaging; its SARIF report is
+published as an artifact. The repository's existing default CodeQL setup
+continues to populate GitHub code scanning. Existing scan/coverage reports and the package/SBOM artifact
 are linked individually in the Publish summary. GitHub Actions downloads are
 ZIP archives; no external publishing is configured.
 
