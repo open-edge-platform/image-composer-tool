@@ -373,6 +373,20 @@ export function artifactTypeLabel(type: string | undefined): string {
   return t === '' ? 'UNKNOWN' : t.toUpperCase()
 }
 
+// artifactKindLabel names what an artifact is for the Artifact column of the
+// compose view: "Image" or "Bill of Materials". It goes by the server-reported
+// type only, so any other type still shows up as itself, via artifactTypeLabel.
+export function artifactKindLabel(type: string | undefined): string {
+  switch ((type ?? '').trim()) {
+    case 'image':
+      return 'Image'
+    case 'sbom':
+      return 'Bill of Materials'
+    default:
+      return artifactTypeLabel(type)
+  }
+}
+
 // Teardown-residue warning surfaced when a cancelled/failed build may have left
 // the machine in a state needing manual cleanup. kind distinguishes a
 // cancellation-failure (the cancel signal couldn't be delivered) from a
