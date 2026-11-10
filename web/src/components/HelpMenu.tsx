@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { api } from '../api/client'
+import type { VersionInfo } from '../api/types'
 import { guideHref, guideTopics } from '../guide/topics'
+import { CopyIcon } from './BuildView'
 
 // The help pages, in menu order. Each is an ordinary link, so adding a page to
 // the menu is adding an entry here.
@@ -14,6 +17,34 @@ interface HelpMenuProps {
   active: boolean
 }
 
+const productName = 'Image Composer Tool'
+
+// The value an unstamped development build reports for commit and buildDate.
+const unstamped = 'unknown'
+
+// stamped lists the commit and date the build stamped, leaving out whichever it
+// did not. Neither is ever labelled "build": in this app a build is an image.
+function stamped(v: VersionInfo): string[] {
+  return [v.commit, v.buildDate].filter((p) => p && p !== unstamped)
+}
+
+// versionLabel is the version badge's text, e.g. "v2026.3-rc1.1". Release tags
+// carry the repo's "ict-" prefix, which only repeats the product name, so it is
+// dropped. A build stamped with neither a commit nor a date never came from a
+// release, so it says so rather than passing its placeholder version off as one.
+export function versionLabel(v: VersionInfo): string {
+  if (stamped(v).length === 0) return 'Development build'
+  return `v${v.version.replace(/^ict-/i, '').replace(/^v/i, '')}`
+}
+
+// versionReport is what the copy button copies, for pasting into a bug report:
+// "Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)".
+export function versionReport(v: VersionInfo): string {
+  const extra = stamped(v)
+  if (extra.length === 0) return `${productName} v${v.version} (development build)`
+  return `${productName} ${versionLabel(v)} (${extra.join(', ')})`
+}
+
 // HelpMenu is the "?" button at the right of the nav bar. It is a disclosure (a
 // button that shows and hides a list of links), not an ARIA menu: these are
 // links to pages, and a menu role would promise arrow-key handling they lack.
@@ -22,6 +53,29 @@ export function HelpMenu({ active }: HelpMenuProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const listId = useId()
+  // Fetched up front, so it is usually already there when the menu opens. A
+  // failed fetch (say, the page loaded while the server was restarting) is
+  // retried each time the menu opens without it, rather than leaving the
+  // version missing until a reload. Until then the footer is simply left out:
+  // a help menu is no place for an error, and the rest of the app reports an
+  // unreachable server already.
+  const [version, setVersion] = useState<VersionInfo | null>(null)
+  const fetched = useRef(false)
+
+  useEffect(() => {
+    if (version || (fetched.current && !open)) return
+    fetched.current = true
+    let cancelled = false
+    api
+      .getVersion()
+      .then((v) => {
+        if (!cancelled) setVersion(v)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [open, version])
 
   // Close on Escape or a press anywhere outside. Escape returns focus to the
   // button so a keyboard user is not left on a link that just disappeared.
@@ -66,7 +120,7 @@ export function HelpMenu({ active }: HelpMenuProps) {
         <nav
           id={listId}
           aria-label="Help"
-          className="absolute right-0 z-40 mt-2 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+          className="absolute right-0 z-40 mt-2 w-60 rounded-lg border border-slate-200 bg-white pt-1 shadow-lg"
         >
           <ul>
             {links.map((link) => (
@@ -81,8 +135,79 @@ export function HelpMenu({ active }: HelpMenuProps) {
               </li>
             ))}
           </ul>
+          {version ? <VersionFooter version={version} /> : <div className="h-1" />}
         </nav>
       )}
+    </div>
+  )
+}
+
+// VersionFooter lets a user of a hosted instance tell, and report, exactly
+// which release they are on. It follows the help-menu footer Grafana and GitLab
+// use: a shaded strip set apart from the links, a caption, and the version as a
+// badge, so it reads as information rather than as one more menu entry. The
+// commit and date show in a tooltip on hover or keyboard focus, and are read out
+// by screen readers; the button copies the full report.
+function VersionFooter({ version }: { version: VersionInfo }) {
+  const [copied, setCopied] = useState(false)
+  const details = stamped(version).join(' · ')
+  const tooltipId = useId()
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  const copy = () => {
+    navigator.clipboard.writeText(versionReport(version)).then(
+      () => setCopied(true),
+      () => {},
+    )
+  }
+
+  return (
+    <div className="mt-1 rounded-b-lg border-t border-slate-200 bg-slate-50 px-4 py-2.5">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Version</p>
+      <div className="flex items-center gap-2">
+        {/* Focusable so a keyboard user can reach the commit and date too: a
+            native title tooltip shows only on mouse hover. */}
+        <span className="group relative">
+          <span
+            tabIndex={details ? 0 : undefined}
+            aria-describedby={details ? tooltipId : undefined}
+            className="select-all rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a] outline-none focus-visible:ring-2 focus-visible:ring-[#0071c5]"
+          >
+            {versionLabel(version)}
+          </span>
+          {details && (
+            <span
+              id={tooltipId}
+              role="tooltip"
+              className="pointer-events-none absolute left-0 top-full z-50 mt-1.5 hidden whitespace-nowrap rounded bg-[#00285a] px-2 py-1 text-xs text-white shadow group-focus-within:block group-hover:block"
+            >
+              {details}
+            </span>
+          )}
+        </span>
+        {/* The Clipboard API exists only in a secure context (HTTPS or
+            localhost); elsewhere the badge is still one-click selectable. */}
+        {navigator.clipboard && (
+          <button
+            type="button"
+            onClick={copy}
+            title="Copy version details"
+            aria-label="Copy version details"
+            className="flex items-center gap-1 rounded p-1 text-xs text-slate-500 hover:bg-slate-200 hover:text-[#00285a]"
+          >
+            <CopyIcon className="h-3.5 w-3.5" />
+            {copied && <span className="text-[#00285a]">Copied</span>}
+          </button>
+        )}
+        <span aria-live="polite" className="sr-only">
+          {copied ? 'Version details copied' : ''}
+        </span>
+      </div>
     </div>
   )
 }

@@ -13,6 +13,7 @@ import type {
   CancelAccepted,
   HistoryItem,
   Artifact,
+  VersionInfo,
 } from './types'
 
 const BASE = '/api/v1'
@@ -43,6 +44,8 @@ async function jsonFetchRaw(path: string, init?: RequestInit): Promise<Response>
 
 export const api = {
   getManifest: () => jsonFetch<Manifest>('/manifest'),
+
+  getVersion: () => jsonFetch<VersionInfo>('/version'),
 
   compose: (req: ComposeRequest) =>
     jsonFetch<ComposeResponse>('/templates/compose', {
