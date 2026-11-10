@@ -1015,6 +1015,62 @@ func TestUpgradeEligibleNames_VersionPinnedDowngrade(t *testing.T) {
 	}
 }
 
+func TestUpgradeEligibleNames_NormalizedDowngradePins(t *testing.T) {
+	t.Parallel()
+	requests := []string{"qemu-system_4:9.0", "qemu-system_9.0", "qemu-system_9.0_amd64"}
+	for _, request := range requests {
+		for _, metadataName := range []string{"qemu-system", "qemu-system_9.0_amd64"} {
+			t.Run(request+"/"+metadataName, func(t *testing.T) {
+				t.Parallel()
+				baseline := installedDeb("qemu-system", "4:10.0")
+				closure := []ospackage.PackageInfo{{Name: metadataName, PkgName: "qemu-system", Version: "4:9.0",
+					Arch: "amd64", URL: "https://r/qemu-system_9.0_amd64.deb"}}
+
+				plan := buildResolutionPlan(planInput{
+					family: PackageManagerAPT, requested: []string{request}, closure: closure,
+					present: map[string]bool{"qemu-system": true}, allowUpgrade: true,
+					baselineByName: map[string]BaselinePackage{"qemu-system": baseline},
+				})
+
+				if len(plan.ToInstall) != 1 || plan.ToInstall[0].Version != "4:9.0" {
+					t.Fatalf("pin %q discarded before preflight: ToInstall = %v, want qemu-system 4:9.0",
+						request, plan.ToInstall)
+				}
+				for _, allowDowngrade := range []bool{false, true} {
+					report := EvaluatePreflight(PreflightInput{
+						Family: PackageManagerAPT, Baseline: []BaselinePackage{baseline}, Resolved: plan.ToInstall,
+						Policy: config.OverlayPolicy{AllowDowngrade: allowDowngrade},
+					})
+					if report.Downgrades != 1 || report.Blocked == allowDowngrade {
+						t.Errorf("pin %q allowDowngrade=%v: downgrades=%d blocked=%v, want 1/%v",
+							request, allowDowngrade, report.Downgrades, report.Blocked, !allowDowngrade)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUpgradeEligibleNames_UnmatchedDowngradePins(t *testing.T) {
+	t.Parallel()
+	requests := []string{"qemu-system", "qemu-system_3:9.0", "qemu-system_8.0", "qemu-system_9.0_arm64"}
+	for _, request := range requests {
+		t.Run(request, func(t *testing.T) {
+			t.Parallel()
+			closure := []ospackage.PackageInfo{{Name: "qemu-system", PkgName: "qemu-system", Version: "4:9.0",
+				Arch: "amd64", URL: "https://r/qemu-system_9.0_amd64.deb"}}
+			baseline := map[string]BaselinePackage{"qemu-system": installedDeb("qemu-system", "4:10.0")}
+
+			eligible := upgradeEligibleNames(PackageManagerAPT, []string{request}, closure,
+				map[string]bool{"qemu-system": true}, baseline)
+
+			if len(eligible) != 0 {
+				t.Errorf("unmatched or unpinned request %q authorized a downgrade: %v", request, eligible)
+			}
+		})
+	}
+}
+
 func TestUpgradeEligibleNames_VersionPinnedComparison(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

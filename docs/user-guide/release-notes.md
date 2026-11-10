@@ -40,6 +40,8 @@
   `name_version` pin differing from the baseline now enters the install set even
   when older. Preflight rejects it unless `allowDowngrade` is explicitly enabled,
   instead of silently ignoring the pin and later reporting unsatisfied dependencies.
+  Matching follows the Debian resolver for omitted epochs and artifact-style
+  requests, so these downgrade pins also reach preflight instead of being skipped.
   Pins that compare equal under Debian version rules (for example, `2.12-1` and
   `0:2.12-1`) remain no-ops, preventing an unclassified bootloader reinstall.
 - Overlay templates now support `systemConfig.proxy`, reusing the create-mode
