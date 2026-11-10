@@ -235,6 +235,28 @@ jobs:
           cp "dist/ict_${VERSION}_amd64.deb" "release-assets/${name}"
           cp dist/sbom.spdx.json release-assets/
           (cd release-assets && sha256sum "${name}" sbom.spdx.json > SHA256SUMS)
+          cat > release-notes.md <<EOF
+          ICT Debian package built from \`${TAG}\`.
+
+          | | |
+          |---|---|
+          | Package | \`ict\` |
+          | Version | \`${VERSION}\` |
+          | Architecture | \`amd64\` |
+          | Source commit | \`${GITHUB_SHA}\` |
+
+          \`\`\`bash
+          sudo apt install ./${name}
+          \`\`\`
+
+          Verified: installs, removes and purges cleanly on Ubuntu 24.04 and
+          Debian 12, including CLI version/help and installed configuration checks.
+          This does not verify OS-image composition.
+
+          The Debian package, SPDX SBOM and SHA256 checksums are attached below.
+          Scan and coverage reports are available as artifacts in the
+          [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
+          EOF
           args=(--verify-tag --latest=false)
           [[ "${VERSION}" != *'~'* ]] || args+=(--prerelease)
           encoded="$(jq -rn --arg tag "${TAG}" '$tag|@uri')"
@@ -244,11 +266,12 @@ jobs:
           case "${status}" in
             200)
               gh release upload "${TAG}" release-assets/* --clobber --repo "${GITHUB_REPOSITORY}"
+              gh release edit "${TAG}" --notes-file release-notes.md --repo "${GITHUB_REPOSITORY}"
               ;;
             404)
               gh release create "${TAG}" release-assets/* "${args[@]}" \
                 --title "ICT ${VERSION}" \
-                --notes "Debian amd64 package, SBOM and checksums. Scans and install tests passed. Reports: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                --notes-file release-notes.md \
                 --repo "${GITHUB_REPOSITORY}"
               ;;
             *)

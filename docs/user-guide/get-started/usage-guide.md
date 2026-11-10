@@ -59,9 +59,11 @@ ZIP archives; no external publishing is configured.
 Tags such as `ict-2026.3` produce version `2026.3`; `ict-2026.3-rc1` produces
 `2026.3~rc1` and a GitHub prerelease. The workflow must exist at the tagged
 commit. After all gates pass, a tag run uploads the `.deb`, SPDX SBOM and
-checksums to GitHub Releases. Release filenames replace `~` with `.`, while
+checksums to GitHub Releases. Release notes include package metadata, the
+source commit, an installation command, validation details, and a workflow
+report link. Release filenames replace `~` with `.`, while
 the version inside the package retains `~`. Reruns replace assets on the same
-release and do not mark it as latest. PR and branch-based manual runs publish
+release, refresh its notes, and do not mark it as latest. PR and branch-based manual runs publish
 Actions artifacts only. Manual dispatch requires the workflow on the default
 branch.
 
