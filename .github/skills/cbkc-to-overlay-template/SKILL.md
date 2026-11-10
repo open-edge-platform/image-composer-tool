@@ -70,5 +70,5 @@ template under `image-templates/`. Never carry credentials or lab SSH keys over.
   immutability, proxy environments and deliberate deviations. Update the distro
   README and release notes for shared templates.
 
-Reference: `image-templates/ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml`
-and its neighboring README show the NVL non-RT conversion and known limitations.
+Platform-enablement examples requiring private repositories and their known
+limitations belong in the internal template repository, not the public catalog.

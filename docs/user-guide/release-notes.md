@@ -38,20 +38,11 @@
   downgrade gate is unchanged.
 - Overlay templates now support `systemConfig.proxy`, reusing the create-mode
   writer for login, APT and systemd settings after build-time configuration
-  commands. Add site-specific settings in a local template; the shared NVL
-  template intentionally omits proxy endpoints. Build downloads still use the
-  host proxy environment.
-- Ubuntu 26.04 Nova Lake non-RT cBKC RAW overlay template with the pinned Intel
-  7.3 kernel, vendor userspace packages, signed internal repository snapshot,
-  NPU/GuC/SOF artifacts and SR-IOV toolkit. It consumes an
-  installed GRUB baseline and uses native overlay kernel replacement and disk
-  growth rather than repartitioning a running system. Lab access changes are
-  excluded. The initial validated configuration has 169 active userspace requests,
-  including seven systemd compatibility requests; 32 vendor GStreamer pins remain
-  commented out because overlay downgrades are blocked. A matching local build
-  reached the desktop under QEMU/KVM with Secure Boot disabled; NVL hardware and
-  full media parity remain unverified. See the [Ubuntu 26.04 template guide](../../image-templates/ubuntu26/README.md).
-  A workspace `cbkc-to-overlay-template` skill covers repeatable script migration.
+  commands. Add site-specific settings in a local or internal template. Build
+  downloads still use the host proxy environment.
+- **Changed**: platform-enablement templates requiring private repositories are
+  maintained in the internal template repository, not the public template catalog.
+  The workspace `cbkc-to-overlay-template` skill covers repeatable script migration.
 - **Fixed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser pushed the **Back** and **Next** buttons below the bottom of the window on common laptop screens (1440×900, for example). The repository list, package list and **Selected** panel had fixed heights; they now follow the window height, so the buttons stay in view. Each list keeps a minimum height, so on a very short window the page scrolls rather than squeezing the lists below a few rows, and on a tall window the lists grow somewhat taller than before.
 - **Changed**: Web UI wording and layout tidy-up. In a build's **Compose details**, the selection card is now titled **Basic Selection** (was *Your Selection*) and lists Use Case, SKU, Platform and OS by the same display names the dropdowns use — for example *PTL (Panther Lake)* rather than `ptl` — and the Advanced-tab changes card is titled **Advanced customization** (was *Your changes*), in the same heading style. The Edge Packs tab's base-runtime package list now reads **Included with Standard Edge Pack Profile** (and *Real-time Edge Pack Profile* once real-time is offered). The long help paragraphs under the Edge Packs domain grid and the Repositories browser are removed. The Basic tab now marks Use Case, SKU, Platform, Operating System and Kernel as required with a red asterisk, as the Advanced tab already did; **Compose Image** was already unavailable until they were all set.
 - Build an OS image from the command line in a Docker container, with nothing but Docker installed on the host. Build the ICT container image, then `scripts/build-in-container.sh TEMPLATE OUTPUT_DIR` builds a template you write on the host inside it and copies the OS image and its SBOM into `OUTPUT_DIR/<system-config-name>/`, owned by you. `--mount-point` sets where `OUTPUT_DIR` is mounted inside the container, `--context` mounts a wider directory when the template references files outside its own, and two named volumes keep downloaded packages and the build's work tree for later builds. Like the Web UI container, it runs privileged. See the [CLI Quick Start (Docker)](./get-started/cli-docker-quick-start.md).
