@@ -1098,7 +1098,7 @@ func TestHistoryListAndHydrate(t *testing.T) {
 	}
 
 	// List returns both, newest-first (live is newer).
-	items := s.ListBuilds()
+	items := s.ListBuilds("")
 	if len(items) != 2 {
 		t.Fatalf("builds = %d, want 2: %+v", len(items), items)
 	}

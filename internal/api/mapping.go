@@ -181,8 +181,8 @@ func derefStr(s *string) string {
 	return *s
 }
 
-func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
-	req := service.BuildRequest{}
+func toBuildRequest(r httpapi.BuildRequest, owner string) service.BuildRequest {
+	req := service.BuildRequest{Owner: owner}
 	if r.Compose != nil {
 		sel := toSelection(*r.Compose)
 		req.Compose = &sel

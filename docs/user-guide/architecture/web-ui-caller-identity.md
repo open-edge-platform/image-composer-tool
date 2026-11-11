@@ -18,6 +18,8 @@ identity that proxy asserts in request headers.
 |---|---|
 | `Identity`, `Provider`, `None`, `TrustedHeader`, `Middleware` | `internal/api/auth/auth.go` |
 | Tests, including a table of header combinations | `internal/api/auth/auth_test.go` |
+| Wiring into the API: `authenticateAPI`, `ownerOf`, `requireOwner`, `GET /me` | `internal/api/identity.go` |
+| Build ownership: `BuildRequest.Owner`, `build.Owner`, `ListBuilds(caller)`, `OwnsBuild` | `internal/api/service/builds.go`, `history.go` |
 
 ## The seam as a class diagram
 
@@ -142,6 +144,66 @@ the only way to reach the server: bind `serve` to loopback beside the proxy, or
 set `TrustedProxies` to the proxy's addresses and keep a network policy that
 lets nothing else in.
 
+## What the API does with the identity
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as alice
+    actor B as bob
+    participant API as API (authenticateAPI → handlers)
+    participant SVC as Service
+
+    A->>API: POST /api/v1/builds
+    API->>SVC: StartBuild({…, Owner: "alice"})
+    SVC-->>API: 202 {buildId: b1}
+    Note over SVC: b1's meta.json records owner: alice
+
+    A->>API: GET /api/v1/builds
+    API->>SVC: ListBuilds("alice")
+    SVC-->>API: [b1, …alice's builds, and builds with no owner]
+
+    B->>API: GET /api/v1/builds
+    API->>SVC: ListBuilds("bob")
+    SVC-->>API: [bob's builds, and builds with no owner]
+
+    B->>API: GET /api/v1/builds/b1/details
+    API->>SVC: OwnsBuild(b1, "bob")?
+    SVC-->>API: no
+    API-->>B: 404 Not Found  (not 403: bob must not learn that b1 exists)
+
+    A->>API: GET /api/v1/me
+    API-->>A: {owner: alice, displayName, email, groups}
+```
+
+The pieces, and where each lives:
+
+- **Only `/api/` is authenticated.** `authenticateAPI` wraps the API routes in
+  `auth.Middleware`; the SPA and its static assets are served without an
+  identity because they are the code a login proxy protects and carry no data.
+- **Every build records its owner**, in memory and in `meta.json`
+  (`"owner": "alice"`), so per-user history survives a restart.
+- **Listing is filtered**: `ListBuilds(caller)` returns the caller's builds and
+  builds that have no owner (recorded before this change, or by a server that
+  attributes nothing). With `auth.None` every build is recorded under the one
+  default user, so that user sees everything, as today.
+- **Every per-build route checks ownership** with `requireOwner`: details,
+  artifacts, the live log, the template, the log file, cancel and retry. A
+  build the caller does not own answers `404`, the same as a build that does
+  not exist, so nobody can enumerate other people's builds.
+- **A retried build belongs to the same owner** as the build it retries.
+- **`GET /api/v1/me`** reports the caller; **`GET /api/v1/server`** gains
+  `auth.mode`, so a client knows whether there is anyone to greet.
+
+| Route | With `auth.None` | With `auth.TrustedHeader` |
+|---|---|---|
+| `GET /` and assets | public | public to `serve`; the proxy guards them |
+| `GET /api/v1/builds` | all builds (one owner) | the caller's builds + ownerless ones |
+| `GET /api/v1/builds/{id}/…`, cancel, retry | as today | `404` unless the caller owns it or it has no owner |
+| `GET /api/v1/me` | the default user | the identity the proxy asserted |
+| `GET /api/v1/server` | `auth.mode: none` | `auth.mode: trusted-header` |
+| any `/api/` request without the user header | n/a | `401 UNAUTHENTICATED` |
+
 ## Writing another provider
 
 1. Implement `Provider`: `Mode()` returns a short stable name; `Identify`
@@ -150,3 +212,5 @@ lets nothing else in.
    every API request.
 1. Add a test in `internal/api/auth/auth_test.go` in the style of the existing
    table.
+1. Add its mode to `ServerInfo.auth.mode` in the OpenAPI spec so clients can
+   recognise it.

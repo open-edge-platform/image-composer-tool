@@ -25,5 +25,6 @@ func (s *Server) GetServerInfo(w http.ResponseWriter, _ *http.Request) {
 		}
 		info.Executor.Phases = &out
 	}
+	info.Auth.Mode = httpapi.ServerInfoAuthMode(s.auth.Mode())
 	writeJSON(w, http.StatusOK, info)
 }
