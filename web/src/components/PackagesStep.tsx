@@ -8,7 +8,7 @@ import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
-import { templateLockedRepos } from '../lib/edgepack'
+import { overlayIncompatiblePackages, templateLockedRepos } from '../lib/edgepack'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -21,6 +21,10 @@ interface PackagesStepProps {
   // The matched template's own package list (ComposeResponse.basePackages),
   // fetched by AdvancedPage's compose call. Empty until that call resolves.
   basePackages: string[]
+  // True for an overlay-mode template. Edge Pack packages turn on DKMS module
+  // builds, which an overlay cannot run, so the Edge Packs tab is not offered
+  // and any Edge Pack package added some other way is flagged.
+  overlay?: boolean
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -45,7 +49,7 @@ const EDGE_PACK_RETRY_LIMIT = 24
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
 // running list of added packages.
-export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
+export function PackagesStep({ os, active, basePackages, overlay = false }: PackagesStepProps) {
   const [repos, setRepos] = useState<PackageRepo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // undefined while in flight, null once it is known there is no Edge Pack to
@@ -57,9 +61,18 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   // Tab choice is local state: selections live in the store, so switching tabs
   // cannot disturb them. Edge Pack leads because a capability is the question
   // most users arrive with; provenance is the follow-up.
-  const [tab, setTab] = useState<TabID>('edge-pack')
+  const [tab, setTab] = useState<TabID>(overlay ? 'repos' : 'edge-pack')
   const manifest = useStore((s) => s.manifest)
   const enabledRepos = useStore((s) => s.enabledRepos)
+  const addedPackages = useStore((s) => s.addedPackages)
+
+  // An overlay has nothing to show on the Edge Packs tab, so open on the
+  // Repositories tab instead — including when the selection changes to an
+  // overlay while this step is open.
+  useEffect(() => {
+    if (overlay) setTab('repos')
+  }, [overlay])
+  const incompatible = overlay && edgePack ? overlayIncompatiblePackages(edgePack, addedPackages) : []
 
   useEffect(() => {
     if (!os) {
@@ -144,6 +157,14 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
       </p>
       {error && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
+      {incompatible.length > 0 && (
+        <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">
+          Edge Pack packages cannot be added to an image built on a baseline image, because
+          they need DKMS driver builds the overlay does not run. Remove{' '}
+          <span className="font-mono">{incompatible.join(', ')}</span> to compose.
+        </div>
+      )}
+
       {!error && !os && (
         <p className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-400">
           Select an operating system in the Target step to see its repositories.
@@ -182,6 +203,12 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
                 <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+              ) : overlay ? (
+                <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
+                  Edge Packs are not available for an image built on a baseline image: they need
+                  DKMS driver builds, which the overlay does not run. Use the Repositories tab
+                  to pick packages.
+                </p>
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}
