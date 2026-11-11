@@ -686,6 +686,18 @@ image-composer-tool serve [flags]
 | `--manifest STRING` | Path to a manifest YAML to read from disk instead of the copy embedded at build time. |
 | `--package-repos STRING` | Path to a package-repository catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's repository picker. |
 | `--edge-pack STRING` | Path to an Edge Pack catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's Edge Pack picker. |
+| `--executor local\|remote` | Where builds run. `local` (default) spawns `--ict-binary` on this host. `remote` sends each build to the service at `--executor-url`, which speaks the [remote build protocol](remote-build-protocol.md) and may run several at once. Env: `ICT_EXECUTOR`. |
+| `--executor-url STRING` | Base URL of the remote build service. Required with `--executor remote`. Env: `ICT_EXECUTOR_URL`. |
+| `--executor-token STRING` | Bearer token sent to the remote build service. Prefer the env var `ICT_EXECUTOR_TOKEN`; the flag is visible in `ps`. |
+| `--max-concurrent INT` | How many builds may run at once. Always 1 with `--executor local`, because local builds share this host's mounts and loop devices. A remote service reports its own capacity; set this only to lower it. Env: `ICT_MAX_CONCURRENT`. |
+| `--auth none\|trusted-header` | How callers are identified. `none` (default): one fixed user (`--default-user`) who sees all history. `trusted-header`: an authenticating reverse proxy in front of the server passes the user in request headers; builds are attributed to that user and history is per user. See [Running the Web UI behind a login proxy](serve-behind-a-login-proxy.md). Env: `ICT_AUTH`. |
+| `--default-user STRING` | The identity every request gets with `--auth none`. Default `local`. Env: `ICT_DEFAULT_USER`. |
+| `--auth-user-header STRING` | Header carrying the user's stable id with `--auth trusted-header`; required on every API request. Default `X-Forwarded-User`. |
+| `--auth-name-header STRING` | Header carrying the display name. Default `X-Forwarded-Preferred-Username`. |
+| `--auth-email-header STRING` | Header carrying the email. Default `X-Forwarded-Email`. |
+| `--auth-groups-header STRING` | Header carrying the groups, comma-separated. Default `X-Forwarded-Groups`. |
+| `--auth-trusted-proxies STRING` | Comma-separated addresses or CIDRs the identity headers are accepted from. Empty accepts them from any peer, which is only safe on a loopback bind. Env: `ICT_AUTH_TRUSTED_PROXIES`. |
+| `--auth-allow-remote-bind` | Allow `--auth trusted-header` on a non-loopback `--host` without `--auth-trusted-proxies`. Only when a network policy guarantees that nothing but the proxy can reach the port. |
 
 **Description:**
 

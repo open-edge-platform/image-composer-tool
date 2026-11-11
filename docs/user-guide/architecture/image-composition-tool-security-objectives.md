@@ -59,7 +59,57 @@ time the container starts.
 privileged container. It mounts the template's directory read-only and copies
 only the build's outputs back to the host, owned by the invoking user.
 
-## 7. Deployed-System Provisioning
+## 7. Web UI Identity and Remote Builds
+
+The web UI server performs no login of its own. With the default
+`--auth none` every request is one implicit user, which is right for a
+developer's own machine behind the loopback bind. For a shared deployment,
+`--auth trusted-header` lets an authenticating reverse proxy establish the
+identity and pass it in request headers; the server then attributes each build
+to that user, lists history per user, and answers "not found" for another
+user's build so that no one can learn that it exists. The design assumes the
+proxy is the only path to the server: a request that carries no identity header
+is refused rather than attributed to a default user, and the server refuses to
+start in this mode on a non-loopback address unless `--auth-trusted-proxies`
+names the proxy or the operator accepts the exposure explicitly with
+`--auth-allow-remote-bind`. The SPA and its static assets are served without an
+identity, because they are the code that the proxy's login protects and they
+carry no data.
+
+With `--executor remote` the server runs no build itself and needs no
+privileges at all: it sends each self-contained template to a build service
+over the [remote build protocol](remote-build-protocol.md) and relays the
+service's log, phases and published artifact URLs. The service is expected to
+be reachable only from the server (a bearer token, `ICT_EXECUTOR_TOKEN`, is
+sent when configured) and to be the only party with privileged access to the
+machines that build.
+
+```mermaid
+flowchart LR
+    U((user)) -->|session cookie| P[login proxy]
+    subgraph T1["trust boundary 1: the pod or host — only the proxy reaches serve"]
+        P -->|identity headers| S[serve --auth trusted-header<br/>--executor remote<br/>unprivileged, loopback bind]
+    end
+    subgraph T2["trust boundary 2: the build network — only serve reaches the service"]
+        S -->|bearer token| BS[build service]
+        BS --> W[workers: the only privileged party]
+    end
+    W -->|url + sha256| ART[(artifact store)]
+    ART -.->|download link in the Web UI| U
+```
+
+| Asset | Threat | Control |
+|---|---|---|
+| A user's identity | Forging `X-Forwarded-User` by reaching `serve` directly | Loopback bind beside the proxy, or `--auth-trusted-proxies`; `serve` refuses to start otherwise unless the operator opts in |
+| Another user's build | Enumerating or reading it | Every per-build route answers `404` unless the caller owns the build |
+| The build service | Submissions from anyone but `serve` | Private network plus a bearer token the service verifies |
+| The template and auxiliary files in flight | Tampering | TLS on the proxy and on the service URL in production; the service is a thin bridge that never interprets the template |
+| Published artifacts | Substitution | `sha256` reported with each artifact; verify after download |
+
+See [Running the Web UI behind a login proxy](serve-behind-a-login-proxy.md)
+for the deployment steps and a pre-flight checklist.
+
+## 8. Deployed-System Provisioning
 
 The provisioning settings applied during installation
 (`systemConfig.users[].sshAuthorizedKeys`, `proxy`, `provisioning`,

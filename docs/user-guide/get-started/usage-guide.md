@@ -426,6 +426,15 @@ a rebuild, point the matching flag at a file on disk:
 A malformed or missing override file stops the server at startup rather than
 falling back to the embedded copy.
 
+Builds can also run somewhere other than the server's host. With
+`--executor remote --executor-url URL` the server hands each build to a build
+service that speaks the [remote build protocol](../architecture/remote-build-protocol.md)
+(a farm, a batch queue, one privileged machine) and streams its progress back;
+several builds may then run at once. For a shared deployment, put an
+authenticating reverse proxy in front of the server and start it with
+`--auth trusted-header`: each user then sees only their own builds. See
+[Running the Web UI behind a login proxy](../architecture/serve-behind-a-login-proxy.md).
+
 For every flag, the sudoers rules in full, and their security implications, see
 the
 [Serve Command](../architecture/image-composer-tool-cli-specification.md#serve-command)

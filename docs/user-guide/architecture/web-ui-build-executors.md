@@ -4,6 +4,8 @@
 builds somewhere other than its own host, reviewers of such a change, and
 anyone reading `internal/api/service` who wants to know where a build backend
 plugs in.
+Operators who only want to point `serve` at a build farm should read
+[Running builds on a farm](./remote-build-protocol.md) instead.
 
 **In one sentence.** `service.Executor` is the single interface between the Web
 UI build service and whatever runs a build. Everything on either side of it —
@@ -273,6 +275,7 @@ see only additions.
   (default 1). `StartBuild` answers `409` once they are all held.
 - The local executor must keep `MaxConcurrent == 1`: local builds share this
   host's mounts and loop devices.
+  `serve --max-concurrent` refuses a higher value with `--executor local`.
 - **Shutdown leaves executor builds running.** They are not this host's child
   processes, so `CancelInFlightBuilds` returns early when an executor is set.
   A restarted server recovers them (next section).
@@ -338,6 +341,7 @@ logged; it will be recovered on the next start.
 `Recoverer` over the [remote build protocol](./remote-build-protocol.md): an
 HTTP+SSE contract that any build service, in any language, can implement. It is
 the executor behind a build farm.
+`serve --executor remote` plugs it in.
 Read it as a worked example of this seam, and read the protocol document for
 how its `Run`, `Cancel` and `Recover` map onto the five calls a build service
 exposes.
