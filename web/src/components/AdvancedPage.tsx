@@ -102,8 +102,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [edgePack, setEdgePack] = useState<{ os: string; pack: EdgePack | null } | null>(null)
   // Whether the matched template is overlay-mode, i.e. builds on an existing
   // baseline image. The compose summary carries a base image only for those.
-  // Held across recomposes for the same reason lastRequirements is, and reset
-  // with it when the selection changes.
+  // Reset with lastRequirements when the selection changes, then set by its
+  // own compose of the bare selection (see the effect below).
   const [overlay, setOverlay] = useState(false)
 
   const opts = useMemo(
@@ -268,7 +268,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
           setLastBasePackages(r.basePackages ?? [])
-          setOverlay(!!r.summary.baseImage)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
           // *Edited flags in the store). The disk block is read out of the
@@ -285,6 +284,23 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       cancelled = true
     }
   }, [active, complete, composeReq])
+
+  // Overlay mode is read from a compose of the bare selection, not from the
+  // compose above: that one carries the user's overrides, and the overrides
+  // an overlay cannot take (Edge Pack packages kept from another template on
+  // the same OS) are exactly what make it fail. Learning the mode from it would
+  // leave the safeguards off in the one case they are for.
+  useEffect(() => {
+    if (!active || !complete) return
+    let cancelled = false
+    api
+      .compose(selection)
+      .then((r) => { if (!cancelled) setOverlay(!!r.summary.baseImage) })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [active, complete, selection])
 
   // Fetched once per OS. A failed fetch stores nothing, so it is told apart
   // from an OS with no Edge Pack and retried on the next step change — entering

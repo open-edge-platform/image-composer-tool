@@ -423,10 +423,6 @@ export function usedMiB(model: DiskModel): number {
 
 // --- Emission ----------------------------------------------------------------
 
-// toDiskConfig renders the model as the plain object for a user template's
-// `disk:` block. Empty values are dropped: the resolved template spells every
-// key out (the Go structs have no `omitempty`), but echoing `typeUUID: ""` back
-// into a user template is noise the schema does not require.
 // An overlay-mode template builds on a baseline image and keeps that image's
 // own partition layout: the overlay builder detects it rather than reading
 // disk.partitions or disk.partitionTableType, and only grows the last
@@ -436,6 +432,10 @@ export interface DiskConfigOptions {
   overlay?: boolean
 }
 
+// toDiskConfig renders the model as the plain object for a user template's
+// `disk:` block. Empty values are dropped: the resolved template spells every
+// key out (the Go structs have no `omitempty`), but echoing `typeUUID: ""` back
+// into a user template is noise the schema does not require.
 export function toDiskConfig(model: DiskModel, opts: DiskConfigOptions = {}): Record<string, unknown> {
   if (opts.overlay) model = withoutLayout(model)
   const offsets = computeOffsets(model)
