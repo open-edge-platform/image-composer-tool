@@ -411,6 +411,10 @@ oep_installer:
   token_file: "/etc/image-composer-tool/oep-installer-token"
 ```
 
+Without a server token, each user can instead enter their own token in the
+**Users and credentials** dialog when they compose such a template; it is used
+for that build only.
+
 The server binds to localhost by default and has no authentication of its own.
 Because the API can start privileged builds, exposing it with
 `--host 0.0.0.0` should be a deliberate decision, not a convenience.

@@ -1722,8 +1722,29 @@ components:
             be given a password or SSH key.
           items:
             $ref: "#/components/schemas/CredentialRequirement"
+        oepInstaller:
+          $ref: "#/components/schemas/OEPInstallerInfo"
         summary:
           $ref: "#/components/schemas/ComposeSummary"
+
+    OEPInstallerInfo:
+      type: object
+      required: [uses, serverToken]
+      description: |
+        Whether the resolved template downloads OEP Installer files
+        (`systemConfig.oepInstaller`), and so may need a GitHub token for a
+        private repository, and whether the server already gives builds one.
+        A client can offer an `oepInstallerToken` field on the build when
+        `uses` is true.
+      properties:
+        uses:
+          type: boolean
+        serverToken:
+          type: boolean
+          description: |
+            True when a build would get a token without one entered for it,
+            from the server's `oep_installer.token_file` or, without `--sudo`,
+            its environment.
 
     ValidationResponse:
       type: object
@@ -1761,11 +1782,8 @@ components:
       type: object
       description: |
         Start a build. Carries exactly one of `compose` or `yaml` — never a diff.
-
-        Exactly one of the two properties must be present. That constraint is
-        machine-checkable via minProperties/maxProperties rather than left as
-        prose: a body with neither field, or with both, is invalid and the server
-        rejects it with 400 `NO_MATCH`.
+        A body with neither, or with both, is rejected with 400 `NO_MATCH`.
+        `oepInstallerToken` may accompany either.
 
         A build whose template leaves a privileged account with neither a
         password nor an SSH key is rejected with 400 `CREDENTIALS_REQUIRED`
@@ -1774,21 +1792,30 @@ components:
         accounts the compose response reports as unsatisfied makes the same
         build succeed.
 
-        `oneOf` would express this more idiomatically, but oapi-codegen turns a
-        `oneOf` with sibling properties into a `json.RawMessage` union type with
-        custom (un)marshalling and two empty `interface{}` branch aliases —
-        generated noise around the hot request path, and oapi-codegen does not
-        enforce the constraint at runtime either way. The property-count form
-        validates identically for a two-property schema and keeps the generated
-        struct a plain pair of optional fields.
-      minProperties: 1
-      maxProperties: 1
+        `oneOf` would express the compose/yaml choice more idiomatically, but
+        oapi-codegen turns a `oneOf` with sibling properties into a
+        `json.RawMessage` union type with custom (un)marshalling — generated noise
+        around the hot request path — and enforces neither form at runtime, so
+        the server checks it itself.
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"
         yaml:
           type: string
           description: Complete template YAML (Advanced tab). Self-contained, not a delta.
+        oepInstallerToken:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 1024
+          description: |
+            A GitHub token for this build only, used to download the template's
+            `systemConfig.oepInstaller` files from a private repository. The
+            server passes it to the build as a private file it deletes when the
+            build process exits, and ignores it for a template without
+            `oepInstaller`. It is never stored or logged, so retrying the build
+            does not reuse it. Kept out of `compose` because the compose
+            selection is stored with the build for retry.
 
     BuildAccepted:
       type: object

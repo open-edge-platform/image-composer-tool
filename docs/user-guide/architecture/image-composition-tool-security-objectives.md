@@ -110,6 +110,14 @@ image or corrupt generated configuration:
   `docker inspect`; ICT warns when other users can read the file. The token is
   sent only to GitHub hosts, is never logged, and is not written to the image
   or to the template carried on the ISO.
+* A token entered in the Web UI for one build travels in the build request,
+  beside the selection rather than in it, so it is not stored with the build
+  for **Retry**. The server keeps it in memory, writes it to a mode `0600` file
+  under the work directory's `.oep-installer-tokens/` for that build's
+  `--oep-installer-token-file`, and deletes the file when the build process
+  exits; files left by a server that stopped mid-build are deleted at the next
+  start. The token is not in the build's command line, log, history record, or
+  archived template, and the browser sends it once and does not keep it.
 * The template carried on the ISO references provisioning inputs through
   their on-ISO copies; build-host paths of scripts, cloud-init files, and SSH
   key files are not included.

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"strings"
 	"time"
 
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
@@ -189,6 +190,9 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 	}
 	if r.Yaml != nil {
 		req.YAML = *r.Yaml
+	}
+	if r.OepInstallerToken != nil {
+		req.OEPInstallerToken = strings.TrimSpace(*r.OepInstallerToken)
 	}
 	return req
 }
@@ -473,6 +477,9 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 			})
 		}
 		out.Credentials = &creds
+	}
+	if r.OEPInstaller.Uses {
+		out.OepInstaller = &httpapi.OEPInstallerInfo{Uses: true, ServerToken: r.OEPInstaller.ServerToken}
 	}
 	return out
 }
