@@ -152,6 +152,17 @@ combinations:
     imageType: iso
     template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
 
+  # BKC (Best Known Configuration) image for Nova Lake on Ubuntu 26.04. An
+  # overlay build: it layers the BKC stack onto an installed Ubuntu 26.04 RAW
+  # image. The template here is a starter; the full BKC template replaces it
+  # under the same name where it is deployed.
+  - vertical: platform-enablement-bkc
+    sku: bkc
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml
+
 verticals:
   - id: retail
     displayName: Retail Edge
@@ -161,6 +172,8 @@ verticals:
     displayName: Fed Aero
   - id: platform-enablement
     displayName: Platform Enablement
+  - id: platform-enablement-bkc
+    displayName: Platform Enablement - BKC
 
 skus:
   - id: desktop-virtualization
@@ -177,6 +190,8 @@ skus:
     displayName: EdgePack Minimal Server
   - id: edgepack-standard-only
     displayName: EdgePack Standard Base Only (Demo)
+  - id: bkc
+    displayName: BKC
 
 platforms:
   - id: arl
@@ -185,6 +200,8 @@ platforms:
     displayName: WCL (Wildcat Lake)
   - id: ptl
     displayName: PTL (Panther Lake)
+  - id: nvl
+    displayName: NVL (Nova Lake)
   # EXAMPLE (commented): label for the not-yet-enabled platform above. A missing
   # label makes the dropdown fall back to the raw id ("nvl"), so add one here.
   # - id: nvl
