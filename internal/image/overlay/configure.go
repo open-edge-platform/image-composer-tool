@@ -29,10 +29,11 @@ var configExecFn = shell.ExecCmdWithStream
 //
 // The kernel pseudo-filesystems are mounted for the duration (so maintainer scripts
 // and tools like dpkg behave as they would on a running system) and torn down on
-// every return path, including a panic. DNS is seeded best-effort into the chroot's
-// ephemeral /run tmpfs so a direct-internet `wget`/`curl` can resolve names; a
-// failure there is logged and does not fail the build (proxied builds do not rely
+// every return path, including a panic. DNS is seeded into the chroot's ephemeral
+// /run tmpfs so a direct-internet `wget`/`curl` can resolve names. Seeding is
+// best-effort: if it fails, it is logged and skipped (proxied builds do not rely
 // on it, and a command that genuinely needs the network fails loudly on its own).
+// Removing the seed afterwards is not: if that cleanup fails, the build fails.
 //
 // It is a no-op (no mounts, no chroot entry) when the template declares no
 // configurations, so builds that do not use the feature pay nothing for it.
