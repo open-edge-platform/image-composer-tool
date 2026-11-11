@@ -259,6 +259,14 @@ The SSE handler prefers an executor-reported phase over the log-derived one;
 when an executor never calls `SetPhase`, the local phase detection runs over the
 log lines exactly as before.
 
+The HTTP API exposes all of it, so a client can show a build the way its
+backend describes it: `GET /api/v1/server` reports the executor's name,
+capacity and ordered phases; `BuildDetails` gains `executor`, `meta` and
+`phase`; `HistoryItem` gains `meta`; `Artifact` gains `url` and `sha256` (and
+the `log`/`other` types); `GET /api/v1/builds` reports `maxConcurrent`. A local
+server reports executor `local`, one slot and no phases, so existing clients
+see only additions.
+
 ## Capacity and shutdown
 
 - The single build slot is a **bounded set** of `Config.MaxConcurrent` slots
