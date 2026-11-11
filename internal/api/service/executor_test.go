@@ -25,6 +25,7 @@ type fakeExecutor struct {
 	err       error
 	cancelled []string
 	templates map[string]string
+	recovered map[string]Recovered
 }
 
 func newFakeExecutor() *fakeExecutor {
@@ -32,6 +33,7 @@ func newFakeExecutor() *fakeExecutor {
 		release:   make(chan struct{}),
 		status:    StatusSuccess,
 		templates: map[string]string{},
+		recovered: map[string]Recovered{},
 	}
 }
 
@@ -69,6 +71,19 @@ func (f *fakeExecutor) Cancel(_ context.Context, h ExecutorHandle) error {
 	defer f.mu.Unlock()
 	f.cancelled = append(f.cancelled, h.ID())
 	return nil
+}
+
+func (f *fakeExecutor) Recover(_ context.Context, id string) (Recovered, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.recovered[id]
+	if !ok {
+		return Recovered{}, errors.New("unknown build")
+	}
+	if r.Status == StatusRunning {
+		return Recovered{}, ErrStillRunning
+	}
+	return r, nil
 }
 
 func newExecutorService(t *testing.T, ex Executor, maxConcurrent int) *Service {
@@ -282,4 +297,53 @@ func TestExecutorBuildsSurviveShutdownCancel(t *testing.T) {
 	}
 	close(ex.release)
 	waitDone(t, s, acc.BuildID)
+}
+
+// After a restart, a build the previous server recorded as running is brought
+// to its real outcome by the executor, or followed to completion if it is still
+// running there.
+func TestRecoverExecutorBuilds(t *testing.T) {
+	ex := newFakeExecutor()
+	s := newExecutorService(t, ex, 2)
+	write := func(id string) {
+		root := filepath.Join(s.buildsRoot(), id)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		m := buildMeta{ID: id, Status: string(StatusRunning), Template: "robotics.yml",
+			CreatedAt: time.Now().Add(-time.Hour), Meta: map[string]string{"worker": "worker-01"}}
+		data, _ := json.Marshal(m)
+		if err := os.WriteFile(metaPath(root), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "template.yml"), []byte(minimalTemplate), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("finished-elsewhere")
+	write("still-running")
+	write("lost")
+	ex.recovered["finished-elsewhere"] = Recovered{Status: StatusSuccess, Log: []string{"a", "b"},
+		Artifacts: []Artifact{{Name: "x.iso", Type: "image", URL: "https://store/x.iso"}}}
+	ex.recovered["still-running"] = Recovered{Status: StatusRunning}
+
+	s.recoverExecutorBuilds(context.Background(), time.Second)
+
+	if res := waitDone(t, s, "finished-elsewhere"); res.Status != StatusSuccess || len(res.Artifacts) != 1 {
+		t.Errorf("finished-elsewhere = %+v", res)
+	}
+	if res := waitDone(t, s, "lost"); res.Status != StatusFailed || !strings.Contains(res.ErrMsg, "unknown build") {
+		t.Errorf("lost = %+v", res)
+	}
+	h, ok := s.Build("still-running")
+	if !ok {
+		t.Fatal("still-running not tracked")
+	}
+	if st := h.Result().Status; st != StatusRunning {
+		t.Fatalf("still-running status = %s before release", st)
+	}
+	close(ex.release)
+	if res := waitDone(t, s, "still-running"); res.Status != StatusSuccess {
+		t.Errorf("still-running = %+v", res)
+	}
 }

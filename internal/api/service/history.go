@@ -217,6 +217,56 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 	return b
 }
 
+// buildForRecovery reconstructs a build whose record says it was still running
+// when the previous server stopped, as a live build: done stays open and the
+// status is kept, so recoverExecutorBuilds can either follow it to completion
+// or record its real outcome. Only meaningful with a Recoverer executor; the
+// local path has nothing to recover from (see reconcileInterrupted).
+func buildForRecovery(rootDir string, m buildMeta) *build {
+	return &build{
+		ID:           m.ID,
+		RootDir:      rootDir,
+		WorkDir:      filepath.Join(rootDir, "work"),
+		CacheDir:     filepath.Join(rootDir, "cache"),
+		Template:     m.Template,
+		TemplatePath: templatePathFromMeta(rootDir, m),
+		Command:      m.Command,
+		Summary:      m.Summary,
+		CreatedAt:    m.CreatedAt,
+		done:         make(chan struct{}),
+		status:       BuildStatus(m.Status),
+		meta:         m.Meta,
+		retry:        m.Retry,
+	}
+}
+
+// listRunningOnDisk returns, oldest first, every persisted build whose record is
+// still non-terminal and that has no live record in the tracker.
+func (s *Service) listRunningOnDisk() []*build {
+	var out []*build
+	entries, _ := os.ReadDir(s.buildsRoot())
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, live := s.tracker.get(e.Name()); live {
+			continue
+		}
+		rootDir := filepath.Join(s.buildsRoot(), e.Name())
+		data, err := os.ReadFile(metaPath(rootDir))
+		if err != nil {
+			continue
+		}
+		var m buildMeta
+		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" || isTerminal(BuildStatus(m.Status)) {
+			continue
+		}
+		out = append(out, buildForRecovery(rootDir, m))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
 // templatePathFromMeta resolves the template path for a reconstructed build.
 //
 // meta.json records it directly for anything written since that field existed.
