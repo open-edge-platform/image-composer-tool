@@ -114,6 +114,7 @@ Multiple Package Repo Support <./architecture/image-composer-tool-multi-repo-sup
 Image Template Reference <./architecture/image-composer-tool-templates.md>
 Web UI Build Executors <./architecture/web-ui-build-executors.md>
 Remote Build Protocol <./architecture/remote-build-protocol.md>
+Web UI Caller Identity <./architecture/web-ui-caller-identity.md>
 
 :::
 
