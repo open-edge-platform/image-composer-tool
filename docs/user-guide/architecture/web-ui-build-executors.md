@@ -382,6 +382,31 @@ sequenceDiagram
 A local server reports `maxConcurrent: 1`, so the Web UI behaves exactly as
 before: one build at a time.
 
+### Phases, worker and artifacts: what the Build view shows
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant BV as BuildView.tsx
+    participant HS as HistorySidebar.tsx
+    participant SI as lib/serverInfo.ts (fetched once, shared)
+    participant API as API
+
+    BV->>SI: useServerInfo()
+    SI->>API: GET /api/v1/server (first caller only)
+    API-->>SI: {version, executor: {name, maxConcurrent, phases[]}, auth}
+    SI-->>BV: ServerInfo (or null → local defaults)
+    BV->>BV: stepper = executor.phases, or the local three steps when empty
+
+    BV->>API: GET /api/v1/builds/{id}/logs (EventSource)
+    API-->>BV: phase {phase, label} → highlight that step
+    API-->>BV: complete {status, artifacts[]}
+    BV->>BV: artifact.url set → opens where it was published · Location column shown
+    HS->>API: GET /api/v1/builds
+    API-->>HS: {builds[], maxConcurrent} — each row may carry meta.worker
+    HS->>HS: show the worker beside the build
+```
+
 ## Testing an executor
 
 `internal/api/service/executor_test.go` has a `fakeExecutor` that scripts log

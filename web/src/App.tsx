@@ -6,6 +6,7 @@ import { BasicPage } from './components/BasicPage'
 import { AdvancedPage } from './components/AdvancedPage'
 import { BuildImagePage } from './components/BuildImagePage'
 import { HelpMenu } from './components/HelpMenu'
+import { UserBadge } from './components/UserBadge'
 import { UserGuidePage } from './components/UserGuidePage'
 import { guideTopicFromHash } from './guide/topics'
 
@@ -212,10 +213,11 @@ export default function App() {
             </button>
           ))}
         </div>
-        {/* Build status indicator — right side of nav */}
-        <div className="ml-auto flex items-center gap-2">
+        {/* Build status indicator, help and the signed-in user — right side of nav */}
+        <div className="ml-auto flex items-center gap-4">
           <BuildIndicator status={buildStatus} onClick={() => setView('builds')} />
           <HelpMenu active={view === 'guide'} />
+          <UserBadge />
         </div>
       </nav>
 

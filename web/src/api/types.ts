@@ -362,7 +362,7 @@ export interface Artifact {
   name: string
   type: 'image' | 'sbom' | 'log' | 'other' | 'unknown' | (string & {})
   // On-disk path of a locally built artifact. Empty when it lives at `url`.
-  path: string
+  path?: string
   // Where a remote build service published the artifact; linked to directly.
   url?: string
   sha256?: string

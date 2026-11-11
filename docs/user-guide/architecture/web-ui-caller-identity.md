@@ -206,6 +206,29 @@ The pieces, and where each lives:
 | `GET /api/v1/server` | `auth.mode: none` | `auth.mode: trusted-header` |
 | any `/api/` request without the user header | n/a | `401 UNAUTHENTICATED` |
 
+## The Web UI
+
+The Web UI greets the signed-in user only when there is one to greet:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UB as UserBadge.tsx
+    participant SI as lib/serverInfo.ts (fetched once, shared)
+    participant API as API
+
+    UB->>SI: useServerInfo()
+    SI->>API: GET /api/v1/server (first caller only)
+    API-->>SI: {…, auth: {mode}}
+    alt mode is trusted-header
+        UB->>API: GET /api/v1/me
+        API-->>UB: {owner, displayName, email, groups}
+        UB->>UB: show the display name in the header
+    else mode is none, or the server predates /server
+        UB->>UB: render nothing
+    end
+```
+
 ## Writing another provider
 
 1. Implement `Provider`: `Mode()` returns a short stable name; `Identify`
