@@ -24,6 +24,7 @@ func resetBuildFlags() {
 	inspectImage = false
 	cveCheck = false
 	baselineImage = ""
+	oepTokenFile = ""
 }
 
 // createTestTemplate creates a minimal valid template file for testing
@@ -113,6 +114,7 @@ func TestCreateBuildCommand(t *testing.T) {
 			{name: "no-inspect", shorthand: "", shouldExist: false},
 			{name: "cve-check", shorthand: "", shouldExist: true},
 			{name: "baseline-image", shorthand: "", shouldExist: true},
+			{name: "oep-installer-token-file", shorthand: "", shouldExist: true},
 		}
 
 		for _, expected := range expectedFlags {

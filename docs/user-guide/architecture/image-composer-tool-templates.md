@@ -1371,10 +1371,12 @@ read access, for example the one the GitHub CLI stores
 (`gh config get -h github.com oauth_token`, or `gh auth token` on newer
 versions). ICT uses the first of these that is set:
 
-1. `ICT_OEP_INSTALLER_TOKEN`: the token itself, for a build run from a shell.
-2. `ICT_OEP_INSTALLER_TOKEN_FILE`: the path of a file holding the token, such
+1. `build --oep-installer-token-file FILE`: a file holding the token for that
+   build only.
+2. `ICT_OEP_INSTALLER_TOKEN`: the token itself, for a build run from a shell.
+3. `ICT_OEP_INSTALLER_TOKEN_FILE`: the path of a file holding the token, such
    as a mounted Docker or Kubernetes secret.
-3. `oep_installer.token_file` in the global configuration file: the path of a
+4. `oep_installer.token_file` in the global configuration file: the path of a
    file holding the token. Use this for the Web UI with `serve --sudo`, which
    does not pass the variables above through `sudo`.
 

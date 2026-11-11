@@ -104,8 +104,8 @@ image or corrupt generated configuration:
   so a pre-hashed password can never become the literal login password.
 * The GitHub token for OEP Installer files in private repositories is read at
   build time from `ICT_OEP_INSTALLER_TOKEN`, or from a file that
-  `ICT_OEP_INSTALLER_TOKEN_FILE` or the global configuration's
-  `oep_installer.token_file` names. The file form keeps the token off command
+  `build --oep-installer-token-file`, `ICT_OEP_INSTALLER_TOKEN_FILE` or the
+  global configuration's `oep_installer.token_file` names. The file form keeps the token off command
   lines (the Web UI's `serve --sudo` passes only a path) and out of
   `docker inspect`; ICT warns when other users can read the file. The token is
   sent only to GitHub hosts, is never logged, and is not written to the image
