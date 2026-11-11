@@ -82,7 +82,7 @@ func (s *Server) handleRetryBuild(w http.ResponseWriter, r *http.Request) {
 
 // ListBuilds handles GET /builds.
 func (s *Server) ListBuilds(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds(), time.Now().UTC()))
+	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds(), s.svc.MaxConcurrent(), time.Now().UTC()))
 }
 
 // GetBuildDetails handles GET /builds/{id}/details.

@@ -40,8 +40,29 @@ tags:
     description: Package repositories and package search for the Advanced tab
   - name: Builds
     description: Trigger and monitor image builds
+  - name: Server
+    description: The running server
 
 paths:
+  # ─────────────────────────────────────────────────────────────────────
+  # Server
+  # ─────────────────────────────────────────────────────────────────────
+  /server:
+    get:
+      tags: [Server]
+      operationId: getServerInfo
+      summary: Describe the running server
+      description: |
+        Version stamps and the build backend in use. The UI reads it once at
+        start-up: the executor's phases shape the build stepper and
+        `maxConcurrent` gates the Compose button.
+      responses:
+        "200":
+          description: Server description
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerInfo"
   # ─────────────────────────────────────────────────────────────────────
   # Manifest
   # ─────────────────────────────────────────────────────────────────────
@@ -1851,22 +1872,36 @@ components:
 
     Artifact:
       type: object
-      required: [name, type, path]
+      required: [name, type]
       properties:
         name:
           type: string
           example: ubuntu24-robotics-amr.raw.gz
         type:
           type: string
-          enum: [image, sbom, unknown]
+          enum: [image, sbom, log, other, unknown]
           description: >
             Kind of output. `image` is a disk or optical image, `sbom` a software
-            bill of materials. `unknown` is reported for an output the server
-            cannot classify — clients must render it as-is rather than defaulting
-            it to `image`, so a format added to ICT later is visibly unclassified
-            instead of silently mislabelled.
+            bill of materials, `log` a build log and `other` anything else a
+            remote build service published. `unknown` is reported for an output
+            the server cannot classify — clients must render it as-is rather than
+            defaulting it to `image`, so a format added to ICT later is visibly
+            unclassified instead of silently mislabelled.
         path:
           type: string
+          description: >
+            On-disk path of a locally built artifact, served by
+            `GET /builds/{id}/artifacts/{name}`. Empty when the artifact lives at
+            `url` instead.
+        url:
+          type: string
+          format: uri
+          description: >
+            Where a remote build service published the artifact. Clients link
+            to it directly; the server has no copy.
+        sha256:
+          type: string
+          description: Digest of the published file, when the build service reports one.
         size:
           type: string
           description: Human-readable size, e.g. "1.13 GB"
@@ -1936,6 +1971,29 @@ components:
             $ref: "#/components/schemas/Artifact"
         residual:
           $ref: "#/components/schemas/ResidualIssue"
+        executor:
+          type: string
+          description: The build backend that ran this build; `local` for this host's ICT binary.
+          example: local
+        meta:
+          type: object
+          additionalProperties:
+            type: string
+          description: Backend detail about where the build ran, e.g. `worker`, `url`. Absent locally.
+        phase:
+          $ref: "#/components/schemas/Phase"
+
+    Phase:
+      type: object
+      description: One step of a build as its executor reports it.
+      required: [id, label]
+      properties:
+        id:
+          type: string
+          example: dispatching
+        label:
+          type: string
+          example: Preparing infra
 
     HistoryItem:
       type: object
@@ -1953,10 +2011,15 @@ components:
           format: date-time
         summary:
           $ref: "#/components/schemas/ComposeSummary"
+        meta:
+          type: object
+          additionalProperties:
+            type: string
+          description: Backend detail about where the build ran, e.g. `worker`. Absent locally.
 
     BuildList:
       type: object
-      required: [builds, serverTime]
+      required: [builds, serverTime, maxConcurrent]
       properties:
         builds:
           type: array
@@ -1966,7 +2029,41 @@ components:
           type: string
           format: date-time
           description: Server time at response generation, used to correct client clock skew.
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          description: >
+            How many builds the server runs at once. The UI offers Compose while
+            fewer than this are active; a start beyond it is refused with 409.
 
+    ServerInfo:
+      type: object
+      required: [version, commit, buildDate, executor]
+      properties:
+        version:
+          type: string
+          example: "2026.3.0"
+        commit:
+          type: string
+          example: a1b2c3d
+        buildDate:
+          type: string
+          example: "2026-11-02"
+        executor:
+          type: object
+          required: [name, maxConcurrent]
+          properties:
+            name:
+              type: string
+              description: "`local`, or the remote build service's name."
+            maxConcurrent:
+              type: integer
+              minimum: 1
+            phases:
+              type: array
+              description: The ordered phases this executor reports; absent when phases are derived from the log.
+              items:
+                $ref: "#/components/schemas/Phase"
     # ── Common ──
 
     Error:

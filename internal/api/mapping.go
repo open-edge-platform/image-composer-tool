@@ -513,10 +513,12 @@ func fromBuildAccepted(a *service.BuildAccepted) httpapi.BuildAccepted {
 
 func fromArtifact(a service.Artifact) httpapi.Artifact {
 	return httpapi.Artifact{
-		Name: a.Name,
-		Type: httpapi.ArtifactType(a.Type),
-		Path: a.Path,
-		Size: optStr(a.Size),
+		Name:   a.Name,
+		Type:   httpapi.ArtifactType(a.Type),
+		Path:   optStr(a.Path),
+		Url:    optStr(a.URL),
+		Sha256: optStr(a.SHA256),
+		Size:   optStr(a.Size),
 	}
 }
 
@@ -568,7 +570,7 @@ func fromArtifactList(l *service.ArtifactList) httpapi.ArtifactList {
 }
 
 func fromBuildDetails(d *service.BuildDetails) httpapi.BuildDetails {
-	return httpapi.BuildDetails{
+	out := httpapi.BuildDetails{
 		BuildId:      d.BuildID,
 		Status:       httpapi.BuildStatus(d.Status),
 		Command:      d.Command,
@@ -582,13 +584,28 @@ func fromBuildDetails(d *service.BuildDetails) httpapi.BuildDetails {
 		ErrMsg:       optStr(d.ErrMsg),
 		Artifacts:    optArtifacts(d.Artifacts),
 		Residual:     fromResidual(d.Residual),
+		Executor:     optStr(d.Executor),
+		Meta:         optMeta(d.Meta),
 	}
+	if d.Phase != nil {
+		out.Phase = &httpapi.Phase{Id: d.Phase.ID, Label: d.Phase.Label}
+	}
+	return out
 }
 
-func fromHistory(items []service.HistoryItem, serverTime time.Time) httpapi.BuildList {
+// optMeta returns nil for an empty map (omitempty in the contract).
+func optMeta(m map[string]string) *map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return &m
+}
+
+func fromHistory(items []service.HistoryItem, maxConcurrent int, serverTime time.Time) httpapi.BuildList {
 	out := httpapi.BuildList{
-		Builds:     make([]httpapi.HistoryItem, len(items)),
-		ServerTime: serverTime.UTC().Truncate(time.Millisecond),
+		Builds:        make([]httpapi.HistoryItem, len(items)),
+		MaxConcurrent: maxConcurrent,
+		ServerTime:    serverTime.UTC().Truncate(time.Millisecond),
 	}
 	for i, it := range items {
 		out.Builds[i] = httpapi.HistoryItem{
@@ -597,6 +614,7 @@ func fromHistory(items []service.HistoryItem, serverTime time.Time) httpapi.Buil
 			Template:  it.Template,
 			CreatedAt: it.CreatedAt,
 			Summary:   fromSummary(it.Summary),
+			Meta:      optMeta(it.Meta),
 		}
 	}
 	return out
