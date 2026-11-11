@@ -72,6 +72,19 @@ classDiagram
         +Phases() List~Phase~
     }
 
+    class Recoverer {
+        <<interface>>
+        +Recover(ctx Context, buildID string) Recovered, error
+    }
+
+    class Recovered {
+        +Status BuildStatus
+        +ErrMsg string
+        +Log List~string~
+        +Artifacts List~Artifact~
+        +Meta map of string to string
+    }
+
     class ExecutorHandle {
         <<interface>>
         +ID() string
@@ -124,6 +137,8 @@ classDiagram
     ExecutorHandle ..> Phase : SetPhase
     YourExecutor ..|> Executor : required
     YourExecutor ..|> PhaseReporter : optional
+    YourExecutor ..|> Recoverer : optional
+    Recoverer ..> Recovered : returns
 ```
 
 How to read it:
@@ -138,6 +153,10 @@ How to read it:
 - **`PhaseReporter`** is optional. If your executor knows the ordered phases its
   builds go through, the Web UI draws its stepper from them instead of from the
   fixed local phases.
+- **`Recoverer`** is optional. If your executor can read a build back by id, a
+  restarted server picks up builds the previous instance left running instead
+  of recording them as interrupted (see [Recovering builds after a
+  restart](#recovering-builds-after-a-restart)).
 - **`Config.Executor`** is how `serve` plugs an executor in; **`MaxConcurrent`**
   is how many builds the service lets run at once (default 1).
 
@@ -246,6 +265,7 @@ log lines exactly as before.
   host's mounts and loop devices.
 - **Shutdown leaves executor builds running.** They are not this host's child
   processes, so `CancelInFlightBuilds` returns early when an executor is set.
+  A restarted server recovers them (next section).
 
 ## Rules for an `Executor` implementation
 
@@ -259,6 +279,48 @@ log lines exactly as before.
   HTTP your executor does (see the coding style guide).
 - Implement `PhaseReporter` when your backend has well-defined phases; keep the
   `ID`s stable, the `Label`s human.
+- Implement `Recoverer` when your backend can be asked about a build by the id
+  the service gave it; it is what makes a `serve` restart harmless.
+
+## Recovering builds after a restart
+
+A build record whose status is still `running` when `serve` starts means the
+previous instance went away mid-build. For the local executor that build is
+lost (its child process died with the server). For an executor that implements
+`Recoverer`, the service asks what became of each such build and brings the
+record to its real state, once, before the server starts serving.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SRV as Server.Start
+    participant SVC as Service
+    participant EX as Executor (Recoverer)
+
+    SRV->>SVC: RecoverExecutorBuilds(ctx)
+    SVC->>SVC: listRunningOnDisk() — meta.json with status running
+    loop for each such build
+        SVC->>EX: Recover(ctx, buildID) with a 30 s timeout
+        alt finished meanwhile
+            EX-->>SVC: Recovered {status, log, artifacts, meta}
+            SVC->>SVC: replay log, meta · b.finish(status, artifacts, errMsg)
+        else still running (ErrStillRunning)
+            EX-->>SVC: ErrStillRunning
+            SVC->>SVC: tryAcquireBuildSlot(id) · tracker.add(b)
+            SVC->>SVC: go runBuild(b) → Run follows the build again
+            Note over SVC,EX: Run replays the whole log so late SSE subscribers see it all
+        else unknown (error)
+            EX-->>SVC: error
+            SVC->>SVC: b.finish(failed, "server restarted · build outcome unknown")
+        end
+    end
+    SRV->>SRV: start listening
+```
+
+A build that is still running is **re-adopted**: it takes a slot and `Run` is
+called for it exactly as for a new build, so cancel, SSE and history work for
+it unchanged. If no slot is free, the build is left as it is and a warning is
+logged; it will be recovered on the next start.
 
 ## Testing an executor
 

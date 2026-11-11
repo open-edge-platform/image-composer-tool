@@ -125,6 +125,10 @@ func (s *Server) Start(ctx context.Context) error {
 	log.Infof("ICT web UI API listening on %s (builds: %s, up to %d at once)",
 		s.addr, s.svc.ExecutorName(), s.svc.MaxConcurrent())
 
+	// Builds a previous instance left running on a remote executor are picked
+	// up before the first request, so history never shows them as interrupted.
+	s.svc.RecoverExecutorBuilds(ctx)
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
 

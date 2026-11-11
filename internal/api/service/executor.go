@@ -5,11 +5,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -62,6 +64,26 @@ type Phase struct {
 // log-derived local phases in phases.go.
 type PhaseReporter interface {
 	Phases() []Phase
+}
+
+// Recovered is a past build read back from where it ran.
+type Recovered struct {
+	Status    BuildStatus
+	ErrMsg    string
+	Log       []string
+	Artifacts []Artifact
+	// Meta is the executor detail GET /builds/{id}/details shows (worker, URL).
+	Meta map[string]string
+}
+
+// ErrStillRunning is returned by Recover for a build that has not finished yet.
+var ErrStillRunning = errors.New("build is still running")
+
+// Recoverer is an Executor that can read a build back from where it ran, by the
+// id this service gave it. A restarted server uses it for a build whose record
+// says it was running when the previous instance went away.
+type Recoverer interface {
+	Recover(ctx context.Context, buildID string) (Recovered, error)
 }
 
 // ExecutorHandle is an executor's view of a single build. It deliberately exposes
@@ -253,4 +275,57 @@ func (s *Service) executorCancel(id string) context.CancelFunc {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	return s.executorCancels[id]
+}
+
+// RecoverExecutorBuilds brings every build the previous instance recorded as
+// still running to its real state, when the configured Executor can report it
+// (see Recoverer). It is a no-op for the local path and for executors that
+// cannot recover. Called once, before the server starts serving.
+func (s *Service) RecoverExecutorBuilds(ctx context.Context) {
+	s.recoverExecutorBuilds(ctx, 30*time.Second)
+}
+
+// recoverExecutorBuilds asks a Recoverer executor about every build this server
+// recorded as still running before it last stopped, and brings each record to
+// its real terminal state. Builds the executor still reports as running are
+// re-attached: their log is followed to completion as if Run had never been
+// interrupted. Called once at startup; a no-op for other executors.
+func (s *Service) recoverExecutorBuilds(ctx context.Context, timeout time.Duration) {
+	rec, ok := s.cfg.Executor.(Recoverer)
+	if !ok {
+		return
+	}
+	log := logger.Logger()
+	for _, b := range s.listRunningOnDisk() {
+		rctx, cancel := context.WithTimeout(ctx, timeout)
+		got, err := rec.Recover(rctx, b.ID)
+		cancel()
+		switch {
+		case errors.Is(err, ErrStillRunning):
+			// Re-adopt it: Run follows the executor's stream from the start, so
+			// the log buffer is complete for late SSE subscribers.
+			if ok, _, _ := s.tryAcquireBuildSlot(b.ID); !ok {
+				log.Warnf("build %s: still running on %s but no slot is free to follow it", b.ID, s.cfg.Executor.Name())
+				continue
+			}
+			s.endBuildSetup()
+			s.tracker.add(b)
+			log.Infof("build %s: re-attached to %s", b.ID, s.cfg.Executor.Name())
+			go s.runBuild(b, "", nil)
+		case err != nil:
+			log.Warnf("build %s: recovering from %s: %v", b.ID, s.cfg.Executor.Name(), err)
+			b.appendLog("ERROR server restarted while this build was running and it could not be recovered: " +
+				err.Error())
+			b.finish(StatusFailed, nil, "server restarted; build outcome unknown: "+err.Error())
+		default:
+			for _, line := range got.Log {
+				b.appendLog(line)
+			}
+			for k, v := range got.Meta {
+				b.putMeta(k, v)
+			}
+			b.finish(got.Status, got.Artifacts, got.ErrMsg)
+			log.Infof("build %s: recovered from %s as %s", b.ID, s.cfg.Executor.Name(), got.Status)
+		}
+	}
 }
