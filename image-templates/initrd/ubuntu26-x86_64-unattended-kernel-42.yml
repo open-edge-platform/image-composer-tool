@@ -1,0 +1,85 @@
+image:
+  name: minimal-os-image-ubuntu
+  version: "26.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: img # Image type, valid value: [raw, iso].
+
+systemConfig:
+  name: Initrd_Unattended_Kernel_42
+  description: Unattended installer initrd for Ubuntu 26.04 with the live kernel pinned to 7.0.0-42
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: grub # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  packages:
+    - ca-certificates
+    - vim
+    - sudo
+    - net-tools
+    - openssh-client
+    - openssh-server
+    - procps
+    - less
+    - dbus
+    - polkitd
+    - pkexec
+    - dosfstools
+    - efibootmgr
+    - eject
+    - curl
+    - mmdebstrap
+    - wget
+    - cryptsetup
+    - systemd-resolved
+    - cloud-guest-utils
+    - xterm
+    - initramfs-tools
+    - systemd-boot
+    - grub-pc-bin
+    - grub-efi-amd64-bin
+    - gdisk
+
+
+  additionalFiles:
+    - local: ../../config/osv/ubuntu/ubuntu26/imageconfigs/additionalfiles/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: ../../config/osv/ubuntu/ubuntu26/imageconfigs/additionalfiles/ubuntu-resolute.list
+      final: /etc/apt/sources.list.d/ubuntu-resolute.list
+    - local: ../../config/osv/ubuntu/ubuntu26/imageconfigs/additionalfiles/getty@.service
+      final: /usr/lib/systemd/system/getty@.service
+    - local: ../../config/osv/ubuntu/ubuntu26/imageconfigs/additionalfiles/serial-getty@.service
+      final: /usr/lib/systemd/system/serial-getty@.service
+    - local: ../../config/general/isolinux/unattendedinstaller
+      final: /root/unattendedinstaller
+    - local: ../../build/live-installer
+      final: /usr/bin/live-installer
+
+  users:
+    - name: root
+      startupScript: "/root/unattendedinstaller"
+
+  configurations:
+    - cmd: "systemctl mask apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer"
+
+  kernel:
+    name: kernel
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    # Pinned (instead of the linux-image-generic metapackage, which follows the
+    # newest kernel at build time) so the live installer boots the same kernel
+    # as the installed system. DKMS package postinst scripts build for
+    # `uname -r` inside the install chroot; when the live kernel is newer than
+    # the target's pinned 7.0.0-42, they look for headers that were never installed
+    # and fail, leaving the intel-edge-* packages unconfigured.
+    # Keep this in step with the kernel pin in the ISO templates that use this file.
+    # The last three are what the metapackage depends on besides the kernel itself.
+    packages:
+      - linux-image-7.0.0-42-generic
+      - linux-modules-7.0.0-42-generic
+      - linux-firmware
+      - intel-microcode
+      - amd64-microcode
