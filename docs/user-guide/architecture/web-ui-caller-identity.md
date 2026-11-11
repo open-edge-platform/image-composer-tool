@@ -143,6 +143,8 @@ headers and be anyone. `TrustedHeader` is therefore only safe when the proxy is
 the only way to reach the server: bind `serve` to loopback beside the proxy, or
 set `TrustedProxies` to the proxy's addresses and keep a network policy that
 lets nothing else in.
+`serve` checks this at start; see [Running the Web UI behind a login
+proxy](./serve-behind-a-login-proxy.md).
 
 ## What the API does with the identity
 
@@ -214,3 +216,5 @@ The pieces, and where each lives:
    table.
 1. Add its mode to `ServerInfo.auth.mode` in the OpenAPI spec so clients can
    recognise it.
+1. Add it to `serve --auth` in `cmd/image-composer-tool/serve.go`
+   (`identityProvider`), with flags or environment variables for its settings.

@@ -2,6 +2,9 @@
 
 **Who this is for.**
 
+- an **operator** who wants `image-composer-tool serve` to send builds to a
+  build farm instead of running them on its own host — start at [Running
+  `serve` against a build service](#running-serve-against-a-build-service);
 - a **developer** writing the **build service** that `serve` talks to, or
   reviewing ICT's client for it — read on from [The protocol in one
   table](#the-protocol-in-one-table).
@@ -30,6 +33,35 @@ flowchart LR
 The build service is a **thin bridge**: it starts `image-composer-tool build`
 somewhere, relays what happens, and publishes the outputs. Template semantics
 stay with ICT on the worker; the service never interprets the template.
+
+## Running `serve` against a build service
+
+```bash
+image-composer-tool serve \
+  --executor remote \
+  --executor-url http://ict-farm-bridge:9010 \
+  --templates-dir image-templates
+```
+
+| Flag (env) | Default | Meaning |
+|---|---|---|
+| `--executor` (`ICT_EXECUTOR`) | `local` | `local` runs builds on this host; `remote` sends them to a build service |
+| `--executor-url` (`ICT_EXECUTOR_URL`) | | The build service's base URL; required with `remote` |
+| `--executor-token` (`ICT_EXECUTOR_TOKEN`) | | Sent as `Authorization: Bearer` on every request when set |
+| `--max-concurrent` (`ICT_MAX_CONCURRENT`) | the service's | Builds the UI may start at once; may only lower the service's number. Must stay 1 with `local` |
+
+What happens at start, and why it matters to you:
+
+- `serve` calls `GET /v1/info` and **refuses** a service that speaks another
+  protocol version, so a mismatched deployment fails loudly at start rather
+  than quietly mid-build.
+- The service's `maxConcurrent` becomes the number of builds the Web UI lets
+  users start at once, and its `phases` become the Web UI's stepper.
+- Builds a previous `serve` left running are **picked up again** (see
+  [Recovering a build after `serve` restarts](#recovering-a-build-after-serve-restarts)),
+  so a restart of the UI server never loses a farm build.
+- Shutdown leaves farm builds running; they are not this host's processes.
+- `serve` itself needs no privileges in this mode: it runs no build.
 
 ## The protocol in one table
 
@@ -346,6 +378,16 @@ Two bounded waits protect the user from a service that stops answering:
 
 Every call but the event stream goes through `network.NewSecureHTTPClient()`,
 whose header timeout bounds it; the stream is read for as long as it flows.
+
+## Recovering a build after `serve` restarts
+
+If `serve` stops while farm builds are running, their records on disk still say
+`running`. At the next start, before it serves requests, `serve` asks the build
+service about each of them: a build that finished is recorded with its real
+outcome and its log replayed; a build that is still running is re-attached and
+followed to completion, exactly as if `serve` had never stopped; a build the
+service no longer knows is recorded as failed with an explanation. The sequence
+is [a finished build read back](#sequence-a-finished-build-read-back) above.
 
 ## Writing a build service
 
