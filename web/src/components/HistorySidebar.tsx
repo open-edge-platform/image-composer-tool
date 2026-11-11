@@ -93,6 +93,8 @@ export function HistorySidebar({
                   )}
                   <div className="mt-0.5 pl-3 text-[11px] text-slate-400">
                     {relativeTime(it.createdAt, nowMs + clockOffsetMs)}
+                    {/* Where a remote build service ran it, when it says. */}
+                    {it.meta?.worker && <span> · {it.meta.worker}</span>}
                   </div>
                 </button>
               </li>
