@@ -360,9 +360,43 @@ export interface BuildAccepted {
 // artifactTypeLabel below falls back to showing the raw string.
 export interface Artifact {
   name: string
-  type: 'image' | 'sbom' | 'unknown' | (string & {})
+  type: 'image' | 'sbom' | 'log' | 'other' | 'unknown' | (string & {})
+  // On-disk path of a locally built artifact. Empty when it lives at `url`.
   path: string
+  // Where a remote build service published the artifact; linked to directly.
+  url?: string
+  sha256?: string
   size?: string
+}
+
+// One step of a build as its executor reports it (GET /server lists them).
+export interface Phase {
+  id: string
+  label: string
+}
+
+// What GET /server reports: version stamps, the build backend and how callers
+// are identified. Read once at start-up.
+export interface ServerInfo {
+  version: string
+  commit: string
+  buildDate: string
+  executor: {
+    name: string
+    maxConcurrent: number
+    // Present when the executor reports its own phases; absent locally, where
+    // the stepper keeps its built-in, log-derived phases.
+    phases?: Phase[]
+  }
+  auth: { mode: 'none' | 'trusted-header' | (string & {}) }
+}
+
+// What GET /me reports about the signed-in user.
+export interface Me {
+  owner: string
+  displayName: string
+  email?: string
+  groups?: string[]
 }
 
 // artifactTypeLabel renders an artifact's type for display. Unrecognised and
@@ -424,6 +458,12 @@ export interface BuildDetails {
   artifacts?: Artifact[]
   // Teardown-residue warning, when cleanup left something behind.
   residual?: ResidualIssue
+  // The build backend that ran this build ("local", or a remote service's name).
+  executor?: string
+  // Backend detail about where the build ran, e.g. worker, url. Absent locally.
+  meta?: Record<string, string>
+  // The phase the executor last reported, when it reports any.
+  phase?: Phase
 }
 
 // One row in the compose history list.
@@ -433,6 +473,8 @@ export interface HistoryItem {
   template: string
   createdAt: string
   summary?: ComposeSummary
+  // Backend detail about where the build ran, e.g. worker. Absent locally.
+  meta?: Record<string, string>
 }
 
 // Response to POST /builds/{id}/cancel. residual is present when the cancel was

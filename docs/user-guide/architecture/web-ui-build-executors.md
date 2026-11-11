@@ -273,6 +273,8 @@ see only additions.
 
 - The single build slot is a **bounded set** of `Config.MaxConcurrent` slots
   (default 1). `StartBuild` answers `409` once they are all held.
+  The Web UI gates its Compose button on the same number
+  (`BuildList.maxConcurrent`), so a user normally never sees that `409`.
 - The local executor must keep `MaxConcurrent == 1`: local builds share this
   host's mounts and loop devices.
   `serve --max-concurrent` refuses a higher value with `--executor local`.
@@ -345,6 +347,40 @@ the executor behind a build farm.
 Read it as a worked example of this seam, and read the protocol document for
 how its `Run`, `Cancel` and `Recover` map onto the five calls a build service
 exposes.
+
+## What the Web UI does with this
+
+The Web UI never knows which executor is configured. It reads what the server
+reports and adapts.
+
+### Capacity: when Compose is available
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant APP as App.tsx
+    participant API as API
+
+    APP->>API: GET /api/v1/builds
+    API-->>APP: {builds[], maxConcurrent}
+    APP->>APP: capacity = maxConcurrent · activeCount = builds still running
+    Note over APP: atCapacity = activeCount >= capacity → Compose disabled
+
+    U->>APP: Compose
+    APP->>API: POST /api/v1/builds
+    API-->>APP: 202 {buildId}
+    APP->>APP: activeCount++ immediately (no 409 from a quick second click)
+
+    loop while a build runs
+        APP->>API: GET /api/v1/builds (polling)
+        API-->>APP: {builds[], maxConcurrent}
+        APP->>APP: recount active builds → Compose re-enabled when a slot frees
+    end
+```
+
+A local server reports `maxConcurrent: 1`, so the Web UI behaves exactly as
+before: one build at a time.
 
 ## Testing an executor
 
