@@ -8,9 +8,17 @@
 # generated afresh on every install, so a lab DHCP server holding a static
 # reservation for the board's MAC treats each re-flash as a new client and
 # hands out a pool address.
+#
+# The renderer is set on the device itself, not only in
+# 01-network-manager-all.yaml: netplan rejects `networkmanager:` settings on a
+# device whose renderer is not NetworkManager, which fails cloud-init's
+# init-local stage if that file is missing. A top-level `renderer:` here would
+# not help, because cloud-init writes keys alphabetically (ethernets first) and
+# netplan applies a global renderer only to devices defined after it.
 version: 2
 ethernets:
   wired:
+    renderer: NetworkManager
     match:
       name: "en*"
     dhcp4: true
