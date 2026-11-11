@@ -112,6 +112,7 @@ Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
 Caching <./architecture/image-composer-tool-caching.md>
 Multiple Package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
 Image Template Reference <./architecture/image-composer-tool-templates.md>
+Web UI Build Executors <./architecture/web-ui-build-executors.md>
 
 :::
 

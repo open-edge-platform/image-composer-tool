@@ -42,26 +42,32 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	lastInstall := ""
 	emit := func() {
 		lines := b.SnapshotLogs()
-		if len(lines) == sent {
-			// No new lines since the last tick. Phase and install progress are
-			// pure functions of the buffered lines, so they cannot have changed
-			// either — skip the full-slice rescan (and the flush) entirely. This
-			// keeps an idle 300ms tick O(1) instead of O(total log size), which
-			// matters for long composes and multiple concurrent SSE clients.
+		phase, reported := b.ReportedPhase()
+		if len(lines) == sent && (!reported || phase.ID == lastPhase) {
+			// No new lines and no executor-reported phase change since the last
+			// tick. Log-derived phase and install progress are pure functions of
+			// the buffered lines, so they cannot have changed either — skip the
+			// full-slice rescan (and the flush) entirely. This keeps an idle 300ms
+			// tick O(1) instead of O(total log size), which matters for long
+			// composes and multiple concurrent SSE clients.
 			return
 		}
 		for ; sent < len(lines); sent++ {
 			sendEvent(w, "log", map[string]string{"message": lines[sent]})
 		}
-		// Derive and emit the current build phase (+ install progress) when it
-		// changes, so the UI stepper can advance. Best-effort, log-derived.
-		phase := service.DetectPhase(lines)
+		// Emit the current build phase (+ install progress) when it changes, so
+		// the UI stepper can advance. Executor-reported when there is one,
+		// otherwise best-effort and log-derived.
+		if !reported {
+			phase = service.Phase{ID: service.DetectPhase(lines)}
+		}
 		done, total := service.InstallProgress(lines)
 		install := fmt.Sprintf("%d/%d", done, total)
-		if phase != lastPhase || install != lastInstall {
-			lastPhase, lastInstall = phase, install
+		if phase.ID != lastPhase || install != lastInstall {
+			lastPhase, lastInstall = phase.ID, install
 			sendEvent(w, "phase", map[string]any{
-				"phase":        phase,
+				"phase":        phase.ID,
+				"label":        phase.Label,
 				"installDone":  done,
 				"installTotal": total,
 			})

@@ -23,6 +23,7 @@
 package service
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,15 @@ type Config struct {
 	// PkgIndex tunes the package-index cache SearchPackages reads through. A
 	// zero value is usable; see pkgindex.Config for its defaults.
 	PkgIndex pkgindex.Config
+	// Executor, when set, runs builds somewhere other than this machine's ICT
+	// binary — a build farm reached over the remote build protocol, say. Nil
+	// keeps the local behaviour: runBuild spawns ICTBinary. See executor.go.
+	Executor Executor
+	// MaxConcurrent bounds builds in flight at once. Zero means 1, the local
+	// behaviour: local builds share this machine's mounts and loop devices, so
+	// they must not overlap. An Executor that dispatches to separate workers
+	// can safely raise this.
+	MaxConcurrent int
 }
 
 // Service holds the API's dependencies and shared state.
@@ -71,24 +81,28 @@ type Service struct {
 	// searches. Built once at construction; safe for concurrent use.
 	pkgindexCache *pkgindex.Cache
 
-	// buildMu serializes compose starts so at most one build runs at a time.
-	// activeBuildID names the in-flight build (empty when idle). The slot is held
-	// from the moment StartBuild spawns the child until runBuild observes the ICT
-	// process fully exit (post-teardown), so a second compose can't start while
-	// mounts/loop devices from the previous one may still be tearing down.
-	buildMu       sync.Mutex
-	activeBuildID string
+	// buildMu serializes compose starts so at most MaxConcurrent builds run at
+	// once. activeBuilds holds the in-flight build ids. A slot is held from the
+	// moment StartBuild spawns the child until runBuild observes the build fully
+	// finish (post-teardown), so a second compose can't start while mounts/loop
+	// devices from the previous one may still be tearing down.
+	buildMu      sync.Mutex
+	activeBuilds map[string]struct{}
+	// executorCancels holds the cancel func for each in-flight executor build.
+	// The local path has no entry here; it signals a process group instead.
+	executorCancels map[string]context.CancelFunc
 	// admissionClosed is set once by CloseBuildAdmission at shutdown. It is read
 	// under buildMu by tryAcquireBuildSlot, which is the single gate every start
-	// passes through, so a start either claims the slot before admission closes
+	// passes through, so a start either claims a slot before admission closes
 	// or is rejected — never both.
 	admissionClosed bool
-	// setupDone is closed when the start currently holding the slot finishes its
-	// setup (i.e. has registered the build with the tracker, or bailed out). It
-	// is nil whenever no start is mid-setup. Shutdown waits on it so the
-	// cancel/wait snapshots cannot miss a build that was still being set up when
+	// setupPending counts starts that hold a slot but have not yet registered
+	// their build with the tracker (or bailed out); setupDone is closed when it
+	// drops to zero and is nil while no start is mid-setup. Shutdown waits on it
+	// so the cancel/wait snapshots cannot miss a build still being set up when
 	// the signal arrived.
-	setupDone chan struct{}
+	setupPending int
+	setupDone    chan struct{}
 
 	// signalGroup delivers SIGTERM to a build's process group. It defaults to
 	// signalCancel; tests override it to exercise the cancel paths without shelling
@@ -96,14 +110,14 @@ type Service struct {
 	signalGroup func(pgid int) error
 }
 
-// tryAcquireBuildSlot claims the single-build slot for id. It returns false (and
-// the id currently holding the slot) if a build is already in flight, so the
-// caller can reject the concurrent start. closed reports that the server is
-// shutting down and is no longer admitting builds, which the caller must
-// distinguish from a busy slot: one is a transient conflict worth retrying, the
-// other means this process will never run the build.
+// tryAcquireBuildSlot claims a build slot for id. It returns false (and the id
+// of one build currently holding a slot) when MaxConcurrent builds are already
+// in flight, so the caller can reject the concurrent start. closed reports that
+// the server is shutting down and is no longer admitting builds, which the
+// caller must distinguish from busy slots: one is a transient conflict worth
+// retrying, the other means this process will never run the build.
 //
-// A successful claim also opens the setup window (see endBuildSetup): the build
+// A successful claim also opens a setup window (see endBuildSetup): the build
 // exists only as a slot holder until StartBuild registers it with the tracker,
 // and shutdown must not snapshot the tracker while a start is in that gap.
 func (s *Service) tryAcquireBuildSlot(id string) (ok bool, activeID string, closed bool) {
@@ -112,22 +126,34 @@ func (s *Service) tryAcquireBuildSlot(id string) (ok bool, activeID string, clos
 	if s.admissionClosed {
 		return false, "", true
 	}
-	if s.activeBuildID != "" {
-		return false, s.activeBuildID, false
+	if s.activeBuilds == nil {
+		s.activeBuilds = make(map[string]struct{})
 	}
-	s.activeBuildID = id
-	s.setupDone = make(chan struct{})
+	if len(s.activeBuilds) >= s.MaxConcurrent() {
+		for active := range s.activeBuilds {
+			return false, active, false
+		}
+	}
+	s.activeBuilds[id] = struct{}{}
+	if s.setupPending == 0 {
+		s.setupDone = make(chan struct{})
+	}
+	s.setupPending++
 	return true, "", false
 }
 
-// endBuildSetup closes the setup window opened by tryAcquireBuildSlot. StartBuild
+// endBuildSetup closes one setup window opened by tryAcquireBuildSlot. StartBuild
 // defers it, so it runs once the build is tracked and its goroutine is launched —
 // or once an error path has released the slot without spawning anything. Either
 // way, after this returns the start is no longer invisible to a tracker snapshot.
 func (s *Service) endBuildSetup() {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
-	if s.setupDone != nil {
+	if s.setupPending == 0 {
+		return
+	}
+	s.setupPending--
+	if s.setupPending == 0 && s.setupDone != nil {
 		close(s.setupDone)
 		s.setupDone = nil
 	}
@@ -152,8 +178,8 @@ func (s *Service) CloseBuildAdmission() {
 	s.admissionClosed = true
 }
 
-// waitForBuildSetup blocks until the start currently mid-setup (if any) has
-// finished registering its build, or until timeout elapses.
+// waitForBuildSetup blocks until every start currently mid-setup has finished
+// registering its build, or until timeout elapses.
 //
 // This closes the remaining gap between claiming the build slot and appearing in
 // the tracker. A start that won the race against CloseBuildAdmission is already
@@ -175,14 +201,41 @@ func (s *Service) waitForBuildSetup(timeout time.Duration) {
 	}
 }
 
-// releaseBuildSlot frees the single-build slot. It is a no-op if id is not the
-// current holder (defensive: only the owning build should release it).
+// releaseBuildSlot frees id's slot. It is a no-op if id holds none (defensive:
+// only the owning build should release it).
 func (s *Service) releaseBuildSlot(id string) {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
-	if s.activeBuildID == id {
-		s.activeBuildID = ""
+	delete(s.activeBuilds, id)
+}
+
+// MaxConcurrent reports how many builds may run at once, after defaults. The UI
+// needs it to decide whether to offer another compose; without it the only way
+// to discover the limit is to hit a 409.
+func (s *Service) MaxConcurrent() int {
+	if s.cfg.MaxConcurrent < 1 {
+		return 1
 	}
+	return s.cfg.MaxConcurrent
+}
+
+// ExecutorName names the configured Executor, or "local" when builds run this
+// machine's ICT binary.
+func (s *Service) ExecutorName() string {
+	if s.cfg.Executor == nil {
+		return "local"
+	}
+	return s.cfg.Executor.Name()
+}
+
+// ExecutorPhases lists the build phases the configured Executor reports, in
+// order, so the UI can draw its stepper from them. Nil for the local path, whose
+// phases are the fixed, log-derived ones in phases.go.
+func (s *Service) ExecutorPhases() []Phase {
+	if p, ok := s.cfg.Executor.(PhaseReporter); ok {
+		return p.Phases()
+	}
+	return nil
 }
 
 // New constructs a Service, loading and validating the manifest and the package

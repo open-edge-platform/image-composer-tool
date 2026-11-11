@@ -5,6 +5,7 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -54,6 +55,12 @@ type Artifact struct {
 	Type string `json:"type"` // "image" | "sbom" | "unknown" (see internal/utils/artifact)
 	Path string `json:"path"`
 	Size string `json:"size,omitempty"` // human-readable, e.g. "1.13 GB" (from ICT output)
+	// URL is where to fetch an artifact that an Executor published elsewhere
+	// (an artifact store, say) instead of leaving it on this host. Empty for a
+	// local file, which the download endpoint serves from Path.
+	URL string `json:"url,omitempty"`
+	// SHA256 is the published file's digest when the Executor reports one.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // build is the in-memory record of a single build (MVP-1: no persistence).
@@ -115,6 +122,68 @@ type build struct {
 	// failed (cancellation-failure) or ICT reported leftover mounts/loop devices
 	// during its own cleanup (cleanup-failure). Surfaced to the API/UI.
 	residual *ResidualIssue
+	// meta carries backend-specific detail from an Executor (worker name, job
+	// URL) through to GET /builds/{id}/details. Nil on the local path.
+	meta map[string]string
+	// phase is the build phase the Executor last reported, when it reports any.
+	// Nil means the phase is derived from the log lines (see phases.go), which
+	// is all the local path has.
+	phase *Phase
+}
+
+// putMeta records one backend-specific detail about this build.
+func (b *build) putMeta(key, value string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.meta == nil {
+		b.meta = make(map[string]string)
+	}
+	b.meta[key] = value
+}
+
+// snapshotMeta returns a copy of the executor metadata, nil when there is none.
+func (b *build) snapshotMeta() map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.meta) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(b.meta))
+	for k, v := range b.meta {
+		out[k] = v
+	}
+	return out
+}
+
+// setPhase records the phase an Executor reports.
+func (b *build) setPhase(p Phase) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.phase = &p
+}
+
+// ReportedPhase returns the phase the Executor last reported, if any.
+func (b *build) ReportedPhase() (Phase, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.phase == nil {
+		return Phase{}, false
+	}
+	return *b.phase, true
+}
+
+// Meta returns the executor-specific detail recorded for this build.
+func (b *build) Meta() map[string]string { return b.snapshotMeta() }
+
+// markRunning moves a build out of not-started. The local path does this inside
+// setPgidCheckCancel when it records the child's process group; an executor has
+// no process group here, so it needs its own way in.
+func (b *build) markRunning() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.status == StatusNotStarted {
+		b.status = StatusRunning
+	}
 }
 
 // ResidualKind classifies why teardown may have left residue.
@@ -540,6 +609,22 @@ func (s *Service) CancelBuild(id string) (*CancelAccepted, error) {
 	}
 	b.appendLog("• cancel requested — signalling build to stop and clean up")
 
+	// An executor build has no local process group: ask the executor to stop it
+	// and cancel the context its Run is blocked on. Run returns soon after and
+	// runViaExecutor records the terminal state, so no watchdog is needed here.
+	if s.cfg.Executor != nil {
+		if err := s.cfg.Executor.Cancel(context.Background(), executorHandle{b: b}); err != nil {
+			detail := fmt.Sprintf("failed to cancel %s build: %v", s.cfg.Executor.Name(), err)
+			b.setResidual(residualCancellation, detail)
+			b.appendLog("ERROR " + detail)
+			logger.Logger().Warnf("build %s: %s", id, detail)
+		}
+		if cancel := s.executorCancel(b.ID); cancel != nil {
+			cancel()
+		}
+		return &CancelAccepted{BuildID: id, Status: StatusCancelling}, nil
+	}
+
 	// pgid 0 means cmd.Start hasn't recorded the group yet; runBuild delivers the
 	// signal itself as soon as it can (setPgidCheckCancel reports it as pending),
 	// so don't treat that as a delivery failure here.
@@ -708,6 +793,12 @@ func (s *Service) WaitForInFlightBuilds(timeout time.Duration) {
 // it does not keep is memory, so each cancelled build is persisted below.
 func (s *Service) CancelInFlightBuilds(setupGrace time.Duration) {
 	log := logger.Logger()
+	// An executor build is not a child of this process and holds none of this
+	// host's mounts, so a restart leaves it running: the next instance can pick
+	// it up again where the executor supports that (see Recoverer).
+	if s.cfg.Executor != nil {
+		return
+	}
 	s.waitForBuildSetup(setupGrace)
 	for _, b := range s.tracker.all() {
 		transitioned, pgid := b.beginCancel()
@@ -1186,6 +1277,14 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 	// until this returns.
 	defer s.releaseBuildSlot(b.ID)
 	defer b.closeDone()
+
+	// A configured Executor replaces the local ICT spawn entirely. Everything
+	// after this point — the log buffer, SSE, artifacts, history — is shared,
+	// which is the point of the seam.
+	if s.cfg.Executor != nil {
+		s.runViaExecutor(b)
+		return
+	}
 
 	// ICT builds require root (chroot, mounts), so the build runs under sudo, and
 	// from the repo root since ICT resolves config/osv/... relative to cwd. The

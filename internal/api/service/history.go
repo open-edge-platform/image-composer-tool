@@ -38,6 +38,8 @@ type buildMeta struct {
 	// Residual outlives the process on purpose: leftover mounts and loop devices
 	// survive a server restart, so the remediation hint must too.
 	Residual *ResidualIssue `json:"residual,omitempty"`
+	// Meta is the Executor's detail about where the build ran (worker, URL).
+	Meta map[string]string `json:"meta,omitempty"`
 	// Retry is what this build was resolved from (credentials/new-user passwords
 	// already hashed), persisted so RetryBuild still works on a build reconstructed
 	// after a restart instead of reporting it as predating retry support. Written
@@ -135,6 +137,7 @@ func (b *build) writeMetaLocked() error {
 		ErrMsg:       res.ErrMsg,
 		LogFile:      res.LogFile,
 		Residual:     res.Residual,
+		Meta:         b.snapshotMeta(),
 		Retry:        b.retry,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -208,6 +211,7 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 		artifacts:    m.Artifacts,
 		errMsg:       errMsg,
 		residual:     m.Residual,
+		meta:         m.Meta,
 		retry:        m.Retry,
 	}
 	return b
@@ -295,6 +299,8 @@ type HistoryItem struct {
 	Template  string
 	CreatedAt time.Time
 	Summary   *ComposeSummary
+	// Meta is the Executor's detail about where the build ran, nil locally.
+	Meta map[string]string
 }
 
 // ListBuilds returns the compose history newest-first. It merges live in-memory
@@ -329,6 +335,7 @@ func (s *Service) ListBuilds() []HistoryItem {
 			Template:  m.Template,
 			CreatedAt: m.CreatedAt,
 			Summary:   m.Summary,
+			Meta:      m.Meta,
 		}
 	}
 
@@ -341,6 +348,7 @@ func (s *Service) ListBuilds() []HistoryItem {
 			Template:  b.Template,
 			CreatedAt: b.CreatedAt,
 			Summary:   b.Summary,
+			Meta:      b.snapshotMeta(),
 		}
 	}
 
@@ -371,6 +379,12 @@ type BuildDetails struct {
 	ErrMsg       string
 	Artifacts    []Artifact     // partial outputs on fail/cancel (with on-disk path)
 	Residual     *ResidualIssue // teardown-residue warning for manual remediation
+	// Executor names the backend that ran the build ("local" or the Executor's
+	// name); Meta is that backend's detail (worker, URL). Phase is the phase the
+	// Executor last reported, nil when phases are log-derived.
+	Executor string
+	Meta     map[string]string
+	Phase    *Phase
 }
 
 // BuildDetails returns the command and paths for a build so the UI can show
@@ -382,6 +396,15 @@ func (s *Service) BuildDetails(id string) (*BuildDetails, error) {
 		return nil, newError(http.StatusNotFound, "NOT_FOUND", "build not found")
 	}
 	res := b.snapshot()
+	meta := b.snapshotMeta()
+	executor := "local"
+	if name := meta["executor"]; name != "" {
+		executor = name
+	}
+	var phase *Phase
+	if p, ok := b.ReportedPhase(); ok {
+		phase = &p
+	}
 	return &BuildDetails{
 		BuildID:      id,
 		Status:       res.Status,
@@ -396,6 +419,9 @@ func (s *Service) BuildDetails(id string) (*BuildDetails, error) {
 		ErrMsg:       res.ErrMsg,
 		Artifacts:    res.Artifacts,
 		Residual:     res.Residual,
+		Executor:     executor,
+		Meta:         meta,
+		Phase:        phase,
 	}, nil
 }
 

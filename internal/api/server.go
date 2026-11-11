@@ -64,6 +64,12 @@ type Config struct {
 	// EdgePackPath is an optional Edge Pack catalog file; empty uses the
 	// embedded copy.
 	EdgePackPath string
+	// Executor, when set, runs builds somewhere other than this host (see
+	// service.Executor). Nil runs ICTBinary locally.
+	Executor service.Executor
+	// MaxConcurrent bounds builds in flight; zero means one. Only an Executor
+	// that dispatches to separate machines should raise it.
+	MaxConcurrent int
 }
 
 // Server holds the HTTP server's dependencies: its listen address and the
@@ -86,6 +92,8 @@ func New(cfg Config) (*Server, error) {
 
 		PackageReposPath: cfg.PackageReposPath,
 		EdgePackPath:     cfg.EdgePackPath,
+		Executor:         cfg.Executor,
+		MaxConcurrent:    cfg.MaxConcurrent,
 	})
 	if err != nil {
 		return nil, err
@@ -114,7 +122,8 @@ func (s *Server) Start(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	service.LogCancelSupport(s.svc.UseSudo())
-	log.Infof("ICT web UI API listening on %s", s.addr)
+	log.Infof("ICT web UI API listening on %s (builds: %s, up to %d at once)",
+		s.addr, s.svc.ExecutorName(), s.svc.MaxConcurrent())
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
