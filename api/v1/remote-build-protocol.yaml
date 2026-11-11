@@ -1,0 +1,276 @@
+openapi: 3.0.3
+info:
+  title: ICT Remote Build Protocol
+  version: "1"
+  description: |
+    The contract between `image-composer-tool serve --executor remote` and a
+    build service that runs ICT builds elsewhere: a worker farm, a batch system,
+    a single privileged host. ICT is the client; the build service is the
+    server. ICT ships the client (`internal/api/executor/remote`) and a
+    conformance test suite; anyone may ship a server. The protocol is
+    explained, with sequence diagrams, in
+    `docs/user-guide/architecture/remote-build-protocol.md`.
+
+    Design rules:
+    - The server is a thin bridge. It receives a self-contained template, runs
+      `image-composer-tool build` on it somewhere, and reports what happened.
+      It never interprets the template.
+    - Every resource is keyed by the build id ICT chose, so a restarted ICT can
+      ask about a build it started earlier. `POST /v1/builds` is idempotent on
+      that id.
+    - Progress is one SSE stream per build with a monotonic line index, so a
+      client resumes after a disconnect without duplicating or losing lines.
+    - Additive changes only within `protocol: "1"`. A client refuses a server
+      whose `GET /v1/info` reports another protocol.
+
+    Authentication between ICT and the server is a bearer token when the
+    deployment needs one (ICT sends `Authorization: Bearer` from
+    `ICT_EXECUTOR_TOKEN`). The server is expected not to be reachable from
+    outside the deployment.
+servers:
+  - url: "{executorUrl}"
+    variables:
+      executorUrl:
+        default: http://localhost:9010
+paths:
+  /v1/info:
+    get:
+      operationId: getInfo
+      summary: Describe the build service
+      responses:
+        "200":
+          description: Capabilities ICT sizes itself from.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Info"
+  /v1/builds:
+    post:
+      operationId: submitBuild
+      summary: Submit a build
+      description: |
+        Starts, or queues, a build of `template`. Idempotent on `id`: a second
+        submission with the same id returns the existing build and submits
+        nothing. `files` carries the auxiliary files the template references
+        relative to its templates directory (`additionalfiles/…`, `initrd/…`),
+        so the worker does not need to already have them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildSubmission"
+      responses:
+        "202":
+          description: Accepted (new or existing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildState"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          description: The service has no free capacity. ICT does not retry; it reports the build as failed to start.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/builds/{id}:
+    get:
+      operationId: getBuild
+      summary: Current state of a build
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: The build's current state, with artifacts once it has finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildState"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/builds/{id}/events:
+    get:
+      operationId: streamBuild
+      summary: Follow a build
+      description: |
+        A `text/event-stream` of the build's progress. Events:
+
+        - `log`   — `{"n": 17, "line": "…"}`; `n` is the 0-based index of the line.
+        - `phase` — `{"id": "dispatching", "label": "Preparing infra"}`.
+        - `meta`  — `{"key": "worker", "value": "worker-03"}`.
+        - `done`  — `{"status": "succeeded", "error": "…", "artifacts": [...]}`; the
+          stream ends after it.
+
+        Lines starting with `:` are heartbeats. `from` resumes the log at that
+        index; `phase` and `meta` are always resent in full on connect, and a
+        finished build sends its `done` event immediately.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+        - name: from
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/builds/{id}/cancel:
+    post:
+      operationId: cancelBuild
+      summary: Cancel a build
+      description: Asks the service to stop the build. The event stream ends with `done {status: cancelled}` once it has.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "202":
+          description: Cancellation requested.
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: The build has already finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  parameters:
+    BuildId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Info:
+      type: object
+      required: [name, protocol, maxConcurrent]
+      properties:
+        name:
+          type: string
+          description: Shown in ICT's startup banner and build details, e.g. "jenkins-farm".
+        protocol:
+          type: string
+          enum: ["1"]
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          description: How many builds the service runs at once. ICT admits no more than this.
+        phases:
+          type: array
+          description: The ordered phases a build goes through, for the UI's stepper. Empty means ICT uses its local, log-derived phases.
+          items:
+            $ref: "#/components/schemas/Phase"
+    Phase:
+      type: object
+      required: [id, label]
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+        label:
+          type: string
+    BuildSubmission:
+      type: object
+      required: [id, template]
+      properties:
+        id:
+          type: string
+          description: ICT's build id. The service keys everything by it.
+        template:
+          type: string
+          description: The complete template YAML, with no `extends`.
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/File"
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Free-form labels the service may record or use for routing:
+            `owner`, `environment`, `image` (the template's image name).
+    File:
+      type: object
+      required: [path, contentBase64]
+      properties:
+        path:
+          type: string
+          description: Relative to the templates directory; no `..` segments.
+        contentBase64:
+          type: string
+        mode:
+          type: string
+          description: Octal file mode, e.g. "0755". Default "0644".
+    BuildStatus:
+      type: string
+      enum: [queued, running, cancelling, succeeded, failed, cancelled]
+    BuildState:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: "#/components/schemas/BuildStatus"
+        phase:
+          $ref: "#/components/schemas/Phase"
+        meta:
+          type: object
+          additionalProperties:
+            type: string
+          description: Backend detail ICT shows in build details, e.g. `worker`, `url`.
+        error:
+          type: string
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+    Artifact:
+      type: object
+      required: [name, type, url]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [image, sbom, log, other]
+        sizeBytes:
+          type: integer
+          format: int64
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        url:
+          type: string
+          format: uri
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string

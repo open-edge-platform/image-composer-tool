@@ -113,6 +113,7 @@ Caching <./architecture/image-composer-tool-caching.md>
 Multiple Package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
 Image Template Reference <./architecture/image-composer-tool-templates.md>
 Web UI Build Executors <./architecture/web-ui-build-executors.md>
+Remote Build Protocol <./architecture/remote-build-protocol.md>
 
 :::
 
