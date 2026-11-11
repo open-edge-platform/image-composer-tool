@@ -46,6 +46,11 @@ func (h *BuildHandle) Done() <-chan struct{} { return h.b.done }
 // and log-file path.
 func (h *BuildHandle) Result() Result { return h.b.snapshot() }
 
+// ReportedPhase returns the phase the build's Executor last reported, if any.
+// The local path reports none; its phases are derived from the log lines with
+// DetectPhase.
+func (h *BuildHandle) ReportedPhase() (Phase, bool) { return h.b.ReportedPhase() }
+
 // TemplateFile returns the on-disk path and display name of the resolved
 // template that was built, for the template-download handler. Returns a 404
 // *Error when no template was recorded for the build.
