@@ -21,6 +21,9 @@ import (
 // hand-written handler (registered on the mux in routes()).
 func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	b, ok := s.svc.Build(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")

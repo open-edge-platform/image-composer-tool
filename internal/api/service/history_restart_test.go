@@ -93,7 +93,7 @@ func TestListBuildsReportsInterruptedAsFailed(t *testing.T) {
 	s := newTestService(t)
 	writeInterruptedMeta(t, s, "ghost", StatusNotStarted)
 
-	got := s.ListBuilds()
+	got := s.ListBuilds("")
 	if len(got) != 1 {
 		t.Fatalf("got %d builds, want 1", len(got))
 	}
@@ -111,7 +111,7 @@ func TestListBuildsKeepsLiveBuildRunning(t *testing.T) {
 	// Same id, but present in the tracker: this build really is running.
 	s.tracker.add(&build{ID: "live", status: StatusRunning, done: make(chan struct{})})
 
-	got := s.ListBuilds()
+	got := s.ListBuilds("")
 	if len(got) != 1 {
 		t.Fatalf("got %d builds, want 1 (the live record must overlay the disk one)", len(got))
 	}

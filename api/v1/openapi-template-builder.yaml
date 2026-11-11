@@ -41,7 +41,7 @@ tags:
   - name: Builds
     description: Trigger and monitor image builds
   - name: Server
-    description: The running server
+    description: The running server and the signed-in user
 
 paths:
   # ─────────────────────────────────────────────────────────────────────
@@ -53,9 +53,10 @@ paths:
       operationId: getServerInfo
       summary: Describe the running server
       description: |
-        Version stamps and the build backend in use. The UI reads it once at
-        start-up: the executor's phases shape the build stepper and
-        `maxConcurrent` gates the Compose button.
+        Version stamps, the build backend in use and how callers are identified.
+        The UI reads it once at start-up: the executor's phases shape the build
+        stepper, `maxConcurrent` gates the Compose button, and `auth.mode`
+        decides whether to show who is signed in.
       responses:
         "200":
           description: Server description
@@ -63,6 +64,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServerInfo"
+  /me:
+    get:
+      tags: [Server]
+      operationId: getMe
+      summary: Who the server believes is calling
+      description: |
+        The identity the configured auth provider attached to this request. With
+        `auth.mode` `none` it is the fixed local user; with `trusted-header` it is
+        what the authenticating proxy reported.
+      responses:
+        "200":
+          description: The caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: The request carried no acceptable identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   # ─────────────────────────────────────────────────────────────────────
   # Manifest
   # ─────────────────────────────────────────────────────────────────────
@@ -2038,7 +2061,7 @@ components:
 
     ServerInfo:
       type: object
-      required: [version, commit, buildDate, executor]
+      required: [version, commit, buildDate, executor, auth]
       properties:
         version:
           type: string
@@ -2064,6 +2087,30 @@ components:
               description: The ordered phases this executor reports; absent when phases are derived from the log.
               items:
                 $ref: "#/components/schemas/Phase"
+        auth:
+          type: object
+          required: [mode]
+          properties:
+            mode:
+              type: string
+              enum: [none, trusted-header]
+
+    Me:
+      type: object
+      required: [owner, displayName]
+      properties:
+        owner:
+          type: string
+          description: The key builds are attributed to.
+        displayName:
+          type: string
+        email:
+          type: string
+        groups:
+          type: array
+          items:
+            type: string
+
     # ── Common ──
 
     Error:

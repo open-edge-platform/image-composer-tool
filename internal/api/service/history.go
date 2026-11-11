@@ -22,6 +22,7 @@ import (
 // for download alongside their configuration summary and artifacts.
 type buildMeta struct {
 	ID       string `json:"id"`
+	Owner    string `json:"owner,omitempty"`
 	Status   string `json:"status"`
 	Template string `json:"template"`
 	// TemplatePath is the on-disk template the build ran against. Persisted so a
@@ -127,6 +128,7 @@ func (b *build) writeMetaLocked() error {
 	res := b.snapshot()
 	m := buildMeta{
 		ID:           b.ID,
+		Owner:        b.Owner,
 		Status:       string(res.Status),
 		Template:     b.Template,
 		TemplatePath: res.TemplatePath,
@@ -197,6 +199,7 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 	status, errMsg := reconcileInterrupted(BuildStatus(m.Status), m.ErrMsg)
 	b := &build{
 		ID:           m.ID,
+		Owner:        m.Owner,
 		RootDir:      rootDir,
 		WorkDir:      filepath.Join(rootDir, "work"),
 		CacheDir:     filepath.Join(rootDir, "cache"),
@@ -225,6 +228,7 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 func buildForRecovery(rootDir string, m buildMeta) *build {
 	return &build{
 		ID:           m.ID,
+		Owner:        m.Owner,
 		RootDir:      rootDir,
 		WorkDir:      filepath.Join(rootDir, "work"),
 		CacheDir:     filepath.Join(rootDir, "cache"),
@@ -353,10 +357,27 @@ type HistoryItem struct {
 	Meta map[string]string
 }
 
-// ListBuilds returns the compose history newest-first. It merges live in-memory
-// builds (authoritative for status) with meta.json records on disk (so history
-// survives restarts).
-func (s *Service) ListBuilds() []HistoryItem {
+// ownedBy reports whether a build attributed to buildOwner may be seen by
+// caller. A build with no owner was recorded before owners existed, or by a
+// server that attributes nothing; it stays visible to everyone rather than
+// vanishing from history.
+func ownedBy(buildOwner, caller string) bool {
+	return buildOwner == "" || buildOwner == caller
+}
+
+// OwnsBuild reports whether caller may see build id. Unknown builds are not
+// owned by anyone, so a caller cannot tell "not mine" from "does not exist",
+// which is the point: a distinct answer would confirm that somebody else's
+// build exists.
+func (s *Service) OwnsBuild(id, caller string) bool {
+	b, ok := s.getBuild(id)
+	return ok && ownedBy(b.Owner, caller)
+}
+
+// ListBuilds returns the compose history newest-first, limited to the builds
+// caller may see. It merges live in-memory builds (authoritative for status)
+// with meta.json records on disk (so history survives restarts).
+func (s *Service) ListBuilds(caller string) []HistoryItem {
 	seen := make(map[string]HistoryItem)
 
 	// Disk records first (may be stale), then overlay live in-memory builds.
@@ -371,7 +392,7 @@ func (s *Service) ListBuilds() []HistoryItem {
 			continue // no meta.json (e.g. a build dir from before this feature)
 		}
 		var m buildMeta
-		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" {
+		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" || !ownedBy(m.Owner, caller) {
 			continue
 		}
 		// A disk record still marked non-terminal belongs to a build the previous
@@ -391,6 +412,9 @@ func (s *Service) ListBuilds() []HistoryItem {
 
 	// Overlay live builds — their status/artifacts are authoritative.
 	for _, b := range s.tracker.all() {
+		if !ownedBy(b.Owner, caller) {
+			continue
+		}
 		res := b.snapshot()
 		seen[b.ID] = HistoryItem{
 			ID:        b.ID,

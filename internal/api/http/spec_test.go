@@ -43,6 +43,7 @@ func (stubServer) ValidateTemplate(http.ResponseWriter, *http.Request)          
 func (stubServer) ListPackageRepos(http.ResponseWriter, *http.Request, ListPackageReposParams) {}
 func (stubServer) GetEdgePack(http.ResponseWriter, *http.Request, GetEdgePackParams)           {}
 func (stubServer) SearchPackages(http.ResponseWriter, *http.Request, SearchPackagesParams)     {}
+func (stubServer) GetMe(http.ResponseWriter, *http.Request)                                    {}
 func (stubServer) GetServerInfo(http.ResponseWriter, *http.Request)                            {}
 
 // TestHandlerFromMuxRegistersRoutes verifies the generated registration wires

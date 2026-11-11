@@ -69,6 +69,7 @@ type Artifact struct {
 // once at construction and are safe to read without the lock.
 type build struct {
 	ID           string
+	Owner        string // caller the build is attributed to; "" for nobody in particular
 	RootDir      string // per-build root (parent of work/ and cache/)
 	WorkDir      string
 	CacheDir     string
@@ -368,6 +369,10 @@ func (b *build) setResidual(kind ResidualKind, detail string) {
 type BuildRequest struct {
 	Compose *Selection
 	YAML    string
+	// Owner is the authenticated caller's key (auth.Identity.Owner). The build
+	// is attributed to it and history is filtered by it. Empty means the build
+	// belongs to nobody in particular and is visible to every caller.
+	Owner string
 }
 
 // BuildAccepted is returned when a build is accepted and started.
@@ -480,7 +485,8 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// raw cmdArgs reach exec.
 	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir, overlay)
 	b := &build{
-		ID: id,
+		ID:    id,
+		Owner: req.Owner,
 		// not-started until runBuild's cmd.Start succeeds and records the process
 		// group (setPgidCheckCancel promotes it to running). A cancel arriving in
 		// that window is still accepted and serviced once there's a group to signal.
@@ -553,7 +559,7 @@ func (s *Service) RetryBuild(id string) (*BuildAccepted, error) {
 				"template; neither is accepted any more, so retrying it would build something else. "+
 				"Start a new compose instead")
 	}
-	req := BuildRequest{YAML: b.retry.YAML}
+	req := BuildRequest{YAML: b.retry.YAML, Owner: b.Owner}
 	if b.retry.Compose != nil {
 		sel := *b.retry.Compose
 		req.Compose = &sel
