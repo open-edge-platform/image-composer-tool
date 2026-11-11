@@ -34,6 +34,11 @@ export default function App() {
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
   const [buildStatus, setBuildStatus] = useState<BuildStatus>('idle')
+  // How many builds the server runs at once, and how many are in flight.
+  // Default to 1 until the server says otherwise, so the UI never offers a
+  // compose the server would refuse.
+  const [capacity, setCapacity] = useState(1)
+  const [activeCount, setActiveCount] = useState(0)
 
   const load = useCallback(() => {
     setState('loading')
@@ -83,13 +88,21 @@ export default function App() {
   // On load, adopt any in-flight build from the server so the UI reflects it
   // after a refresh: disables the Compose button and shows the nav indicator
   // (otherwise buildStatus resets to 'idle' and a duplicate build could start).
-  // A build mid-cancel still holds the server's single-build slot, so adopt those
-  // too — otherwise Compose looks available and the start would 409.
+  // A build mid-cancel still holds a build slot, so adopt those too — otherwise
+  // Compose looks available and the start would 409.
+  //
+  // Also learn how many builds may run at once. A build sent to a remote build
+  // service occupies a worker there, so several can legitimately be in flight;
+  // only a build running on this machine has to be alone, because they share
+  // its mounts and loop devices. The server knows which it is, so ask rather
+  // than assume one.
   useEffect(() => {
     if (state !== 'ready') return
     api
       .listBuilds()
-      .then(({ builds }) => {
+      .then(({ builds, maxConcurrent }) => {
+        setCapacity(maxConcurrent)
+        setActiveCount(builds.filter((b) => isActiveStatus(b.status)).length)
         const active = builds.find((b) => isActiveStatus(b.status))
         if (active) {
           setBuildId(active.id)
@@ -99,17 +112,47 @@ export default function App() {
       .catch(() => {})
   }, [state])
 
+  // Keep the in-flight count fresh while any build is running, so Compose
+  // re-enables as soon as a slot frees rather than on the next reload.
+  useEffect(() => {
+    if (state !== 'ready' || !isActiveStatus(buildStatus)) return
+    const tick = () =>
+      api
+        .listBuilds()
+        .then(({ builds, maxConcurrent }) => {
+          setCapacity(maxConcurrent)
+          setActiveCount(builds.filter((b) => isActiveStatus(b.status)).length)
+        })
+        .catch(() => {})
+    const t = setInterval(tick, 5000)
+    return () => clearInterval(t)
+  }, [state, buildStatus])
+
   const onBuildStarted = (id: string) => {
     setBuildId(id)
     setBuildStatus('running')
     setView('builds')
+    // Count it straight away: the poll above is up to 5s behind, and without
+    // this a second click in that window would start a build the server then
+    // refuses with 409.
+    setActiveCount((n) => n + 1)
     // Clear any earlier retry failure: it described a start that never happened,
     // and a fresh build has now started. Leaving it set made the Compose page
     // show a "could not start" banner above a build that was visibly running.
     setRetryError(null)
   }
 
-  const onBuildStatusChange = (s: BuildStatus) => setBuildStatus(s)
+  const onBuildStatusChange = (s: BuildStatus) => {
+    setBuildStatus(s)
+    // The build this page follows just ended; count it out without waiting for
+    // the poll, so a single-slot server offers Compose again immediately.
+    if (!isActiveStatus(s)) setActiveCount((n) => Math.max(0, n - 1))
+  }
+
+  // Compose is offered while the server has a free slot. Locally that is one
+  // build at a time, which reproduces the previous behaviour; a remote build
+  // service may allow several.
+  const atCapacity = activeCount >= capacity
 
   // Retry a build as a fresh compose.
   //
@@ -202,7 +245,7 @@ export default function App() {
           <div hidden={view !== 'basic'}>
             <BasicPage
               onBuildStarted={onBuildStarted}
-              buildInProgress={isActiveStatus(buildStatus)}
+              buildInProgress={atCapacity}
               active={view === 'basic'}
               onEditInAdvanced={() => setView('advanced')}
             />
@@ -211,7 +254,7 @@ export default function App() {
             <AdvancedPage
               active={view === 'advanced'}
               onBuildStarted={onBuildStarted}
-              buildInProgress={isActiveStatus(buildStatus)}
+              buildInProgress={atCapacity}
             />
           </div>
           <div hidden={view !== 'builds'}>

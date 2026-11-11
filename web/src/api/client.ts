@@ -13,6 +13,8 @@ import type {
   CancelAccepted,
   HistoryItem,
   Artifact,
+  ServerInfo,
+  Me,
 } from './types'
 
 const BASE = '/api/v1'
@@ -115,19 +117,26 @@ export const api = {
       body: JSON.stringify({ compose: req }),
     }),
 
-  // Compose history, newest-first (merges live builds + on-disk meta records).
+  // Compose history, newest-first (merges live builds + on-disk meta records),
+  // and how many builds the server runs at once.
   // Also returns the server↔browser clock offset for correcting elapsed-time labels.
   // Prefer serverTime from body (works through proxies/CORS); fall back to Date header.
-  listBuilds: async (): Promise<{ builds: HistoryItem[]; clockOffsetMs: number }> => {
+  listBuilds: async (): Promise<{ builds: HistoryItem[]; maxConcurrent: number; clockOffsetMs: number }> => {
     const res = await jsonFetchRaw('/builds')
-    const body = (await res.json()) as { builds: HistoryItem[]; serverTime?: string }
+    const body = (await res.json()) as { builds: HistoryItem[]; serverTime?: string; maxConcurrent?: number }
     const bodyServerNow = body.serverTime ? new Date(body.serverTime).getTime() : NaN
     const dateHeader = res.headers.get('Date')
     const headerServerNow = dateHeader ? new Date(dateHeader).getTime() : NaN
     const serverNow = Number.isFinite(bodyServerNow) ? bodyServerNow : headerServerNow
     const clockOffsetMs = Number.isFinite(serverNow) ? serverNow - Date.now() : 0
-    return { builds: body.builds, clockOffsetMs }
+    return { builds: body.builds, maxConcurrent: body.maxConcurrent ?? 1, clockOffsetMs }
   },
+
+  // The running server: version, build backend (and its phases), auth mode.
+  getServerInfo: () => jsonFetch<ServerInfo>('/server'),
+
+  // Who the server believes is calling.
+  me: () => jsonFetch<Me>('/me'),
 
   // Cancel an in-flight build. Returns 202 with the cancelling status; the
   // terminal state (cancelled/failed) then arrives over SSE. 409 if the build is
