@@ -287,6 +287,66 @@ relative to the templates directory — `additionalFiles[].local` and
 - Send a heartbeat line (`:`) on an idle stream so proxies do not close it.
 - Within protocol `1`, add fields but never remove or rename them.
 
+## How ICT's client behaves
+
+The client is `internal/api/executor/remote` (`remote.Executor`). It implements
+the `Executor`, `PhaseReporter` and `Recoverer` interfaces of the [executor
+seam](./web-ui-build-executors.md); this is how those three map onto the
+protocol:
+
+| Seam method | Protocol calls |
+|---|---|
+| `New` (at `serve` start) | `GET /v1/info`; refuses another protocol version |
+| `Run` | `POST /v1/builds`, then `GET …/events?from=N` until `done` |
+| `Cancel` | `POST …/cancel` (`202` and `409` both count as success) |
+| `Recover` | `GET /v1/builds/{id}`; for a finished build also `GET …/events?from=0` for the log |
+| `Phases` / `MaxConcurrent` | from the `Info` read at start |
+
+Its loop around the event stream:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant RUN as Run / follow
+    participant RS as readStream
+    participant BS as build service
+
+    RUN->>RS: readStream(from)
+    RS->>BS: GET …/events?from=N
+    alt stream opened
+        BS-->>RS: events…
+        RS->>RS: forward log → AppendLog, phase → SetPhase, meta → PutMeta
+        RS-->>RUN: done event, or next index when the stream broke
+        Note over RUN: a stream that opened resets the back-off
+    else could not open
+        RS-->>RUN: error, same index
+    end
+    alt done received
+        RUN-->>RUN: return its status, artifacts, error
+    else stream broke
+        RUN->>BS: GET /v1/builds/{id}
+        alt finished meanwhile
+            RUN-->>RUN: return that outcome
+        else
+            RUN->>RUN: back off 1 s, 2 s, 4 s … 10 s · give up after ReconnectMax (10 min)
+            RUN->>RS: readStream(next)
+        end
+    end
+```
+
+Two bounded waits protect the user from a service that stops answering:
+
+- **Cancel grace** (`CancelGrace`, 2 min). After `Cancel`, `Run` keeps following
+  the stream so the build's real outcome is recorded. If the service has not
+  sent `done` by then, the build is reported `cancelled` with what is known.
+- **Reconnect budget** (`ReconnectMax`, 10 min). A stream that keeps breaking is
+  retried with back-off (1 s doubling to 10 s); a stream that opens resets the
+  budget. Once exhausted, `Run` fails the build with "lost the build's event
+  stream".
+
+Every call but the event stream goes through `network.NewSecureHTTPClient()`,
+whose header timeout bounds it; the stream is read for as long as it flows.
+
 ## Writing a build service
 
 The client's tests run against an in-memory reference service

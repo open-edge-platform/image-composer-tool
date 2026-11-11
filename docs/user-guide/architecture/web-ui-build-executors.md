@@ -242,6 +242,8 @@ the context it passed to `Run` as well, so an executor that only watches the
 context still stops. There is no watchdog on this path: `runViaExecutor` records
 the terminal state when `Run` returns, so `Run` **must** return once the build
 has stopped.
+ICT's remote executor, for instance, keeps following the build for a bounded
+grace period after a cancel so the real outcome is recorded rather than assumed.
 
 ## Phases, metadata and artifacts: how they reach the UI
 
@@ -321,6 +323,16 @@ A build that is still running is **re-adopted**: it takes a slot and `Run` is
 called for it exactly as for a new build, so cancel, SSE and history work for
 it unchanged. If no slot is free, the build is left as it is and a warning is
 logged; it will be recovered on the next start.
+
+## The executor ICT ships
+
+`internal/api/executor/remote` implements `Executor`, `PhaseReporter` and
+`Recoverer` over the [remote build protocol](./remote-build-protocol.md): an
+HTTP+SSE contract that any build service, in any language, can implement. It is
+the executor behind a build farm.
+Read it as a worked example of this seam, and read the protocol document for
+how its `Run`, `Cancel` and `Recover` map onto the five calls a build service
+exposes.
 
 ## Testing an executor
 
