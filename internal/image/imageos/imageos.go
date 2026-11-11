@@ -1068,6 +1068,21 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 				}
 			}
 		}()
+		// Packages whose postinst keys off `uname -r` (e.g. DKMS) must see the
+		// target kernel, not the build host's.
+		removeUnameWrapper, unameErr := installTargetUnameWrapper(installRoot)
+		if unameErr != nil {
+			return fmt.Errorf("failed to set up the uname wrapper: %w", unameErr)
+		}
+		defer func() {
+			if rmErr := removeUnameWrapper(); rmErr != nil {
+				if err == nil {
+					err = rmErr
+				} else {
+					err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, rmErr)
+				}
+			}
+		}()
 		imagePkgNum := len(imagePkgOrderedList)
 		// Force to use the local cache repository
 		var repoSrcList []string = []string{"/etc/apt/sources.list.d/local.list"}
