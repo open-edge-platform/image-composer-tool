@@ -191,6 +191,7 @@ export function PackagesStep({ os, active, basePackages, templateRepos = [] }: P
                   repoLabelFor={repoLabelFor}
                   targetLabel={targetLabel}
                   baseLock={baseLock}
+                  lockedRepoIds={lockedRepoIds}
                 />
               ) : edgePack === undefined ? (
                 <EdgePackLoading />
@@ -506,9 +507,11 @@ function PackageSearch({
   }, [results, baseLock])
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
+  // A repo the template already installs from counts as enabled: it is locked
+  // on, so writing it into enabledRepos would leave an entry nothing can untick.
   const isEnabled = (repoId: string) => {
     const r = repos.find((x) => x.id === repoId)
-    return r?.enabledByDefault || enabledRepos.includes(repoId)
+    return r?.enabledByDefault || enabledRepos.includes(repoId) || lockedRepoIds.has(repoId)
   }
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
   const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)

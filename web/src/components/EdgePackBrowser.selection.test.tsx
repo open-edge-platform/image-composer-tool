@@ -106,6 +106,34 @@ describe('clearing a selection and the enabled repositories', () => {
   })
 })
 
+describe('repositories the template already installs from', () => {
+  // Locked on in the Repositories tab, so writing one into enabledRepos would
+  // leave an entry nothing can untick.
+  const locked = new Set(['intel-eci', 'intel-graphics'])
+  const lockedBrowser = () => (
+    <EdgePackBrowser
+      pack={pack}
+      repoLabelFor={(id) => id}
+      targetLabel="Ubuntu 24.04"
+      baseLock={noLock}
+      lockedRepoIds={locked}
+    />
+  )
+
+  it('are not enabled when the base runtime is ticked', () => {
+    render(lockedBrowser())
+    fireEvent.click(screen.getByRole('checkbox', { name: /Standard/ }))
+    expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['base-standard'])
+    expect(useStore.getState().enabledRepos).toEqual([])
+  })
+
+  it('are still enabled when the template does not use them', () => {
+    render(browser())
+    fireEvent.click(screen.getByRole('checkbox', { name: /Standard/ }))
+    expect([...useStore.getState().enabledRepos].sort()).toEqual(['intel-eci', 'intel-graphics'])
+  })
+})
+
 describe('clearing a group that mixes a template-locked package with an added one', () => {
   // media-ffmpeg is locked in by the matched template; media-codec is the
   // user's own pick, added alongside it in the same domain. A domain-level
