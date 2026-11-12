@@ -208,7 +208,10 @@ const advanced: GuideTopic = {
           </li>
         </Steps>
         <Tip>
-          Leave a package on <Ui>Latest</Ui> unless you need one exact version.
+          Leave a package on <Ui>Latest</Ui> unless you need one exact version. <Ui>Latest</Ui> is
+          looked up when the image is built, so a later build can get a newer version. To fix each
+          package you are adding to today's newest version instead, click <Ui>Pin to newest</Ui>{' '}
+          in the <Ui>Selected</Ui> panel.
         </Tip>
       </Section>
 

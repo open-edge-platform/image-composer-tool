@@ -88,5 +88,33 @@ export function useVersionResolver(os: string, repoIds: string[]) {
     })
   }
 
-  return { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames }
+  // The newest version of each name across the checked repos, for callers
+  // that need the answers themselves rather than just the liveResolved
+  // update — "Pin to newest" turns each one into an exact pin. Unlike
+  // resolveVersion this looks up pinned names too, since a pin says nothing
+  // about whether a newer version exists. A name with no exact match, or
+  // whose lookup failed, is simply absent from the result. Resolves to {} if
+  // the repo scope changed mid-flight, the same staleness rule as above.
+  const lookupNewest = (names: string[]): Promise<Record<string, PackageSearchResult>> => {
+    const scope = repoIdsKey
+    return Promise.allSettled(
+      names.map((name) =>
+        name in liveResolved
+          ? Promise.resolve(liveResolved[name])
+          : api
+              .searchPackages({ os, repos: repoIds, q: name, limit: 20 })
+              .then((r) => r.packages.find((p) => p.name === name)),
+      ),
+    ).then((settled) => {
+      if (scopeRef.current !== scope) return {}
+      const found: Record<string, PackageSearchResult> = {}
+      settled.forEach((s) => {
+        if (s.status === 'fulfilled' && s.value) found[s.value.name] = s.value
+      })
+      setLiveResolved((prev) => ({ ...prev, ...found }))
+      return found
+    })
+  }
+
+  return { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames, lookupNewest }
 }
