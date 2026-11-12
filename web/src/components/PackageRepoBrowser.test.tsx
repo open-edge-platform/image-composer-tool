@@ -7,7 +7,7 @@
 // lib/edgepack.ts) must get the same treatment, for the same reason: the
 // build already needs it, whether or not the user has touched this tab.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { useStore } from '../store'
@@ -283,18 +283,85 @@ describe('"Show only selected"', () => {
     await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 })))
   })
 
-  it('includes template-locked packages when browsing the base repo', async () => {
-    const baseLockWithCurl: BaseLock = {
-      info: (name) => (name === 'curl' ? { locked: true, currentVersion: '8.5', currentIsFloating: false } : { locked: false, currentIsFloating: false }),
-      ensureResolved: () => {},
-      concreteNames: ['curl'],
-    }
-    mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
-    render(<Browser repos={repos} os="ubuntu" baseLock={baseLockWithCurl} />)
+  // Template package names are bare, so which repo they belong to is
+  // whichever publishes them: the same rule the normal view uses to show
+  // them checked. Each repo's own entry for the name is looked up by name.
+  const templateLock = (names: string[]): BaseLock => ({
+    info: (name) =>
+      names.includes(name) ? { locked: true, currentIsFloating: true } : { locked: false, currentIsFloating: false },
+    ensureResolved: () => {},
+    concreteNames: names,
+  })
+  // `publishes` maps repo id to the names it carries; a browse (no q) is empty.
+  const mockRepos = (publishes: Record<string, string[]>) =>
+    mockApi.searchPackages.mockImplementation(({ q, repos: ids }: { q?: string; repos?: string[] }) => {
+      const repo = ids?.[0] ?? ''
+      const has = !!q && (publishes[repo] ?? []).includes(q)
+      return Promise.resolve({
+        total: has ? 1 : 0,
+        packages: has ? [{ name: q, version: '1.0', repository: repo, versions: [{ version: '1.0', repository: repo }] }] : [],
+      })
+    })
+  const browse = (label: string) =>
+    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), {
+      target: { value: repos.find((r) => r.displayName === label)!.id },
+    })
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /^Show only selected/ }))
+  it('includes a template package when browsing the base repo that publishes it', async () => {
+    mockRepos({ base: ['curl'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
 
     await screen.findByText('curl')
+  })
+
+  it('includes a template package under a non-base repo that publishes it', async () => {
+    mockRepos({ base: ['curl'], 'intel-eci': ['librealsense2'] })
+    useStore.setState({ enabledRepos: ['intel-eci'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'librealsense2'])} />)
+    browse('Intel ECI')
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
+
+    await screen.findByText('librealsense2')
+    expect(screen.queryByText('curl')).toBeNull()
+  })
+
+  it('leaves out a template package the browsed repo does not publish, even on the base repo', async () => {
+    mockRepos({ base: ['curl'], 'intel-eci': ['librealsense2'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'librealsense2'])} />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
+
+    await screen.findByText('curl')
+    expect(screen.queryByText('librealsense2')).toBeNull()
+  })
+
+  it('reads "checking…" until the template lookups for the browsed repo land', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    mockApi.searchPackages.mockImplementation(({ q }: { q?: string }) =>
+      gate.then(() => ({
+        total: q ? 1 : 0,
+        packages: q ? [{ name: q, version: '1.0', repository: 'base', versions: [] }] : [],
+      })),
+    )
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    await screen.findByRole('checkbox', { name: 'Show only selected (checking…)' })
+    await act(async () => release())
+    await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' })
+  })
+
+  it('lists a template package the user also added only once', async () => {
+    mockRepos({ base: ['curl'] })
+    useStore.setState({ addedPackages: [{ name: 'curl', version: '8.5', repo: 'base' }] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
+
+    expect(await screen.findAllByText('curl')).toHaveLength(1)
   })
 })
 
