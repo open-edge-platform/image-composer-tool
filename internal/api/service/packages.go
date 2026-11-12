@@ -90,9 +90,14 @@ func (s *Service) ValidateSearchQuery(query string) error {
 // "Show frequently used" toggle uses. A matched repo with no curated list
 // contributes nothing to that narrowed set, so the caller sees zero results
 // rather than silently falling back to the full catalog.
-func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int, curatedOnly bool) (hits []PackageSearchHit, total int, err error) {
+//
+// unavailable lists the repos with at least one index that failed to load,
+// whose packages may therefore be missing from hits. The search still
+// succeeds, but a caller that must not act on a partial answer (pinning the
+// "newest" version, say) can tell it apart from a complete one.
+func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int, curatedOnly bool) (hits []PackageSearchHit, total int, unavailable []string, err error) {
 	if err := s.ValidateSearchQuery(query); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	if limit <= 0 {
 		limit = defaultSearchLimit
@@ -118,21 +123,23 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 		}
 		return hits[i].RepoID < hits[j].RepoID
 	})
-	return paginate(hits, offset, limit), len(hits), nil
+	return paginate(hits, offset, limit), len(hits), unavailableRepos(results), nil
 }
 
 // LookupPackages returns the entries for exactly the given package names in
 // osID's catalog repositories (narrowed by repoFilter, as SearchPackages
 // does): one hit per name some matched repository publishes, carrying every
 // version found, sorted by name. Names no repository publishes are absent.
+// unavailable lists the repos with an index that failed to load, exactly as
+// SearchPackages reports it.
 //
 // It answers "which of these does this repository carry" for a whole list in
 // one pass over each index. The web UI used to ask that with one prefix
 // search per name, which for a template's couple of hundred packages queued
 // the browser's few connections per host behind hundreds of requests.
-func (s *Service) LookupPackages(ctx context.Context, osID string, names, repoFilter []string) ([]PackageSearchHit, error) {
+func (s *Service) LookupPackages(ctx context.Context, osID string, names, repoFilter []string) (hits []PackageSearchHit, unavailable []string, err error) {
 	if len(names) > maxLookupNames {
-		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
+		return nil, nil, newError(http.StatusBadRequest, "BAD_REQUEST",
 			fmt.Sprintf("at most %d names can be looked up at once", maxLookupNames))
 	}
 	want := make(map[string]bool, len(names))
@@ -155,9 +162,9 @@ func (s *Service) LookupPackages(ctx context.Context, osID string, names, repoFi
 		results[i].entries = kept
 	}
 
-	hits := dedupAndFilter(results, "", rpmRepoSet(lookups))
+	hits = dedupAndFilter(results, "", rpmRepoSet(lookups))
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Name < hits[j].Name })
-	return hits, nil
+	return hits, unavailableRepos(results), nil
 }
 
 // curatedNameSet unions the CuratedPackages of every given repo into a
@@ -454,6 +461,24 @@ func debArch(arch string) string {
 type lookupResult struct {
 	entries []pkgindex.Entry
 	repoID  string
+	// failed is set when this index could not be loaded, so its repo's
+	// packages are missing from entries rather than genuinely absent.
+	failed bool
+}
+
+// unavailableRepos returns, sorted and deduplicated, the repos with at least
+// one index that failed to load.
+func unavailableRepos(results []lookupResult) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, r := range results {
+		if r.failed && !seen[r.repoID] {
+			seen[r.repoID] = true
+			out = append(out, r.repoID)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // rpmRepoSet reports which of these lookups' repositories are rpm, so version
@@ -473,7 +498,8 @@ func rpmRepoSet(lookups []repoLookup) func(repoID string) bool {
 // runLookups fetches every planned lookup concurrently, bounded by
 // maxConcurrentLookups. A failed lookup logs a warning and contributes
 // nothing rather than failing the whole search — the same tolerance any
-// other per-index fetch error already gets.
+// other per-index fetch error already gets — but is marked failed so the
+// caller can report the repo as unavailable (see unavailableRepos).
 func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup) []lookupResult {
 	results := make([]lookupResult, len(lookups))
 	g := new(errgroup.Group)
@@ -491,6 +517,7 @@ func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup
 				}
 				logger.Logger().Warnf("pkgindex: search lookup failed for repo %s (%s %s %s %s): %v",
 					lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
+				results[i] = lookupResult{repoID: lk.repoID, failed: true}
 				return nil
 			}
 			results[i] = lookupResult{entries: entries, repoID: lk.repoID}

@@ -11,7 +11,7 @@ const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
   getEdgePack: vi.fn(),
   searchPackages: vi.fn(),
-  lookupPackages: vi.fn(async () => []),
+  lookupPackages: vi.fn(async () => ({ packages: [], unavailableRepos: [] })),
 }))
 
 vi.mock('../api/client', () => ({ api: mockApi }))
@@ -184,7 +184,7 @@ describe('PackagesStep Edge Pack', () => {
 describe('PackagesStep index warm-up', () => {
   it('looks the template packages up across every repo once, as soon as the step opens', async () => {
     mockApi.getEdgePack.mockResolvedValue(pack('1.0'))
-    mockApi.lookupPackages.mockResolvedValue([])
+    mockApi.lookupPackages.mockResolvedValue({ packages: [], unavailableRepos: [] })
     mockApi.listPackageRepos.mockResolvedValue({
       repos: [
         { id: 'base', displayName: 'Base', url: 'https://example.com/base', enabledByDefault: true },

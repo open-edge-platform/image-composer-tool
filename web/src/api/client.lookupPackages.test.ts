@@ -28,7 +28,8 @@ describe('api.lookupPackages', () => {
     expect(url.searchParams.get('os')).toBe('ubuntu24')
     expect(url.searchParams.getAll('repos')).toEqual(['base', 'eci'])
     expect(url.searchParams.getAll('names')).toEqual(['curl', 'vim'])
-    expect(got.map((p) => p.name)).toEqual(['curl'])
+    expect(got.packages.map((p) => p.name)).toEqual(['curl'])
+    expect(got.unavailableRepos).toEqual([])
   })
 
   it('splits a long list into batches of 200', async () => {
@@ -46,6 +47,22 @@ describe('api.lookupPackages', () => {
 
     const got = await api.lookupPackages({ os: 'ubuntu24', repos: ['base'], names: ['vim'] })
 
-    expect(got.map((p) => p.name)).toEqual(['vim'])
+    expect(got.packages.map((p) => p.name)).toEqual(['vim'])
+  })
+
+  it('reports every repo any batch could not read, once each', async () => {
+    const replies = [['eci'], ['eci', 'base']]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ query: '', total: 0, packages: [], unavailableRepos: replies.shift() }), { status: 200 }),
+        ),
+      ),
+    )
+
+    const got = await api.lookupPackages({ os: 'ubuntu24', repos: ['base', 'eci'], names: Array.from({ length: 300 }, (_, i) => `p${i}`) })
+
+    expect(got.unavailableRepos).toEqual(['base', 'eci'])
   })
 })

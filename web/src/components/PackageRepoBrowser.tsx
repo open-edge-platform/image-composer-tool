@@ -305,6 +305,7 @@ function MergedPane({
     // itself, for a template with a couple of hundred packages.
     api
       .lookupPackages({ os, repos: [repoId], names: missing })
+      .then((r) => r.packages)
       .catch(() => [] as PackageSearchResult[])
       .then((found) => {
         if (cancelled) return
@@ -338,6 +339,8 @@ function MergedPane({
     lookupNewest,
   } = resolver
   const [pinning, setPinning] = useState(false)
+  // Why the last "Update to latest version" changed nothing, if it didn't.
+  const [pinNotice, setPinNotice] = useState<string | null>(null)
 
   // "Latest" ('') is written to the template unpinned and resolved only at
   // build time, so the image can differ from what was reviewed here. This
@@ -345,16 +348,37 @@ function MergedPane({
   // to the exact newest version the checked repos offer right now, so the
   // YAML records it. The repo a package was picked from stays enabled even if
   // the newest version lives elsewhere: releasing it would change the repo
-  // scope the versions were just looked up in. Reads the selection again
-  // after the lookups so a package removed meanwhile isn't added back.
+  // scope the versions were just looked up in.
+  //
+  // Nothing changes unless the answer is complete: with a repo unreadable,
+  // "newest" could be an older version or a downgrade of a pin. And only
+  // entries still exactly as they were when the button was clicked are
+  // updated. The store replaces an entry whenever its version is picked,
+  // it's removed and re-added, or the target changes, so comparing the
+  // entry objects themselves skips every one of those rather than
+  // overwriting a newer choice (or another OS's package) with this answer.
   const pinAllToNewest = () => {
+    const dispatched = addedPackages
     setPinning(true)
-    lookupNewest(addedPackages.map((p) => p.name))
-      .then((newest) => {
+    setPinNotice(null)
+    lookupNewest(dispatched.map((p) => p.name))
+      .then(({ found, complete, unavailableRepos, stale }) => {
+        if (stale) {
+          setPinNotice('The target or checked repositories changed while checking, so nothing was updated. Try again.')
+          return
+        }
+        if (!complete) {
+          setPinNotice(
+            unavailableRepos.length > 0
+              ? `Couldn't read ${unavailableRepos.map(repoLabelFor).join(', ')} right now, so nothing was updated: the newest version could be there. Try again.`
+              : "Couldn't check for newer versions, so nothing was updated. Try again.",
+          )
+          return
+        }
         const pins = useStore
           .getState()
-          .addedPackages.filter((p) => newest[p.name])
-          .map((p) => ({ ...p, version: newest[p.name].version, repo: newest[p.name].repository }))
+          .addedPackages.filter((p) => dispatched.includes(p) && found[p.name])
+          .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
         if (pins.length > 0) setPackages(pins)
       })
       .finally(() => setPinning(false))
@@ -648,6 +672,11 @@ function MergedPane({
           />
         )}
       </div>
+      {pinNotice && (
+        <p role="status" className="mb-2 text-[11px] font-medium text-amber-700">
+          {pinNotice}
+        </p>
+      )}
       {error ? (
         <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
       ) : displayRows.length === 0 ? (

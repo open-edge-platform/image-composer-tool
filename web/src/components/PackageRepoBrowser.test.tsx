@@ -55,7 +55,7 @@ beforeEach(() => {
   useStore.setState({ addedPackages: [], enabledRepos: [] })
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
   mockApi.lookupPackages.mockReset()
-  mockApi.lookupPackages.mockResolvedValue([])
+  mockApi.lookupPackages.mockResolvedValue({ packages: [], unavailableRepos: [] })
 })
 
 // browse picks a repository from the toolbar dropdown, the same way a user does.
@@ -299,11 +299,12 @@ describe('"Show only selected"', () => {
   const mockRepos = (publishes: Record<string, string[]>) =>
     mockApi.lookupPackages.mockImplementation(({ repos: ids, names }: { repos: string[]; names: string[] }) => {
       const repo = ids[0]
-      return Promise.resolve(
-        names
+      return Promise.resolve({
+        packages: names
           .filter((n) => (publishes[repo] ?? []).includes(n))
           .map((n) => ({ name: n, version: '1.0', repository: repo, versions: [{ version: '1.0', repository: repo }] })),
-      )
+        unavailableRepos: [],
+      })
     })
   const browse = (label: string) =>
     fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), {
@@ -345,7 +346,10 @@ describe('"Show only selected"', () => {
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
     mockApi.lookupPackages.mockImplementation(({ names }: { names: string[] }) =>
-      gate.then(() => names.map((n) => ({ name: n, version: '1.0', repository: 'base', versions: [] }))),
+      gate.then(() => ({
+        packages: names.map((n) => ({ name: n, version: '1.0', repository: 'base', versions: [] })),
+        unavailableRepos: [],
+      })),
     )
     render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
 

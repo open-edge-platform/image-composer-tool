@@ -101,7 +101,8 @@ export const api = {
   // Exactly these package names in the given repos, one entry per name some
   // repo publishes (with every version found), in as few requests as the URL
   // length allows rather than one search per name. Names no repo publishes
-  // are simply absent. The client-side name check also keeps the answer
+  // are simply absent, and `unavailableRepos` lists any repo whose index the
+  // server couldn't read. The client-side name check also keeps the answer
   // right against an older backend that ignores `names` and browses instead.
   lookupPackages: async (params: { os: string; repos: string[]; names: string[] }) => {
     const unique = [...new Set(params.names)]
@@ -117,7 +118,12 @@ export const api = {
       }),
     )
     const wanted = new Set(unique)
-    return results.flatMap((r) => r.packages).filter((p) => wanted.has(p.name))
+    return {
+      packages: results.flatMap((r) => r.packages).filter((p) => wanted.has(p.name)),
+      // Repos the server couldn't read in any batch: their packages may be
+      // missing, so a caller acting on "newest" must treat this as partial.
+      unavailableRepos: [...new Set(results.flatMap((r) => r.unavailableRepos ?? []))].sort(),
+    }
   },
 
   // SSE URL for a cross-repository search. Each repository's matches arrive as

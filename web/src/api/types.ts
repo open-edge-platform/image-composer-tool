@@ -261,6 +261,10 @@ export interface PackageSearchResults {
   query: string
   total: number
   packages: PackageSearchResult[]
+  // Repos with an index the server couldn't load, so their packages may be
+  // missing from `packages`. Absent when every index loaded (and from an
+  // older backend that doesn't report it).
+  unavailableRepos?: string[]
 }
 
 // The Edge Pack grouping for one target (from GET /edge-pack): the same
