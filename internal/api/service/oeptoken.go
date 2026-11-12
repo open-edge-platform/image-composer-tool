@@ -4,9 +4,12 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/oepinstaller"
@@ -14,8 +17,9 @@ import (
 )
 
 // oepTokenDirName is the directory under WorkDir that holds the GitHub tokens
-// entered for running builds. It is outside builds/, so a token never sits next
-// to a build's history, logs, or archived template.
+// entered for running builds, in one subdirectory per server process named by
+// its PID. It is outside builds/, so a token never sits next to a build's
+// history, logs, or archived template.
 const oepTokenDirName = ".oep-installer-tokens"
 
 // maxOEPTokenLen is a request-size guard, matching the OpenAPI maxLength of
@@ -48,7 +52,7 @@ func (s *Service) oepInstallerInfo(t *config.ImageTemplate) OEPInstallerInfo {
 // one build to read with --oep-installer-token-file (root reads it under sudo),
 // and returns its path. The caller removes the file once the build exits.
 func (s *Service) writeOEPToken(token string) (path string, err error) {
-	dir := filepath.Join(s.cfg.WorkDir, oepTokenDirName)
+	dir := filepath.Join(s.cfg.WorkDir, oepTokenDirName, strconv.Itoa(os.Getpid()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("creating the token directory: %w", err)
 	}
@@ -80,11 +84,38 @@ func removeOEPToken(path string) {
 	}
 }
 
-// removeStaleOEPTokens deletes token files a server that stopped mid-build left
-// behind. No build is running when the server starts, so none is in use.
+// removeStaleOEPTokens deletes the token files of server processes that are no
+// longer running, which stopped mid-build. Another server sharing the work
+// directory keeps its files, so its running builds can still read them, even
+// when this server goes on to fail to start. A directory named by this
+// process's own PID is stale too: this server has written nothing yet, and in
+// a container a restarted server often gets the PID of the previous one.
 func removeStaleOEPTokens(workDir string) {
 	dir := filepath.Join(workDir, oepTokenDirName)
-	if err := os.RemoveAll(dir); err != nil {
-		logger.Logger().Warnf("removing stale OEP Installer token files in %s: %v", dir, err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Logger().Warnf("reading the OEP Installer token directory %s: %v", dir, err)
+		}
+		return
 	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || !e.IsDir() || (pid != os.Getpid() && processRunning(pid)) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			logger.Logger().Warnf("removing stale OEP Installer token files in %s: %v", dir, err)
+		}
+	}
+}
+
+// processRunning reports whether a process with this PID exists. EPERM means
+// it does, owned by another user.
+func processRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

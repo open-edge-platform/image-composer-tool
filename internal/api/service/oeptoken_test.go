@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -202,21 +204,50 @@ func TestOEPInstallerServerToken(t *testing.T) {
 
 func TestRemoveStaleOEPTokens(t *testing.T) {
 	t.Parallel()
-	s := &Service{cfg: Config{WorkDir: t.TempDir()}}
-	path, err := s.writeOEPToken("left-behind")
+	workDir := t.TempDir()
+	s := &Service{cfg: Config{WorkDir: workDir}}
+	own, err := s.writeOEPToken("left-behind")
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(own)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("token file mode = %04o, want 0600", perm)
 	}
-	removeStaleOEPTokens(s.cfg.WorkDir)
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("stale token file survived: %v", err)
+	if got, want := filepath.Dir(own), filepath.Join(workDir, oepTokenDirName, strconv.Itoa(os.Getpid())); got != want {
+		t.Errorf("token file in %s, want the server's own directory %s", got, want)
+	}
+
+	// A process that has exited: run one and wait for it, so its PID is free.
+	exited := exec.Command("true")
+	if err := exited.Run(); err != nil {
+		t.Fatal(err)
+	}
+	tokenIn := func(pid int) string {
+		dir := filepath.Join(workDir, oepTokenDirName, strconv.Itoa(pid))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "token-1")
+		if err := os.WriteFile(path, []byte("t"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	dead := tokenIn(exited.Process.Pid)
+	live := tokenIn(os.Getppid()) // another running server's
+
+	removeStaleOEPTokens(workDir)
+	for name, path := range map[string]string{"this process's own": own, "an exited server's": dead} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s stale token file survived: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Errorf("a running server's token file was removed: %v", err)
 	}
 }
 
