@@ -59,6 +59,13 @@ export function useVersionResolver(os: string, repoIds: string[]) {
     setLiveResolved({})
     setResolvingNames(new Set())
     setAttemptedNames(new Set())
+    // Unmounting ends the scope too (Next unmounts the Packages step), so an
+    // answer still in flight reads as stale. Otherwise it would keep matching
+    // the old key and could pin into a repo disabled after coming Back. ''
+    // never equals a real key, which always contains '|'.
+    return () => {
+      scopeRef.current = ''
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- repoIdsKey stands in for repoIds
   }, [repoIdsKey])
 
