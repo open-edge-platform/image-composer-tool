@@ -283,6 +283,59 @@ function MergedPane({
   useEffect(() => {
     setPage(0)
   }, [selectedOnly])
+  // Per repo, each template package name mapped to that repo's own entry
+  // for it, or null when the repo doesn't publish it. Filled for whichever
+  // repo is browsed, once per repo, so the review list and its count below
+  // can say which template packages come from here.
+  const [templateHits, setTemplateHits] = useState<Record<string, Record<string, PackageSearchResult | null>>>({})
+  // The browsed repo, when its lookup failed or the server couldn't read its
+  // index. Only what was found is cached then: caching the rest as "not
+  // published" would show a confident 0 for the whole session over what may
+  // be a mirror blip. This stops the lookup retrying in a loop; browsing the
+  // repo again clears it and retries.
+  const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
+  const templateNamesKey = baseLock.concreteNames.join(',')
+  useEffect(() => {
+    setTemplateHits({})
+    setTemplateLookupFailed(null)
+  }, [os, templateNamesKey])
+  useEffect(() => {
+    setTemplateLookupFailed(null)
+  }, [selectedRepo?.id])
+  useEffect(() => {
+    const repoId = selectedRepo?.id
+    if (!repoId || templateLookupFailed === repoId) return
+    const known = templateHits[repoId] ?? {}
+    const missing = baseLock.concreteNames.filter((name) => !(name in known))
+    if (missing.length === 0) return
+    let cancelled = false
+    // One request for the whole list: one search per name queued the
+    // browser's few connections per host and held up the catalog fetch
+    // itself, for a template with a couple of hundred packages.
+    api
+      .lookupPackages({ os, repos: [repoId], names: missing })
+      .then((r) => ({ found: r.packages, complete: !r.unavailableRepos.includes(repoId) }))
+      .catch(() => ({ found: [] as PackageSearchResult[], complete: false }))
+      .then(({ found, complete }) => {
+        if (cancelled) return
+        const byName = new Map(found.map((p) => [p.name, p]))
+        setTemplateHits((prev) => {
+          const next = { ...prev[repoId] }
+          for (const name of missing) {
+            const hit = byName.get(name)
+            if (hit) next[name] = hit
+            else if (complete) next[name] = null
+          }
+          return { ...prev, [repoId]: next }
+        })
+        if (!complete) setTemplateLookupFailed(repoId)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- templateNamesKey stands in for baseLock.concreteNames
+  }, [selectedRepo?.id, os, templateNamesKey, templateHits, templateLookupFailed])
+
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
@@ -455,30 +508,34 @@ function MergedPane({
       }
     })
 
-  // The base repo's own rows are mostly satisfied by the matched template
-  // directly (baseLock), never touching addedPackages at all — without
-  // these, "Show only selected" on the base repo would say nothing's picked
-  // even though every one of those names shows checked in the normal view.
-  // Only the base repo's own concrete names are considered: a locked name's
-  // currentVersion is specifically a default-repo lookup (see baseLock.ts),
-  // so it isn't meaningful attributed to any other repo.
-  const lockedRows: PackageSearchResult[] = selectedRepo?.enabledByDefault
-    ? baseLock.concreteNames
-        .filter((name) => !addedRows.some((r) => r.name === name))
-        .map((name) => {
-          const lock = baseLock.info(name)
-          return {
-            name,
-            version: lock.currentVersion ?? '',
-            repository: selectedRepo.id,
-            versions: lock.currentVersion ? [{ version: lock.currentVersion, repository: selectedRepo.id }] : [],
-          }
-        })
-    : []
+  // The matched template's own packages never touch addedPackages, yet the
+  // normal view shows each one checked in every repo that publishes it. So
+  // the review list includes the template names the browsed repo publishes,
+  // the same rule, and uses that repo's own row for each, exactly as the
+  // normal view would. Previously only the base repo listed them, and it
+  // listed every template name whether it published it or not, so e.g.
+  // Intel EdgePack read "0 selected" while its template packages showed
+  // checked. Template names are bare (no repo), so the only way to tell is
+  // to look each one up in the browsed repo; see templateHits above.
+  const browsedTemplateHits = selectedRepo ? templateHits[selectedRepo.id] : undefined
+  const templateCheckFailed = !!selectedRepo && templateLookupFailed === selectedRepo.id
+  const checkingTemplate =
+    !!selectedRepo &&
+    !templateCheckFailed &&
+    baseLock.concreteNames.some((name) => !(name in (browsedTemplateHits ?? {})))
+  const lockedRows: PackageSearchResult[] = baseLock.concreteNames
+    .filter((name) => browsedTemplateHits?.[name] && !addedRows.some((r) => r.name === name))
+    .map((name) => browsedTemplateHits![name]!)
 
   const selectedRows: PackageSearchResult[] = [...addedRows, ...lockedRows].sort((a, b) =>
     a.name.localeCompare(b.name),
   )
+
+  const selectedCountLabel = checkingTemplate
+    ? 'checking…'
+    : templateCheckFailed
+      ? `${selectedRows.length} selected, couldn't check template packages`
+      : `${selectedRows.length} selected`
 
   const displayRows = selectedOnly ? selectedRows : hits
 
@@ -579,7 +636,7 @@ function MergedPane({
               base packages — reads as "none from here" rather than as a
               missing count. */}
           <span className="text-slate-500">
-            ({selectedRows.length} selected)
+            ({selectedCountLabel})
           </span>
         </label>
         {!selectedOnly && hits.length > 0 && (

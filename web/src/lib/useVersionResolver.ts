@@ -120,26 +120,21 @@ export function useVersionResolver(os: string, repoIds: string[]) {
   // and still in scope. A name with no exact match is absent from `found`.
   const lookupNewest = (names: string[]): Promise<NewestLookup> => {
     const scope = repoIdsKey
-    return Promise.allSettled(names.map((name) => api.searchPackages({ os, repos: repoIds, q: name, limit: 20 }))).then(
-      (settled) => {
+    // One request for the whole list (see api.lookupPackages), not one per name.
+    return api
+      .lookupPackages({ os, repos: repoIds, names })
+      .then(
+        (r) => ({ packages: r.packages, unavailableRepos: r.unavailableRepos, failed: false }),
+        () => ({ packages: [] as PackageSearchResult[], unavailableRepos: [] as string[], failed: true }),
+      )
+      .then(({ packages, unavailableRepos, failed }) => {
         const found: Record<string, PackageSearchResult> = {}
-        const unavailable = new Set<string>()
-        let failed = false
-        settled.forEach((s, i) => {
-          if (s.status === 'rejected') {
-            failed = true
-            return
-          }
-          s.value.unavailableRepos?.forEach((r) => unavailable.add(r))
-          const exact = s.value.packages.find((p) => p.name === names[i])
-          if (exact) found[exact.name] = exact
-        })
+        for (const hit of packages) found[hit.name] = hit
         const stale = scopeRef.current !== scope
-        const complete = !failed && unavailable.size === 0
+        const complete = !failed && unavailableRepos.length === 0
         if (complete && !stale) setLiveResolved((prev) => ({ ...prev, ...found }))
-        return { found, complete, unavailableRepos: [...unavailable].sort(), stale }
-      },
-    )
+        return { found, complete, unavailableRepos, stale }
+      })
   }
 
   return { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames, lookupNewest }

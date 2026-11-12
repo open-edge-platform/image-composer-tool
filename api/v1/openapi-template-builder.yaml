@@ -226,6 +226,24 @@ paths:
             "frequently used" packages instead of its full catalog. A matched
             repository with none defined then contributes nothing, rather than
             falling back to its full catalog.
+        - name: names
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 1000
+            items:
+              type: string
+          description: >
+            Look up exactly these package names instead of searching or
+            browsing: the result holds one entry per name that a matched
+            repository publishes, each with every version found, and names no
+            repository publishes are left out. This answers "which of these
+            does this repository carry, and at what versions" for a whole list
+            in one request rather than one search per name. `q`, `curated`,
+            `limit` and `offset` are ignored when `names` is set. At most 1000
+            names.
       responses:
         "200":
           description: Matching packages
