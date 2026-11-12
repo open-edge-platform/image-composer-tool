@@ -14,7 +14,7 @@ import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo, PackageSearchResult } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
 
-const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn() }))
+const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn(), lookupPackages: vi.fn() }))
 vi.mock('../api/client', () => ({ api: mockApi }))
 
 const noLock: BaseLock = {
@@ -40,17 +40,18 @@ const newest: Record<string, PackageSearchResult> = {
   curl: { name: 'curl', version: '8.5.0-2', repository: 'intel-eci' },
 }
 
-// The catalog fetch (no q) comes back empty; a by-name lookup finds `newest`.
-const answer = ({ q }: { q?: string }) => ({
-  query: q ?? '',
-  total: q && newest[q] ? 1 : 0,
-  packages: q && newest[q] ? [newest[q]] : [],
+// The catalog fetch comes back empty; the by-name lookup finds `newest`.
+const answer = ({ names }: { names: string[] }, unavailableRepos: string[] = []) => ({
+  packages: names.filter((n) => newest[n]).map((n) => newest[n]),
+  unavailableRepos,
 })
 
 beforeEach(() => {
   useStore.setState({ addedPackages: [], enabledRepos: ['intel-eci'] })
   mockApi.searchPackages.mockReset()
-  mockApi.searchPackages.mockImplementation((args: { q?: string }) => Promise.resolve(answer(args)))
+  mockApi.searchPackages.mockResolvedValue({ query: '', total: 0, packages: [] })
+  mockApi.lookupPackages.mockReset()
+  mockApi.lookupPackages.mockImplementation((args: { names: string[] }) => Promise.resolve(answer(args)))
 })
 
 const pinButton = () => screen.getByRole('button', { name: /^Update to latest version/ }) as HTMLButtonElement
@@ -86,14 +87,22 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     expect(useStore.getState().enabledRepos).toContain('intel-eci')
   })
 
-  it('looks up a name across every checked repo, even when it is already pinned', async () => {
-    useStore.setState({ addedPackages: [{ name: 'curl', version: '7.88.1-10', repo: 'base' }] })
+  it('looks up every added name, pinned ones too, across every checked repo in one request', async () => {
+    useStore.setState({
+      addedPackages: [
+        { name: 'vim', version: '', repo: 'base' },
+        { name: 'curl', version: '7.88.1-10', repo: 'base' },
+      ],
+    })
     await renderBrowser()
     await act(async () => fireEvent.click(pinButton()))
 
-    expect(mockApi.searchPackages).toHaveBeenCalledWith(
-      expect.objectContaining({ q: 'curl', repos: ['base', 'intel-eci'] }),
-    )
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith({
+      os: 'ubuntu24',
+      repos: ['base', 'intel-eci'],
+      names: ['vim', 'curl'],
+    })
   })
 
   it('leaves a package unchanged when no checked repo has it', async () => {
@@ -114,7 +123,7 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     await renderBrowser()
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
-    mockApi.searchPackages.mockImplementation((args: { q?: string }) => gate.then(() => answer(args)))
+    mockApi.lookupPackages.mockImplementation((args: { names: string[] }) => gate.then(() => answer(args)))
     const button = pinButton()
     await act(async () => fireEvent.click(button))
     expect(button.textContent).toBe('Updating…')
@@ -130,7 +139,7 @@ describe('PackageRepoBrowser — Update to latest version', () => {
   const gateLookups = () => {
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
-    mockApi.searchPackages.mockImplementation((args: { q?: string }) => gate.then(() => answer(args)))
+    mockApi.lookupPackages.mockImplementation((args: { names: string[] }) => gate.then(() => answer(args)))
     return () => act(async () => release())
   }
 
@@ -203,9 +212,7 @@ describe('PackageRepoBrowser — Update to latest version', () => {
         { name: 'curl', version: '7.88.1-10', repo: 'base' },
       ],
     })
-    mockApi.searchPackages.mockImplementation((args: { q?: string }) =>
-      Promise.resolve({ ...answer(args), unavailableRepos: args.q === 'curl' ? ['intel-eci'] : undefined }),
-    )
+    mockApi.lookupPackages.mockImplementation((args: { names: string[] }) => Promise.resolve(answer(args, ['intel-eci'])))
     await renderBrowser()
     await act(async () => fireEvent.click(pinButton()))
 
@@ -218,9 +225,7 @@ describe('PackageRepoBrowser — Update to latest version', () => {
 
   it('changes nothing when a lookup fails outright', async () => {
     useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
-    mockApi.searchPackages.mockImplementation((args: { q?: string }) =>
-      args.q ? Promise.reject(new Error('offline')) : Promise.resolve(answer(args)),
-    )
+    mockApi.lookupPackages.mockRejectedValue(new Error('offline'))
     await renderBrowser()
     await act(async () => fireEvent.click(pinButton()))
 
@@ -238,10 +243,10 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     // answer would still say 2:9.1.0016-1.
     newest.vim = { name: 'vim', version: '2:9.1.0016-2', repository: 'base' }
     try {
-      mockApi.searchPackages.mockClear()
+      mockApi.lookupPackages.mockClear()
       await act(async () => fireEvent.click(pinButton()))
 
-      expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ q: 'vim' }))
+      expect(mockApi.lookupPackages).toHaveBeenCalledWith(expect.objectContaining({ names: ['vim'] }))
       expect(useStore.getState().addedPackages[0].version).toBe('2:9.1.0016-2')
     } finally {
       newest.vim = { name: 'vim', version: '2:9.1.0016-1', repository: 'base' }

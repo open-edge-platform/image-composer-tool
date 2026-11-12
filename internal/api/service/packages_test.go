@@ -157,6 +157,93 @@ func TestSearchPackagesPagination(t *testing.T) {
 	}
 }
 
+func TestLookupPackages(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
+
+	tests := []struct {
+		name  string
+		names []string
+		want  []string
+	}{
+		{"every name published", []string{"ros-jazzy-rviz2", "ros-jazzy-demo-nodes-cpp"}, []string{"ros-jazzy-demo-nodes-cpp", "ros-jazzy-rviz2"}},
+		{"unpublished names left out", []string{"ros-jazzy-rviz2", "not-published"}, []string{"ros-jazzy-rviz2"}},
+		// Exact names, not prefixes: a search for "ros-jazzy-rviz" would match.
+		{"no prefix matching", []string{"ros-jazzy-rviz"}, nil},
+		{"empty list", nil, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hits, _, err := s.LookupPackages(context.Background(), "ubuntu24", tc.names, nil)
+			if err != nil {
+				t.Fatalf("LookupPackages: %v", err)
+			}
+			var got []string
+			for _, h := range hits {
+				got = append(got, h.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	hits, _, err := s.LookupPackages(context.Background(), "ubuntu24", []string{"ros-jazzy-rviz2"}, nil)
+	if err != nil {
+		t.Fatalf("LookupPackages: %v", err)
+	}
+	if hits[0].RepoID != "ros2-jazzy" || hits[0].Version != "14.1.4-1" || len(hits[0].Versions) != 1 {
+		t.Errorf("got %+v, want ros2-jazzy / 14.1.4-1 with its one version", hits[0])
+	}
+}
+
+func TestLookupPackagesRepoFilter(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	repos := append(jazzyRepo(srv.URL), PackageRepo{ID: "other-repo", DisplayName: "Other", URL: srv.URL})
+	s := newSearchTestService(t, repos, srv.Client())
+
+	hits, _, err := s.LookupPackages(context.Background(), "ubuntu24", []string{"ros-jazzy-rviz2"}, []string{"other-repo"})
+	if err != nil {
+		t.Fatalf("LookupPackages: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("got %+v from a repo that does not publish it, want none", hits)
+	}
+}
+
+func TestLookupPackagesReportsUnavailableRepos(t *testing.T) {
+	good := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer good.Close()
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+	repos := append(jazzyRepo(good.URL), PackageRepo{
+		ID: "broken-repo", DisplayName: "Broken", URL: bad.URL,
+		Index: []RepoIndex{{Codename: "noble", Component: "main"}},
+	})
+	s := newSearchTestService(t, repos, good.Client())
+
+	hits, unavailable, err := s.LookupPackages(context.Background(), "ubuntu24", []string{"ros-jazzy-rviz2"}, nil)
+	if err != nil {
+		t.Fatalf("a broken repo should not fail the lookup: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v, want ros-jazzy-rviz2 from the good repo", hits)
+	}
+	if strings.Join(unavailable, ",") != "broken-repo" {
+		t.Errorf("unavailable = %v, want [broken-repo]", unavailable)
+	}
+}
+
+func TestLookupPackagesTooManyNames(t *testing.T) {
+	s := newSearchTestService(t, nil, http.DefaultClient)
+	_, _, err := s.LookupPackages(context.Background(), "ubuntu24", make([]string, maxLookupNames+1), nil)
+	assertServiceError(t, err, http.StatusBadRequest)
+}
+
 func TestSearchPackagesLookupFailureSkipsRepo(t *testing.T) {
 	good := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
 	defer good.Close()
