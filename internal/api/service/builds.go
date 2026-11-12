@@ -323,6 +323,11 @@ type retryInput struct {
 	unsupported bool
 }
 
+// ErrMsgConcurrentBuilds is the message a start refused for want of a free
+// build slot carries (409 BUILD_IN_PROGRESS). The UI shows it as-is wherever a
+// compose is held back by another build, so keep it in step with the web app.
+const ErrMsgConcurrentBuilds = "additional concurrent builds are currently restricted"
+
 // StartBuild resolves the template, starts an os/exec build, and returns a build
 // id. Client errors (bad input, no match) return a 400 *Error; server errors
 // (workspace creation, template write) return a 500 *Error.
@@ -344,8 +349,10 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		return nil, newError(http.StatusServiceUnavailable, "SERVER_SHUTTING_DOWN",
 			"the server is shutting down and is not accepting new builds")
 	case !ok:
-		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS",
-			fmt.Sprintf("a build is already in progress (%s); only one compose runs at a time", activeID))
+		// The id of the build holding the slot stays in the server log: the
+		// caller is told only that it has to wait, in the same words every time.
+		logger.Logger().Infof("build %s: rejected, build %s holds the slot", id, activeID)
+		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS", ErrMsgConcurrentBuilds)
 	}
 	// Setup is not instantaneous (it resolves the template and writes to disk),
 	// and until tracker.add runs below the build is invisible to the shutdown
