@@ -94,7 +94,8 @@ func TestDownloadHint(t *testing.T) {
 	noToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "")
 	withToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "secret")
 	other, _ := newDownloadRequest(context.Background(), "https://example.com/f", "")
-	if hint := downloadHint(noToken, http.StatusNotFound); !strings.Contains(hint, TokenEnv) ||
+	if hint := downloadHint(noToken, http.StatusNotFound); !strings.Contains(hint, TokenFileFlag) ||
+		!strings.Contains(hint, TokenEnv) ||
 		!strings.Contains(hint, TokenFileEnv) || !strings.Contains(hint, tokenFileConfig) ||
 		!strings.Contains(hint, "private repository") {
 		t.Errorf("hint without token = %q", hint)

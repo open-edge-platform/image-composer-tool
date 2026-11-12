@@ -172,7 +172,8 @@ func downloadHint(req *http.Request, status int) string {
 	}
 	if req.Header.Get("Authorization") == "" {
 		return fmt.Sprintf(" (the file may be in a private repository; provide a GitHub token with read access in "+
-			"%s, or in a file that %s or the global configuration's %s names)", TokenEnv, TokenFileEnv, tokenFileConfig)
+			"a file that build %s names, in %s, or in a file that %s or the global configuration's %s names)",
+			TokenFileFlag, TokenEnv, TokenFileEnv, tokenFileConfig)
 	}
 	return " (check the URL, and that the GitHub token has read access to the repository)"
 }
