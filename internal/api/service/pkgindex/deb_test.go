@@ -262,7 +262,7 @@ func TestFetchDeb(t *testing.T) {
 		if err == nil {
 			t.Fatal("want an error for a 500")
 		}
-		if errors.Is(err, errNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			t.Errorf("a 500 was classified as not-found: %v", err)
 		}
 		if !strings.Contains(err.Error(), "500") {

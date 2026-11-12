@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -499,7 +500,10 @@ func rpmRepoSet(lookups []repoLookup) func(repoID string) bool {
 // maxConcurrentLookups. A failed lookup logs a warning and contributes
 // nothing rather than failing the whole search — the same tolerance any
 // other per-index fetch error already gets — but is marked failed so the
-// caller can report the repo as unavailable (see unavailableRepos).
+// caller can report the repo as unavailable (see unavailableRepos). An index
+// the repo does not publish at all (pkgindex.ErrNotFound) is not marked: the
+// repo has nothing there, so the answer is complete without it, and marking
+// it would leave every search over that repo permanently partial.
 func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup) []lookupResult {
 	results := make([]lookupResult, len(lookups))
 	g := new(errgroup.Group)
@@ -517,7 +521,7 @@ func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup
 				}
 				logger.Logger().Warnf("pkgindex: search lookup failed for repo %s (%s %s %s %s): %v",
 					lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
-				results[i] = lookupResult{repoID: lk.repoID, failed: true}
+				results[i] = lookupResult{repoID: lk.repoID, failed: !errors.Is(err, pkgindex.ErrNotFound)}
 				return nil
 			}
 			results[i] = lookupResult{entries: entries, repoID: lk.repoID}

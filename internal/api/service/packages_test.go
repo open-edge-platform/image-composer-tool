@@ -280,6 +280,33 @@ func TestSearchPackagesLookupFailureSkipsRepo(t *testing.T) {
 	}
 }
 
+func TestSearchPackagesMissingIndexIsNotUnavailable(t *testing.T) {
+	good := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer good.Close()
+	// Publishes no index for this suite/component/arch: every candidate 404s.
+	empty := httptest.NewServer(http.NotFoundHandler())
+	defer empty.Close()
+
+	repos := jazzyRepo(good.URL)
+	repos = append(repos, PackageRepo{
+		ID: "no-amd64", DisplayName: "No amd64", URL: empty.URL,
+		Index: []RepoIndex{{Codename: "noble", Component: "main"}},
+	})
+	s := newSearchTestService(t, repos, good.Client())
+
+	hits, _, unavailable, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("got %d hits, want the good repo's 2", len(hits))
+	}
+	// Nothing is missing from the answer, so it must not read as partial.
+	if len(unavailable) != 0 {
+		t.Errorf("unavailable = %v for a repo that publishes no index here, want none", unavailable)
+	}
+}
+
 func TestSearchPackagesRepoWithNoIndexIsSkipped(t *testing.T) {
 	s := newSearchTestService(t, []PackageRepo{{ID: "no-index", DisplayName: "No Index", URL: "http://example.invalid"}},
 		http.DefaultClient)
