@@ -192,6 +192,10 @@ export interface ComposeResponse {
   // login. Any entry with satisfied: false must be covered by a credentials
   // entry on the request before a build will start.
   credentials?: CredentialRequirement[]
+  // Ids of the catalog repositories the matched template itself installs from
+  // (its packageRepositories through extends and the default config), before
+  // this request's overrides. The Packages step shows them as in use.
+  templateRepos?: string[]
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a

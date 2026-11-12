@@ -6,10 +6,11 @@ package service
 import (
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"sigs.k8s.io/yaml"
 )
 
@@ -92,29 +93,6 @@ func TestEmbeddedCatalogCoversManifestTargets(t *testing.T) {
 // repoRef is one (url, codename, component) triple, normalised so a template and
 // the catalog can be compared regardless of trailing slashes, component order,
 // or an omitted component.
-type repoRef struct {
-	url, codename, component string
-}
-
-// normalizeRepoRef makes a triple comparable. An omitted component becomes
-// "main" because that is what generateAptSourcesContent substitutes
-// (internal/config/apt_sources.go), so an index reading "main" is reading
-// exactly what a build would install from. Components are sorted because they
-// are independent path segments, not an ordered list.
-func normalizeRepoRef(url, codename, component string) repoRef {
-	component = strings.TrimSpace(component)
-	if component == "" {
-		component = "main"
-	}
-	parts := strings.Fields(component)
-	sort.Strings(parts)
-	return repoRef{
-		url:       strings.TrimSuffix(strings.TrimSpace(url), "/"),
-		codename:  strings.TrimSpace(codename),
-		component: strings.Join(parts, " "),
-	}
-}
-
 // catalogRefs is every triple the shipped catalog can search, keyed by the
 // manifest target it is offered for.
 func catalogRefs(t *testing.T, repos []PackageRepo) map[string]map[repoRef]string {
@@ -477,5 +455,124 @@ func TestPackageReposEmptyCatalog(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d repos, want 0", len(got))
+	}
+}
+
+// Every repository a manifest template installs from must come back as in use,
+// or the Packages step would offer it as optional and unticked.
+func TestTemplateRepoIDsCoversManifestTemplates(t *testing.T) {
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+	s := &Service{manifest: m, repos: repos}
+	root := filepath.Join("..", "..", "..", "image-templates")
+	for _, c := range m.Combinations {
+		if strings.TrimSpace(c.Template) == "" {
+			continue
+		}
+		tmpl, err := config.LoadTemplate(filepath.Join(root, c.Template), false)
+		if err != nil {
+			t.Fatalf("load %s: %v", c.Template, err)
+		}
+		for _, r := range tmpl.PackageRepositories {
+			if r.URL == "" || strings.Contains(r.URL, "<URL>") {
+				continue
+			}
+			if got := s.templateRepoIDs(c.OS, []config.PackageRepository{r}); len(got) != 1 {
+				t.Errorf("%s (%s): repository %s %s maps to %v, want one catalog id",
+					c.Template, c.OS, r.URL, r.Codename, got)
+			}
+		}
+	}
+}
+
+func TestTemplateRepoIDs(t *testing.T) {
+	t.Parallel()
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	s := &Service{manifest: m, repos: repos}
+	ros := config.PackageRepository{URL: "http://packages.ros.org/ros2/ubuntu/", Codename: "noble", Component: "main"}
+	tests := []struct {
+		name  string
+		os    string
+		repos []config.PackageRepository
+		want  []string
+	}{
+		{name: "full triple, trailing slash ignored", os: "ubuntu24",
+			repos: []config.PackageRepository{ros}, want: []string{"ros2-jazzy"}},
+		{name: "omitted component reads as main", os: "ubuntu24",
+			repos: []config.PackageRepository{{URL: ros.URL, Codename: "noble"}}, want: []string{"ros2-jazzy"}},
+		{name: "duplicates collapse", os: "ubuntu24",
+			repos: []config.PackageRepository{ros, ros}, want: []string{"ros2-jazzy"}},
+		// Same host as ROS 2 Lyrical on Ubuntu 26.04, but another suite.
+		{name: "same host, other suite", os: "ubuntu26", repos: []config.PackageRepository{ros}, want: nil},
+		{name: "other component set, same suite", os: "ubuntu24",
+			repos: []config.PackageRepository{{URL: ros.URL, Codename: "noble", Component: "main universe"}},
+			want:  []string{"ros2-jazzy"}},
+		{name: "placeholder and unknown skipped", os: "ubuntu24", repos: []config.PackageRepository{
+			{URL: "<URL>", Codename: "x"}, {URL: "https://example.com/repo", Codename: "noble"}}, want: nil},
+		{name: "none", os: "ubuntu24", repos: nil, want: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := s.templateRepoIDs(tc.os, tc.repos)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("templateRepoIDs = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A repository inherited through extends counts as the template's own, and one
+// the user enabled in the Advanced tab does not.
+func TestComposeTemplateRepos(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+	s.repos = repos
+	parent := minimalTemplate + `packageRepositories:
+  - codename: noble
+    url: http://packages.ros.org/ros2/ubuntu
+    pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
+    component: main
+`
+	child := "extends: parent.yml\n" + minimalTemplate
+	for name, body := range map[string]string{"parent.yml": parent, "robotics.yml": child} {
+		if err := os.WriteFile(filepath.Join(s.cfg.TemplatesDir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	sel := Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
+
+	res, err := s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if !slices.Equal(res.TemplateRepos, []string{"ros2-jazzy"}) {
+		t.Errorf("TemplateRepos = %v, want [ros2-jazzy] inherited through extends", res.TemplateRepos)
+	}
+
+	sel.Repos = []string{"intel-openvino"}
+	res, err = s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose with a repo enabled: %v", err)
+	}
+	if !slices.Equal(res.TemplateRepos, []string{"ros2-jazzy"}) {
+		t.Errorf("TemplateRepos = %v, want only the template's own [ros2-jazzy]", res.TemplateRepos)
 	}
 }

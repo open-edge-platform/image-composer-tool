@@ -462,6 +462,7 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		basePackages := r.BasePackages
 		out.BasePackages = &basePackages
 	}
+	out.TemplateRepos = optStrs(r.TemplateRepos)
 	if len(r.Credentials) > 0 {
 		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
 		for _, c := range r.Credentials {

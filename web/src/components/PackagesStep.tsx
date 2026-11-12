@@ -8,7 +8,7 @@ import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
-import { templateLockedRepos } from '../lib/edgepack'
+import { templateInUseRepos } from '../lib/templateRepos'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -21,6 +21,9 @@ interface PackagesStepProps {
   // The matched template's own package list (ComposeResponse.basePackages),
   // fetched by AdvancedPage's compose call. Empty until that call resolves.
   basePackages: string[]
+  // Ids of the repositories the matched template itself installs from
+  // (ComposeResponse.templateRepos), through extends and the default config.
+  templateRepos?: string[]
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -45,7 +48,7 @@ const EDGE_PACK_RETRY_LIMIT = 24
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
 // running list of added packages.
-export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
+export function PackagesStep({ os, active, basePackages, templateRepos = [] }: PackagesStepProps) {
   const [repos, setRepos] = useState<PackageRepo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // undefined while in flight, null once it is known there is no Edge Pack to
@@ -114,14 +117,14 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   const baseLock = useBaseLock(os, repos, basePackages)
   const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
-  // Repos the matched template already draws an Edge Pack package from —
-  // these get the same "always on, can't uncheck" treatment the Repositories
+  // Repos the matched template already installs from (see templateInUseRepos).
+  // These get the same "always on, can't uncheck" treatment the Repositories
   // tab already gives the target's base repo. Computed before enabledRepoIds
   // below: a template-locked repo renders checked but deliberately never
-  // joins enabledRepos (see templateLockedRepos), so without this, a
+  // joins enabledRepos (see templateInUseRepos), so without this, a
   // selection resolving only against one (e.g. intel-eci) would have it
   // silently missing from the shared resolver's own checked-repo scope.
-  const lockedRepoIds = new Set(edgePack ? templateLockedRepos(edgePack, baseLock) : [])
+  const lockedRepoIds = templateInUseRepos(templateRepos, edgePack, baseLock)
   // Every repo a build actually resolves against right now — the one set a
   // floating pick's "what does this really resolve to" lookup must be
   // checked against, regardless of which repo it was picked from or whether
