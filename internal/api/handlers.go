@@ -163,12 +163,12 @@ func (s *Server) SearchPackages(w http.ResponseWriter, r *http.Request, params h
 	if params.Curated != nil {
 		curated = *params.Curated
 	}
-	hits, total, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset, curated)
+	hits, total, unavailable, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset, curated)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, fromPackageSearchResults(query, hits, total))
+	writeJSON(w, http.StatusOK, fromPackageSearchResults(query, hits, total, unavailable))
 }
 
 // ValidateTemplate handles POST /templates/validate.

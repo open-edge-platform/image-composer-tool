@@ -28,11 +28,11 @@ const repos: PackageRepo[] = [
   { id: 'intel-eci', displayName: 'Intel ECI', url: 'http://example/eci', enabledByDefault: false },
 ]
 
-function Browser() {
+function Browser({ os = 'ubuntu24' }: { os?: string }) {
   const enabledRepos = useStore((s) => s.enabledRepos)
   const enabledRepoIds = repos.filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
-  const resolver = useVersionResolver('ubuntu24', enabledRepoIds)
-  return <PackageRepoBrowser repos={repos} os="ubuntu24" baseLock={noLock} resolver={resolver} />
+  const resolver = useVersionResolver(os, enabledRepoIds)
+  return <PackageRepoBrowser repos={repos} os={os} baseLock={noLock} resolver={resolver} />
 }
 
 const newest: Record<string, PackageSearchResult> = {
@@ -124,5 +124,109 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     await act(async () => release())
 
     expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }])
+  })
+
+  // Holds every lookup until release() so the selection can change meanwhile.
+  const gateLookups = () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    mockApi.searchPackages.mockImplementation((args: { q?: string }) => gate.then(() => answer(args)))
+    return () => act(async () => release())
+  }
+
+  it('keeps a version picked while the lookup was in flight', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
+    await renderBrowser()
+    const release = gateLookups()
+    await act(async () => fireEvent.click(pinButton()))
+
+    act(() => useStore.getState().setPackage({ name: 'vim', version: '2:9.0.0-1', repo: 'base' }, { releaseRepo: false }))
+    await release()
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '2:9.0.0-1', repo: 'base' }])
+  })
+
+  it('leaves alone a package removed and added again while the lookup was in flight', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
+    await renderBrowser()
+    const release = gateLookups()
+    await act(async () => fireEvent.click(pinButton()))
+
+    act(() => {
+      useStore.getState().removePackage('vim', { releaseRepo: false })
+      useStore.getState().setPackage({ name: 'vim', version: '', repo: 'base' }, { releaseRepo: false })
+    })
+    await release()
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '', repo: 'base' }])
+  })
+
+  it('discards the answer when the target changes while the lookup was in flight', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
+    let rerender!: (ui: React.ReactElement) => void
+    await act(async () => {
+      rerender = render(<Browser />).rerender
+    })
+    const release = gateLookups()
+    await act(async () => fireEvent.click(pinButton()))
+
+    // Same repo ids on another OS: the answer for ubuntu24 must not land here.
+    await act(async () => rerender(<Browser os="ubuntu26" />))
+    await release()
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '', repo: 'base' }])
+    expect(screen.getByRole('status').textContent).toMatch(/changed while checking, so nothing was updated/)
+  })
+
+  it('changes nothing, and says which repo, when a repo index could not be read', async () => {
+    useStore.setState({
+      addedPackages: [
+        { name: 'vim', version: '', repo: 'base' },
+        { name: 'curl', version: '7.88.1-10', repo: 'base' },
+      ],
+    })
+    mockApi.searchPackages.mockImplementation((args: { q?: string }) =>
+      Promise.resolve({ ...answer(args), unavailableRepos: args.q === 'curl' ? ['intel-eci'] : undefined }),
+    )
+    await renderBrowser()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([
+      { name: 'vim', version: '', repo: 'base' },
+      { name: 'curl', version: '7.88.1-10', repo: 'base' },
+    ])
+    expect(screen.getByRole('status').textContent).toMatch(/Couldn't read Intel ECI right now, so nothing was updated/)
+  })
+
+  it('changes nothing when a lookup fails outright', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
+    mockApi.searchPackages.mockImplementation((args: { q?: string }) =>
+      args.q ? Promise.reject(new Error('offline')) : Promise.resolve(answer(args)),
+    )
+    await renderBrowser()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '', repo: 'base' }])
+    expect(screen.getByRole('status').textContent).toMatch(/Couldn't check for newer versions/)
+  })
+
+  it('fetches every name afresh rather than reusing an earlier answer', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
+    await renderBrowser()
+    await act(async () => fireEvent.click(pinButton()))
+    expect(useStore.getState().addedPackages[0].version).toBe('2:9.1.0016-1')
+
+    // A newer build lands upstream; the same repos are checked, so a cached
+    // answer would still say 2:9.1.0016-1.
+    newest.vim = { name: 'vim', version: '2:9.1.0016-2', repository: 'base' }
+    try {
+      mockApi.searchPackages.mockClear()
+      await act(async () => fireEvent.click(pinButton()))
+
+      expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ q: 'vim' }))
+      expect(useStore.getState().addedPackages[0].version).toBe('2:9.1.0016-2')
+    } finally {
+      newest.vim = { name: 'vim', version: '2:9.1.0016-1', repository: 'base' }
+    }
   })
 })

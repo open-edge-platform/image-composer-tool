@@ -15,6 +15,19 @@ import type { PackageSearchResult } from '../api/types'
 
 export type VersionResolver = ReturnType<typeof useVersionResolver>
 
+// What lookupNewest found. `found` is only safe to act on when `complete`.
+export interface NewestLookup {
+  found: Record<string, PackageSearchResult>
+  // False when a lookup failed or the server couldn't read one of the
+  // repos' indexes: the newest version may be in what's missing, so pinning
+  // from `found` could pin an older version or even downgrade a pin.
+  complete: boolean
+  // Repos the server reported unreadable, for the caller's message.
+  unavailableRepos: string[]
+  // The target or checked repos changed while the lookups were in flight.
+  stale: boolean
+}
+
 export function useVersionResolver(os: string, repoIds: string[]) {
   const [liveResolved, setLiveResolved] = useState<Record<string, PackageSearchResult>>({})
   const [resolvingNames, setResolvingNames] = useState<Set<string>>(new Set())
@@ -27,7 +40,9 @@ export function useVersionResolver(os: string, repoIds: string[]) {
   // leaving the manual Resolve action as the only way back in.
   const [attemptedNames, setAttemptedNames] = useState<Set<string>>(new Set())
 
-  const repoIdsKey = repoIds.join(',')
+  // The target is part of the scope too: the same repo ids can carry other
+  // versions for another OS, so an answer for one must never land on the other.
+  const repoIdsKey = `${os}|${repoIds.join(',')}`
   // Mirrors repoIdsKey for an in-flight request to check against once it
   // settles — state alone can't do this, since an effect's setState calls
   // below are what update it, and a request already waiting on the network
@@ -89,31 +104,35 @@ export function useVersionResolver(os: string, repoIds: string[]) {
   }
 
   // The newest version of each name across the checked repos, for callers
-  // that need the answers themselves rather than just the liveResolved
-  // update — "Update to latest version" turns each one into an exact pin. Unlike
-  // resolveVersion this looks up pinned names too, since a pin says nothing
-  // about whether a newer version exists. A name with no exact match, or
-  // whose lookup failed, is simply absent from the result. Resolves to {} if
-  // the repo scope changed mid-flight, the same staleness rule as above.
-  const lookupNewest = (names: string[]): Promise<Record<string, PackageSearchResult>> => {
+  // that act on the answers rather than just display them — "Update to
+  // latest version" turns each one into an exact pin. Unlike resolveVersion
+  // this looks up pinned names too, since a pin says nothing about whether a
+  // newer version exists. Every name is fetched fresh rather than reused from
+  // liveResolved, which is a display snapshot that can be arbitrarily old,
+  // and the shared cache is refreshed only from an answer that is complete
+  // and still in scope. A name with no exact match is absent from `found`.
+  const lookupNewest = (names: string[]): Promise<NewestLookup> => {
     const scope = repoIdsKey
-    return Promise.allSettled(
-      names.map((name) =>
-        name in liveResolved
-          ? Promise.resolve(liveResolved[name])
-          : api
-              .searchPackages({ os, repos: repoIds, q: name, limit: 20 })
-              .then((r) => r.packages.find((p) => p.name === name)),
-      ),
-    ).then((settled) => {
-      if (scopeRef.current !== scope) return {}
-      const found: Record<string, PackageSearchResult> = {}
-      settled.forEach((s) => {
-        if (s.status === 'fulfilled' && s.value) found[s.value.name] = s.value
-      })
-      setLiveResolved((prev) => ({ ...prev, ...found }))
-      return found
-    })
+    return Promise.allSettled(names.map((name) => api.searchPackages({ os, repos: repoIds, q: name, limit: 20 }))).then(
+      (settled) => {
+        const found: Record<string, PackageSearchResult> = {}
+        const unavailable = new Set<string>()
+        let failed = false
+        settled.forEach((s, i) => {
+          if (s.status === 'rejected') {
+            failed = true
+            return
+          }
+          s.value.unavailableRepos?.forEach((r) => unavailable.add(r))
+          const exact = s.value.packages.find((p) => p.name === names[i])
+          if (exact) found[exact.name] = exact
+        })
+        const stale = scopeRef.current !== scope
+        const complete = !failed && unavailable.size === 0
+        if (complete && !stale) setLiveResolved((prev) => ({ ...prev, ...found }))
+        return { found, complete, unavailableRepos: [...unavailable].sort(), stale }
+      },
+    )
   }
 
   return { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames, lookupNewest }
