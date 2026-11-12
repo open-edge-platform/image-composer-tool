@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -87,9 +88,14 @@ func (s *Service) ValidateSearchQuery(query string) error {
 // "Show frequently used" toggle uses. A matched repo with no curated list
 // contributes nothing to that narrowed set, so the caller sees zero results
 // rather than silently falling back to the full catalog.
-func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int, curatedOnly bool) (hits []PackageSearchHit, total int, err error) {
+//
+// unavailable lists the repos with at least one index that failed to load,
+// whose packages may therefore be missing from hits. The search still
+// succeeds, but a caller that must not act on a partial answer (pinning the
+// "newest" version, say) can tell it apart from a complete one.
+func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int, curatedOnly bool) (hits []PackageSearchHit, total int, unavailable []string, err error) {
 	if err := s.ValidateSearchQuery(query); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	if limit <= 0 {
 		limit = defaultSearchLimit
@@ -115,7 +121,7 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 		}
 		return hits[i].RepoID < hits[j].RepoID
 	})
-	return paginate(hits, offset, limit), len(hits), nil
+	return paginate(hits, offset, limit), len(hits), unavailableRepos(results), nil
 }
 
 // curatedNameSet unions the CuratedPackages of every given repo into a
@@ -412,6 +418,24 @@ func debArch(arch string) string {
 type lookupResult struct {
 	entries []pkgindex.Entry
 	repoID  string
+	// failed is set when this index could not be loaded, so its repo's
+	// packages are missing from entries rather than genuinely absent.
+	failed bool
+}
+
+// unavailableRepos returns, sorted and deduplicated, the repos with at least
+// one index that failed to load.
+func unavailableRepos(results []lookupResult) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, r := range results {
+		if r.failed && !seen[r.repoID] {
+			seen[r.repoID] = true
+			out = append(out, r.repoID)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // rpmRepoSet reports which of these lookups' repositories are rpm, so version
@@ -431,7 +455,11 @@ func rpmRepoSet(lookups []repoLookup) func(repoID string) bool {
 // runLookups fetches every planned lookup concurrently, bounded by
 // maxConcurrentLookups. A failed lookup logs a warning and contributes
 // nothing rather than failing the whole search — the same tolerance any
-// other per-index fetch error already gets.
+// other per-index fetch error already gets — but is marked failed so the
+// caller can report the repo as unavailable (see unavailableRepos). An index
+// the repo does not publish at all (pkgindex.ErrNotFound) is not marked: the
+// repo has nothing there, so the answer is complete without it, and marking
+// it would leave every search over that repo permanently partial.
 func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup) []lookupResult {
 	results := make([]lookupResult, len(lookups))
 	g := new(errgroup.Group)
@@ -449,6 +477,7 @@ func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup
 				}
 				logger.Logger().Warnf("pkgindex: search lookup failed for repo %s (%s %s %s %s): %v",
 					lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
+				results[i] = lookupResult{repoID: lk.repoID, failed: !errors.Is(err, pkgindex.ErrNotFound)}
 				return nil
 			}
 			results[i] = lookupResult{entries: entries, repoID: lk.repoID}

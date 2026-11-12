@@ -1132,6 +1132,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PackageSearchResult"
+        unavailableRepos:
+          type: array
+          items:
+            type: string
+          description: >
+            Repository IDs with at least one package index that could not be
+            loaded (an unreachable mirror, say), so their packages may be
+            missing from `packages`. The search still succeeds; omitted when
+            every index loaded. A caller that must not act on a partial
+            answer, such as pinning the newest version, should check it.
 
     # ── Template composition ──
 
