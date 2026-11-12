@@ -21,6 +21,9 @@ import (
 // download, so the operator can inspect or reuse the resolved YAML.
 func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	b, ok := s.svc.Build(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
@@ -47,6 +50,9 @@ func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 // once a build has finished (the log file is written at completion).
 func (s *Server) handleBuildLogFile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	b, ok := s.svc.Build(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
@@ -68,6 +74,9 @@ func (s *Server) handleBuildLogFile(w http.ResponseWriter, r *http.Request) {
 // the service. Large files stream chunk-by-chunk rather than buffering.
 func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	name := r.PathValue("name")
 	rc, filename, err := s.svc.OpenArtifact(r.Context(), id, name)
 	if err != nil {

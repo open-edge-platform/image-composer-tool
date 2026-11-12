@@ -22,6 +22,7 @@ import (
 // for download alongside their configuration summary and artifacts.
 type buildMeta struct {
 	ID       string `json:"id"`
+	Owner    string `json:"owner,omitempty"`
 	Status   string `json:"status"`
 	Template string `json:"template"`
 	// TemplatePath is the on-disk template the build ran against. Persisted so a
@@ -38,6 +39,8 @@ type buildMeta struct {
 	// Residual outlives the process on purpose: leftover mounts and loop devices
 	// survive a server restart, so the remediation hint must too.
 	Residual *ResidualIssue `json:"residual,omitempty"`
+	// Meta is the Executor's detail about where the build ran (worker, URL).
+	Meta map[string]string `json:"meta,omitempty"`
 	// Retry is what this build was resolved from (credentials/new-user passwords
 	// already hashed), persisted so RetryBuild still works on a build reconstructed
 	// after a restart instead of reporting it as predating retry support. Written
@@ -125,6 +128,7 @@ func (b *build) writeMetaLocked() error {
 	res := b.snapshot()
 	m := buildMeta{
 		ID:           b.ID,
+		Owner:        b.Owner,
 		Status:       string(res.Status),
 		Template:     b.Template,
 		TemplatePath: res.TemplatePath,
@@ -135,6 +139,7 @@ func (b *build) writeMetaLocked() error {
 		ErrMsg:       res.ErrMsg,
 		LogFile:      res.LogFile,
 		Residual:     res.Residual,
+		Meta:         b.snapshotMeta(),
 		Retry:        b.retry,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -194,6 +199,7 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 	status, errMsg := reconcileInterrupted(BuildStatus(m.Status), m.ErrMsg)
 	b := &build{
 		ID:           m.ID,
+		Owner:        m.Owner,
 		RootDir:      rootDir,
 		WorkDir:      filepath.Join(rootDir, "work"),
 		CacheDir:     filepath.Join(rootDir, "cache"),
@@ -208,9 +214,61 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 		artifacts:    m.Artifacts,
 		errMsg:       errMsg,
 		residual:     m.Residual,
+		meta:         m.Meta,
 		retry:        m.Retry,
 	}
 	return b
+}
+
+// buildForRecovery reconstructs a build whose record says it was still running
+// when the previous server stopped, as a live build: done stays open and the
+// status is kept, so recoverExecutorBuilds can either follow it to completion
+// or record its real outcome. Only meaningful with a Recoverer executor; the
+// local path has nothing to recover from (see reconcileInterrupted).
+func buildForRecovery(rootDir string, m buildMeta) *build {
+	return &build{
+		ID:           m.ID,
+		Owner:        m.Owner,
+		RootDir:      rootDir,
+		WorkDir:      filepath.Join(rootDir, "work"),
+		CacheDir:     filepath.Join(rootDir, "cache"),
+		Template:     m.Template,
+		TemplatePath: templatePathFromMeta(rootDir, m),
+		Command:      m.Command,
+		Summary:      m.Summary,
+		CreatedAt:    m.CreatedAt,
+		done:         make(chan struct{}),
+		status:       BuildStatus(m.Status),
+		meta:         m.Meta,
+		retry:        m.Retry,
+	}
+}
+
+// listRunningOnDisk returns, oldest first, every persisted build whose record is
+// still non-terminal and that has no live record in the tracker.
+func (s *Service) listRunningOnDisk() []*build {
+	var out []*build
+	entries, _ := os.ReadDir(s.buildsRoot())
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, live := s.tracker.get(e.Name()); live {
+			continue
+		}
+		rootDir := filepath.Join(s.buildsRoot(), e.Name())
+		data, err := os.ReadFile(metaPath(rootDir))
+		if err != nil {
+			continue
+		}
+		var m buildMeta
+		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" || isTerminal(BuildStatus(m.Status)) {
+			continue
+		}
+		out = append(out, buildForRecovery(rootDir, m))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
 }
 
 // templatePathFromMeta resolves the template path for a reconstructed build.
@@ -295,12 +353,31 @@ type HistoryItem struct {
 	Template  string
 	CreatedAt time.Time
 	Summary   *ComposeSummary
+	// Meta is the Executor's detail about where the build ran, nil locally.
+	Meta map[string]string
 }
 
-// ListBuilds returns the compose history newest-first. It merges live in-memory
-// builds (authoritative for status) with meta.json records on disk (so history
-// survives restarts).
-func (s *Service) ListBuilds() []HistoryItem {
+// ownedBy reports whether a build attributed to buildOwner may be seen by
+// caller. A build with no owner was recorded before owners existed, or by a
+// server that attributes nothing; it stays visible to everyone rather than
+// vanishing from history.
+func ownedBy(buildOwner, caller string) bool {
+	return buildOwner == "" || buildOwner == caller
+}
+
+// OwnsBuild reports whether caller may see build id. Unknown builds are not
+// owned by anyone, so a caller cannot tell "not mine" from "does not exist",
+// which is the point: a distinct answer would confirm that somebody else's
+// build exists.
+func (s *Service) OwnsBuild(id, caller string) bool {
+	b, ok := s.getBuild(id)
+	return ok && ownedBy(b.Owner, caller)
+}
+
+// ListBuilds returns the compose history newest-first, limited to the builds
+// caller may see. It merges live in-memory builds (authoritative for status)
+// with meta.json records on disk (so history survives restarts).
+func (s *Service) ListBuilds(caller string) []HistoryItem {
 	seen := make(map[string]HistoryItem)
 
 	// Disk records first (may be stale), then overlay live in-memory builds.
@@ -315,7 +392,7 @@ func (s *Service) ListBuilds() []HistoryItem {
 			continue // no meta.json (e.g. a build dir from before this feature)
 		}
 		var m buildMeta
-		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" {
+		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" || !ownedBy(m.Owner, caller) {
 			continue
 		}
 		// A disk record still marked non-terminal belongs to a build the previous
@@ -329,11 +406,15 @@ func (s *Service) ListBuilds() []HistoryItem {
 			Template:  m.Template,
 			CreatedAt: m.CreatedAt,
 			Summary:   m.Summary,
+			Meta:      m.Meta,
 		}
 	}
 
 	// Overlay live builds — their status/artifacts are authoritative.
 	for _, b := range s.tracker.all() {
+		if !ownedBy(b.Owner, caller) {
+			continue
+		}
 		res := b.snapshot()
 		seen[b.ID] = HistoryItem{
 			ID:        b.ID,
@@ -341,6 +422,7 @@ func (s *Service) ListBuilds() []HistoryItem {
 			Template:  b.Template,
 			CreatedAt: b.CreatedAt,
 			Summary:   b.Summary,
+			Meta:      b.snapshotMeta(),
 		}
 	}
 
@@ -371,6 +453,12 @@ type BuildDetails struct {
 	ErrMsg       string
 	Artifacts    []Artifact     // partial outputs on fail/cancel (with on-disk path)
 	Residual     *ResidualIssue // teardown-residue warning for manual remediation
+	// Executor names the backend that ran the build ("local" or the Executor's
+	// name); Meta is that backend's detail (worker, URL). Phase is the phase the
+	// Executor last reported, nil when phases are log-derived.
+	Executor string
+	Meta     map[string]string
+	Phase    *Phase
 }
 
 // BuildDetails returns the command and paths for a build so the UI can show
@@ -382,6 +470,15 @@ func (s *Service) BuildDetails(id string) (*BuildDetails, error) {
 		return nil, newError(http.StatusNotFound, "NOT_FOUND", "build not found")
 	}
 	res := b.snapshot()
+	meta := b.snapshotMeta()
+	executor := "local"
+	if name := meta["executor"]; name != "" {
+		executor = name
+	}
+	var phase *Phase
+	if p, ok := b.ReportedPhase(); ok {
+		phase = &p
+	}
 	return &BuildDetails{
 		BuildID:      id,
 		Status:       res.Status,
@@ -396,6 +493,9 @@ func (s *Service) BuildDetails(id string) (*BuildDetails, error) {
 		ErrMsg:       res.ErrMsg,
 		Artifacts:    res.Artifacts,
 		Residual:     res.Residual,
+		Executor:     executor,
+		Meta:         meta,
+		Phase:        phase,
 	}, nil
 }
 

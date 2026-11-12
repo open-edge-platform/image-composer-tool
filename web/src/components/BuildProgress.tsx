@@ -1,14 +1,21 @@
-// Visual stepper showing the current image-composition phase. Phases are derived
-// server-side from the build log (best-effort) and delivered via SSE "phase"
-// events; see internal/api/phases.go.
+// Visual stepper showing the current image-composition phase. Phases are either
+// derived server-side from the build log (best-effort; see
+// internal/api/service/phases.go) or reported by the build executor itself
+// (GET /server lists them), and delivered via SSE "phase" events.
+
+import type { Phase } from '../api/types'
 
 interface BuildProgressProps {
-  // Current phase id (one of PHASES below).
+  // Current phase id (one of the phases below).
   phase: string
   // Install-phase counter, when available (0/0 otherwise).
   install: { done: number; total: number }
   // Whether the build failed — the active step is shown in red.
   failed?: boolean
+  // The executor's own phases, when the server reports them. The terminal
+  // "done" step is appended here, since it is set from the build's status
+  // rather than reported by any executor.
+  phases?: Phase[]
 }
 
 // The terminal phase id. Exported because it is the one phase the stream does
@@ -20,15 +27,18 @@ export const PHASE_DONE = 'done'
 // Initial phase id, before any log marker has been matched.
 export const PHASE_INITIAL = 'preparing'
 
-const PHASES: { id: string; label: string }[] = [
+// The local, log-derived phases.
+export const LOCAL_PHASES: Phase[] = [
   { id: PHASE_INITIAL, label: 'Preparing' },
   { id: 'packages', label: 'Resolving & downloading packages' },
   { id: 'installing', label: 'Installing packages' },
   { id: 'generating', label: 'Generating image' },
-  { id: PHASE_DONE, label: 'Done' },
 ]
 
-export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
+const DONE_PHASE: Phase = { id: PHASE_DONE, label: 'Done' }
+
+export function BuildProgress({ phase, install, failed, phases }: BuildProgressProps) {
+  const PHASES = [...(phases && phases.length > 0 ? phases : LOCAL_PHASES), DONE_PHASE]
   const current = Math.max(0, PHASES.findIndex((p) => p.id === phase))
 
   return (

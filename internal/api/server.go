@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/api/auth"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
@@ -64,6 +65,15 @@ type Config struct {
 	// EdgePackPath is an optional Edge Pack catalog file; empty uses the
 	// embedded copy.
 	EdgePackPath string
+	// Executor, when set, runs builds somewhere other than this host (see
+	// service.Executor). Nil runs ICTBinary locally.
+	Executor service.Executor
+	// MaxConcurrent bounds builds in flight; zero means one. Only an Executor
+	// that dispatches to separate machines should raise it.
+	MaxConcurrent int
+	// Auth identifies callers; nil means auth.None{}: one fixed local user,
+	// which is the right default for serve on a developer's own machine.
+	Auth auth.Provider
 }
 
 // Server holds the HTTP server's dependencies: its listen address and the
@@ -71,6 +81,7 @@ type Config struct {
 type Server struct {
 	addr string
 	svc  *service.Service
+	auth auth.Provider
 }
 
 // New constructs a Server, building the underlying service (which loads and
@@ -86,11 +97,17 @@ func New(cfg Config) (*Server, error) {
 
 		PackageReposPath: cfg.PackageReposPath,
 		EdgePackPath:     cfg.EdgePackPath,
+		Executor:         cfg.Executor,
+		MaxConcurrent:    cfg.MaxConcurrent,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Server{addr: cfg.Addr, svc: svc}, nil
+	provider := cfg.Auth
+	if provider == nil {
+		provider = auth.None{}
+	}
+	return &Server{addr: cfg.Addr, svc: svc, auth: provider}, nil
 }
 
 // Start registers routes and serves HTTP until ctx is cancelled or the
@@ -106,7 +123,9 @@ func New(cfg Config) (*Server, error) {
 // instead of being torn down with it.
 func (s *Server) Start(ctx context.Context) error {
 	log := logger.Logger()
-	handler := withMiddleware(s.routes())
+	// Identity covers the API only, and sits inside withMiddleware so CORS
+	// preflights and panic recovery still apply to refused requests.
+	handler := withMiddleware(authenticateAPI(s.auth, s.routes()))
 
 	srv := &http.Server{
 		Addr:              s.addr,
@@ -114,7 +133,12 @@ func (s *Server) Start(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	service.LogCancelSupport(s.svc.UseSudo())
-	log.Infof("ICT web UI API listening on %s", s.addr)
+	log.Infof("ICT web UI API listening on %s (builds: %s, up to %d at once; identity: %s)",
+		s.addr, s.svc.ExecutorName(), s.svc.MaxConcurrent(), s.auth.Mode())
+
+	// Builds a previous instance left running on a remote executor are picked
+	// up before the first request, so history never shows them as interrupted.
+	s.svc.RecoverExecutorBuilds(ctx)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()

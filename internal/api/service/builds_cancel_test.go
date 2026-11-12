@@ -760,8 +760,8 @@ func TestStartBuildRejectedAfterAdmissionClosed(t *testing.T) {
 	if n := len(s.tracker.all()); n != 0 {
 		t.Fatalf("tracker has %d builds; a refused start must not create one", n)
 	}
-	if id := s.activeBuildID; id != "" {
-		t.Fatalf("build slot held by %q after a refused start", id)
+	if n := len(s.activeBuilds); n != 0 {
+		t.Fatalf("%d build slots held after a refused start", n)
 	}
 }
 

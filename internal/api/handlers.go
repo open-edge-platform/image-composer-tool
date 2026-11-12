@@ -45,7 +45,7 @@ func (s *Server) StartBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
 		return
 	}
-	acc, err := s.svc.StartBuild(toBuildRequest(req))
+	acc, err := s.svc.StartBuild(toBuildRequest(req, ownerOf(r)))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -54,7 +54,10 @@ func (s *Server) StartBuild(w http.ResponseWriter, r *http.Request) {
 }
 
 // CancelBuild handles POST /builds/{id}/cancel.
-func (s *Server) CancelBuild(w http.ResponseWriter, _ *http.Request, id httpapi.BuildId) {
+func (s *Server) CancelBuild(w http.ResponseWriter, r *http.Request, id httpapi.BuildId) {
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	acc, err := s.svc.CancelBuild(id)
 	if err != nil {
 		writeServiceError(w, err)
@@ -72,6 +75,9 @@ func (s *Server) CancelBuild(w http.ResponseWriter, _ *http.Request, id httpapi.
 // alongside the other build endpoints that don't fit it (sse.go, downloads.go).
 func (s *Server) handleRetryBuild(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	acc, err := s.svc.RetryBuild(id)
 	if err != nil {
 		writeServiceError(w, err)
@@ -81,12 +87,15 @@ func (s *Server) handleRetryBuild(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListBuilds handles GET /builds.
-func (s *Server) ListBuilds(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds(), time.Now().UTC()))
+func (s *Server) ListBuilds(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds(ownerOf(r)), s.svc.MaxConcurrent(), time.Now().UTC()))
 }
 
 // GetBuildDetails handles GET /builds/{id}/details.
-func (s *Server) GetBuildDetails(w http.ResponseWriter, _ *http.Request, id httpapi.BuildId) {
+func (s *Server) GetBuildDetails(w http.ResponseWriter, r *http.Request, id httpapi.BuildId) {
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	d, err := s.svc.BuildDetails(id)
 	if err != nil {
 		writeServiceError(w, err)
@@ -96,7 +105,10 @@ func (s *Server) GetBuildDetails(w http.ResponseWriter, _ *http.Request, id http
 }
 
 // ListBuildArtifacts handles GET /builds/{id}/artifacts.
-func (s *Server) ListBuildArtifacts(w http.ResponseWriter, _ *http.Request, id httpapi.BuildId) {
+func (s *Server) ListBuildArtifacts(w http.ResponseWriter, r *http.Request, id httpapi.BuildId) {
+	if !s.requireOwner(w, r, id) {
+		return
+	}
 	l, err := s.svc.BuildArtifacts(id)
 	if err != nil {
 		writeServiceError(w, err)

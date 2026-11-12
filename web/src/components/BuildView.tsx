@@ -10,6 +10,7 @@ import { artifactTypeLabel } from '../api/types'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { labelFor, useStore } from '../store'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
+import { useServerInfo } from '../lib/serverInfo'
 
 interface BuildViewProps {
   buildId: string
@@ -55,6 +56,11 @@ export function BuildView({
   isActive,
 }: BuildViewProps) {
   const manifest = useStore((s) => s.manifest)
+  const serverInfo = useServerInfo()
+  // An executor that reports its own phases starts at its first one; the local
+  // path starts at the first log-derived phase.
+  const executorPhases = serverInfo?.executor.phases
+  const initialPhase = executorPhases?.[0]?.id ?? PHASE_INITIAL
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>(isActive ? 'running' : 'loading')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -63,7 +69,7 @@ export function BuildView({
   const [cancelError, setCancelError] = useState<string>('')
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const [phase, setPhase] = useState<string>(PHASE_INITIAL)
+  const [phase, setPhase] = useState<string>(initialPhase)
   const [install, setInstall] = useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -76,7 +82,7 @@ export function BuildView({
     setCancelError('')
     setDetails(null)
     setDetailsOpen(false)
-    setPhase(isActive ? PHASE_INITIAL : PHASE_DONE)
+    setPhase(isActive ? initialPhase : PHASE_DONE)
     setInstall({ done: 0, total: 0 })
 
     // Fetch the configuration summary for the details panel and the template
@@ -260,7 +266,8 @@ export function BuildView({
   // what the build is reproducible from, so it is offered beside the outputs
   // rather than tucked into the details panel. It keeps its own download
   // endpoint because it lives outside the work dir, which is the only tree the
-  // by-name artifact download will resolve a path in.
+  // by-name artifact download will resolve a path in. An output a remote build
+  // service published elsewhere links straight to where it lives.
   const artifactRows: {
     key: string
     name: string
@@ -268,13 +275,15 @@ export function BuildView({
     size?: string
     path?: string
     href: string
+    external: boolean
   }[] = artifacts.map((a) => ({
-    key: a.path,
+    key: a.url ?? a.path ?? a.name,
     name: a.name,
     type: a.type,
     size: a.size,
-    path: a.path,
-    href: `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`,
+    path: a.url ?? a.path,
+    href: a.url ?? `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`,
+    external: !!a.url,
   }))
   if (details?.template) {
     // The server hands the outputs over already ordered, images first and the
@@ -288,6 +297,7 @@ export function BuildView({
       type: 'template',
       path: details.templatePath,
       href: api.templateUrl(buildId),
+      external: false,
     })
   }
 
@@ -367,6 +377,7 @@ export function BuildView({
           phase={phase}
           install={install}
           failed={status === 'failed' || status === 'cancelled'}
+          phases={executorPhases}
         />
       )}
 
@@ -574,7 +585,7 @@ export function BuildView({
                 <th className="px-3 py-2">Name</th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Size</th>
-                <th className="px-3 py-2">Path</th>
+                <th className="px-3 py-2">Location</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -585,11 +596,11 @@ export function BuildView({
                   <td className="px-3 py-2">{artifactTypeLabel(a.type)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                   <td className="px-3 py-2">
-                    {/* Click path (or hover copy icon) to copy to clipboard */}
+                    {/* Click location (or hover copy icon) to copy to clipboard */}
                     {a.path ? (
                       <button
                         className="group flex max-w-full items-center gap-1.5 text-left font-mono text-xs text-slate-500 hover:text-slate-800"
-                        title="Click to copy path"
+                        title={a.external ? 'Click to copy URL' : 'Click to copy path'}
                         onClick={() => copyPath(a.path as string)}
                       >
                         <span className="break-all">{a.path}</span>
@@ -602,9 +613,11 @@ export function BuildView({
                   <td className="px-3 py-2 text-right">
                     <a
                       className="inline-flex rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      title="Download artifact"
+                      title={a.external ? 'Open where the build service published it' : 'Download artifact'}
                       href={a.href}
-                      download={a.name}
+                      download={a.external ? undefined : a.name}
+                      target={a.external ? '_blank' : undefined}
+                      rel={a.external ? 'noopener noreferrer' : undefined}
                     >
                       <DownloadIcon className="h-4 w-4" />
                     </a>

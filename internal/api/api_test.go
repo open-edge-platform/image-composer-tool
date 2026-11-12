@@ -105,7 +105,7 @@ targets:
 // do routes a request through the full mux + middleware and returns the recorder.
 func (s *Server) do(req *http.Request) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
-	withMiddleware(s.routes()).ServeHTTP(rr, req)
+	withMiddleware(authenticateAPI(s.auth, s.routes())).ServeHTTP(rr, req)
 	return rr
 }
 

@@ -38,6 +38,8 @@ To build from the command line in a Docker container, see the
 | [Image Templates](./architecture/image-composer-tool-templates.md)       | Template structure, variables, best practices               |
 | [Build Process](./architecture/image-composer-tool-build-process.md)     | Pipeline stages, caching, troubleshooting                   |
 | [Architecture](./architecture/architecture.md)                                        | System design and component overview                        |
+| [Build Farm (Remote Build Protocol)](./architecture/remote-build-protocol.md) | Running Web UI builds on a build service              |
+| [Web UI Behind a Login Proxy](./architecture/serve-behind-a-login-proxy.md) | Sign-in through a reverse proxy, per-user build history |
 
 ## Tutorials
 
@@ -112,6 +114,10 @@ Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
 Caching <./architecture/image-composer-tool-caching.md>
 Multiple Package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
 Image Template Reference <./architecture/image-composer-tool-templates.md>
+Web UI Build Executors <./architecture/web-ui-build-executors.md>
+Remote Build Protocol <./architecture/remote-build-protocol.md>
+Web UI Caller Identity <./architecture/web-ui-caller-identity.md>
+Web UI Behind a Login Proxy <./architecture/serve-behind-a-login-proxy.md>
 
 :::
 
