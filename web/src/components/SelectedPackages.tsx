@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
@@ -53,8 +53,6 @@ export function SelectedPackages({
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
-  const setPackages = useStore((s) => s.setPackages)
-  const [pinning, setPinning] = useState(false)
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
@@ -71,8 +69,7 @@ export function SelectedPackages({
   const addedNames = new Set(addedPackages.map((p) => p.name))
   const baseOnlyNames = baseLock.concreteNames.filter((name) => !addedNames.has(name)).sort()
 
-  const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames, lookupNewest } =
-    resolver
+  const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames } = resolver
   const baseVersionOf = (name: string) => {
     const info = baseLock.info(name)
     // A pin resolves the same way regardless of which repos are checked, so
@@ -164,59 +161,21 @@ export function SelectedPackages({
 
   const total = addedPackages.length + baseOnlyNames.length
 
-  // "Latest" ('') is written to the template unpinned and resolved only at
-  // build time, so the image can differ from what was reviewed here. This
-  // pins every added package, floating or already pinned, to the exact
-  // newest version the checked repos offer right now, so the YAML records it.
-  // The repo a package was picked from stays enabled even if the newest
-  // version lives elsewhere: releasing it would change the repo scope the
-  // versions were just looked up in. Reads the selection again after the
-  // lookups so a package removed meanwhile isn't added back.
-  const pinAllToNewest = () => {
-    setPinning(true)
-    lookupNewest(addedPackages.map((p) => p.name))
-      .then((newest) => {
-        const pins = useStore
-          .getState()
-          .addedPackages.filter((p) => newest[p.name])
-          .map((p) => ({ ...p, version: newest[p.name].version, repo: newest[p.name].repository }))
-        if (pins.length > 0) setPackages(pins)
-      })
-      .finally(() => setPinning(false))
-  }
-
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5">
         <span className="text-[13px] font-bold text-[#00285a]">
           Selected ({total})
         </span>
-        {/* Pin to newest stays visible, disabled, before anything is added,
-            so it can be found before it has anything to act on. */}
-        <span className="flex items-center gap-3">
+        {addedPackages.length > 0 && (
           <button
             type="button"
-            onClick={pinAllToNewest}
-            disabled={pinning || addedPackages.length === 0}
-            title={
-              addedPackages.length === 0
-                ? 'Add packages first: this pins every package you are adding to its newest version'
-                : 'Pin every package you are adding to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time'
-            }
-            className="text-[12px] font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+            onClick={() => clearPackages(lockedRepoIds)}
+            className="text-[12px] font-medium text-[#0071c5] hover:underline"
           >
-            {pinning ? 'Pinning…' : 'Pin to newest'}
+            Clear
           </button>
-          {addedPackages.length > 0 && (
-            <button
-              type="button"
-              onClick={() => clearPackages(lockedRepoIds)}
-              className="text-[12px] font-medium text-[#0071c5] hover:underline"
-            >
-              Clear
-            </button>
-          )}
-        </span>
+        )}
       </div>
       {/* The list's cap tracks the viewport so the rail, which starts level
           with the search box, still ends above the Back/Next row (25rem is the

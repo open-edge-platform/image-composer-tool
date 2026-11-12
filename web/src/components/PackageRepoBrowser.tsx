@@ -280,7 +280,36 @@ function MergedPane({
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   const enabledRepoIds = repos.filter(isEnabled).map((r) => r.id)
-  const { liveResolved, resolvingNames, resolveVersion, resolveAll: resolveAllVersions, bulkResolving } = resolver
+  const {
+    liveResolved,
+    resolvingNames,
+    resolveVersion,
+    resolveAll: resolveAllVersions,
+    bulkResolving,
+    lookupNewest,
+  } = resolver
+  const [pinning, setPinning] = useState(false)
+
+  // "Latest" ('') is written to the template unpinned and resolved only at
+  // build time, so the image can differ from what was reviewed here. This
+  // pins every added package, floating or already pinned and from any repo,
+  // to the exact newest version the checked repos offer right now, so the
+  // YAML records it. The repo a package was picked from stays enabled even if
+  // the newest version lives elsewhere: releasing it would change the repo
+  // scope the versions were just looked up in. Reads the selection again
+  // after the lookups so a package removed meanwhile isn't added back.
+  const pinAllToNewest = () => {
+    setPinning(true)
+    lookupNewest(addedPackages.map((p) => p.name))
+      .then((newest) => {
+        const pins = useStore
+          .getState()
+          .addedPackages.filter((p) => newest[p.name])
+          .map((p) => ({ ...p, version: newest[p.name].version, repo: newest[p.name].repository }))
+        if (pins.length > 0) setPackages(pins)
+      })
+      .finally(() => setPinning(false))
+  }
   // What the pane is actually fetched against — only the one repository
   // currently clicked in the rail, checked or not. Kept separate from
   // enabledRepoIds: resolveVersion and the "already added" rows below
@@ -532,6 +561,22 @@ function MergedPane({
               : `Resolve versions (${unresolvedNames.length})`}
           </button>
         )}
+        {/* Acts on everything added, not just this repo or page, so it sits
+            apart at the end of the row. Disabled rather than hidden until
+            something is added, so it can be found before it's needed. */}
+        <button
+          type="button"
+          onClick={pinAllToNewest}
+          disabled={pinning || addedPackages.length === 0}
+          title={
+            addedPackages.length === 0
+              ? 'Add packages first: this pins every package you are adding to its newest version'
+              : 'Pin every package you are adding, from any repository, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time'
+          }
+          className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+        >
+          {pinning ? 'Pinning…' : `Pin to newest (${addedPackages.length})`}
+        </button>
       </div>
       {error ? (
         <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
