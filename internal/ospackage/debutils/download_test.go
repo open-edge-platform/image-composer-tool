@@ -2,7 +2,6 @@ package debutils
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +31,10 @@ func resetURLExistenceCacheForTest(t *testing.T) {
 	packageListURLCacheMu.Unlock()
 
 	_ = os.Remove(packageListURLCacheFilePath())
+
+	probeWaitedMu.Lock()
+	clear(probeWaited)
+	probeWaitedMu.Unlock()
 }
 
 // TestPackages tests the Packages function
@@ -778,33 +781,33 @@ func TestBuildRepoConfigs_ClassicSignErrorStillDetectsHealthyInRelease(t *testin
 
 // TestBuildRepoConfigs_ProbeErrorWithNoCacheFallsBackToClassicURLs is a
 // regression test: when BOTH release-format probes fail with a real error
-// (not a status-0/nil-err offline condition probeURL recognizes, e.g. a
-// connection reset) and there is no cached verdict yet (first-ever probe of
-// this repository, as happens when this format-detection code runs for the
-// first time against a repo built before it existed), BuildRepoConfigs must
-// not abort — it should fall back to the classic Release/Release.gpg URLs so
-// ParseRepositoryMetadata's own offline cache fallback still gets a chance.
+// (neither a status-0/nil-err unknown host nor a failure probeURL retries as an
+// unavailable server, e.g. a malformed response) and there is no cached
+// verdict yet (first-ever probe of this repository, as happens when this
+// format-detection code runs for the first time against a repo built before
+// it existed), BuildRepoConfigs must not abort — it should fall back to the
+// classic Release/Release.gpg URLs so ParseRepositoryMetadata's own offline
+// cache fallback still gets a chance.
 func TestBuildRepoConfigs_ProbeErrorWithNoCacheFallsBackToClassicURLs(t *testing.T) {
 	resetURLExistenceCacheForTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/dists/stable/Release.gpg", "/dists/stable/InRelease":
-			// Force a real error (not the offline-error allowlist in probeURL,
-			// which recognizes eof/timeout/connection refused/no such
-			// host/context deadline exceeded as "not found") by resetting the
-			// TCP connection instead of responding.
+			// Force a real error rather than one probeURL recognizes: a
+			// timeout, EOF, refused or reset connection is retried as an
+			// unavailable server, and an unknown host reads as "not found".
+			// So answer with something that is not HTTP at all.
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				t.Fatal("ResponseWriter does not support hijacking")
 			}
-			conn, _, err := hj.Hijack()
+			conn, buf, err := hj.Hijack()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tcpConn, ok := conn.(*net.TCPConn); ok {
-				_ = tcpConn.SetLinger(0)
-			}
+			_, _ = buf.WriteString("not http\r\n\r\n")
+			_ = buf.Flush()
 			conn.Close()
 		case "/dists/stable/main/binary-amd64/Packages.gz":
 			w.WriteHeader(http.StatusOK)

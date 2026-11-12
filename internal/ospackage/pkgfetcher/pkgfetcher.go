@@ -62,9 +62,9 @@ func unavailableWait(n, worker int, retryAfter, base, limit time.Duration) time.
 	return wait + time.Duration(worker)*time.Second
 }
 
-// parseRetryAfter reads a Retry-After header (delay-seconds or HTTP-date) and
+// ParseRetryAfter reads a Retry-After header (delay-seconds or HTTP-date) and
 // returns 0 when it is absent, invalid, or already in the past.
-func parseRetryAfter(v string) time.Duration {
+func ParseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return 0
@@ -195,7 +195,7 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 						lastErr = fmt.Errorf("transient status: %s", resp.Status)
 						if unavailableStatus(resp.StatusCode) {
 							unavailable = true
-							retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+							retryAfter = ParseRetryAfter(resp.Header.Get("Retry-After"))
 						}
 						return
 					}
