@@ -77,7 +77,7 @@ func newOEPTokenTestService(t *testing.T) (s *Service, record string) {
 
 var oepSelection = Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
 
-// runToEnd starts req and waits for the build to finish.
+// runToEnd starts req, waits for the build to finish, and frees its build slot.
 func runToEnd(t *testing.T, s *Service, req BuildRequest) *build {
 	t.Helper()
 	acc, err := s.StartBuild(req)
@@ -88,7 +88,11 @@ func runToEnd(t *testing.T, s *Service, req BuildRequest) *build {
 	if !ok {
 		t.Fatalf("build %s not tracked", acc.BuildID)
 	}
+	// done closes before runBuild's deferred releaseBuildSlot runs, so a build
+	// started straight after could still see the slot taken; free it here, as
+	// retry_test.go does.
 	<-b.done
+	s.releaseBuildSlot(acc.BuildID)
 	return b
 }
 
