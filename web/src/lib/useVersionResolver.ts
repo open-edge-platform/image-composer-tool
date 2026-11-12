@@ -97,20 +97,17 @@ export function useVersionResolver(os: string, repoIds: string[]) {
   // the repo scope changed mid-flight, the same staleness rule as above.
   const lookupNewest = (names: string[]): Promise<Record<string, PackageSearchResult>> => {
     const scope = repoIdsKey
-    return Promise.allSettled(
-      names.map((name) =>
-        name in liveResolved
-          ? Promise.resolve(liveResolved[name])
-          : api
-              .searchPackages({ os, repos: repoIds, q: name, limit: 20 })
-              .then((r) => r.packages.find((p) => p.name === name)),
-      ),
-    ).then((settled) => {
+    const cached = names.filter((name) => name in liveResolved)
+    const missing = names.filter((name) => !(name in liveResolved))
+    const fetched =
+      missing.length > 0
+        ? api.lookupPackages({ os, repos: repoIds, names: missing }).catch(() => [] as PackageSearchResult[])
+        : Promise.resolve([] as PackageSearchResult[])
+    return fetched.then((hits) => {
       if (scopeRef.current !== scope) return {}
       const found: Record<string, PackageSearchResult> = {}
-      settled.forEach((s) => {
-        if (s.status === 'fulfilled' && s.value) found[s.value.name] = s.value
-      })
+      for (const name of cached) found[name] = liveResolved[name]
+      for (const hit of hits) found[hit.name] = hit
       setLiveResolved((prev) => ({ ...prev, ...found }))
       return found
     })

@@ -15,7 +15,7 @@ import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
 
-const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn() }))
+const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn(), lookupPackages: vi.fn() }))
 vi.mock('../api/client', () => ({ api: mockApi }))
 
 const noLock: BaseLock = {
@@ -54,6 +54,8 @@ const repos: PackageRepo[] = [
 beforeEach(() => {
   useStore.setState({ addedPackages: [], enabledRepos: [] })
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
+  mockApi.lookupPackages.mockReset()
+  mockApi.lookupPackages.mockResolvedValue([])
 })
 
 // browse picks a repository from the toolbar dropdown, the same way a user does.
@@ -292,15 +294,16 @@ describe('"Show only selected"', () => {
     ensureResolved: () => {},
     concreteNames: names,
   })
-  // `publishes` maps repo id to the names it carries; a browse (no q) is empty.
+  // `publishes` maps repo id to the names it carries; the catalog browse is
+  // left empty, so only the by-name lookup can put a template row on screen.
   const mockRepos = (publishes: Record<string, string[]>) =>
-    mockApi.searchPackages.mockImplementation(({ q, repos: ids }: { q?: string; repos?: string[] }) => {
-      const repo = ids?.[0] ?? ''
-      const has = !!q && (publishes[repo] ?? []).includes(q)
-      return Promise.resolve({
-        total: has ? 1 : 0,
-        packages: has ? [{ name: q, version: '1.0', repository: repo, versions: [{ version: '1.0', repository: repo }] }] : [],
-      })
+    mockApi.lookupPackages.mockImplementation(({ repos: ids, names }: { repos: string[]; names: string[] }) => {
+      const repo = ids[0]
+      return Promise.resolve(
+        names
+          .filter((n) => (publishes[repo] ?? []).includes(n))
+          .map((n) => ({ name: n, version: '1.0', repository: repo, versions: [{ version: '1.0', repository: repo }] })),
+      )
     })
   const browse = (label: string) =>
     fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), {
@@ -341,17 +344,41 @@ describe('"Show only selected"', () => {
   it('reads "checking…" until the template lookups for the browsed repo land', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
-    mockApi.searchPackages.mockImplementation(({ q }: { q?: string }) =>
-      gate.then(() => ({
-        total: q ? 1 : 0,
-        packages: q ? [{ name: q, version: '1.0', repository: 'base', versions: [] }] : [],
-      })),
+    mockApi.lookupPackages.mockImplementation(({ names }: { names: string[] }) =>
+      gate.then(() => names.map((n) => ({ name: n, version: '1.0', repository: 'base', versions: [] }))),
     )
     render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
 
     await screen.findByRole('checkbox', { name: 'Show only selected (checking…)' })
     await act(async () => release())
     await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' })
+  })
+
+  it('looks up every template name for the browsed repo in one request, once per repo', async () => {
+    mockRepos({ base: ['curl', 'vim'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'vim', 'not-there'])} />)
+
+    await screen.findByRole('checkbox', { name: 'Show only selected (2 selected)' })
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith({ os: 'ubuntu', repos: ['base'], names: ['curl', 'vim', 'not-there'] })
+    // No per-name searches: those queued ahead of the catalog fetch.
+    expect(mockApi.searchPackages.mock.calls.every(([args]) => !args.q)).toBe(true)
+
+    // Back to a repo already looked up: answered from the cache.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'intel-eci' } })
+    await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'base' } })
+    await screen.findByRole('checkbox', { name: 'Show only selected (2 selected)' })
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts nothing from a repo whose lookup failed, without retrying in a loop', async () => {
+    mockApi.lookupPackages.mockRejectedValue(new Error('offline'))
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
   })
 
   it('lists a template package the user also added only once', async () => {

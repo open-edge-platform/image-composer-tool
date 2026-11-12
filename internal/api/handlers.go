@@ -141,15 +141,25 @@ func (s *Server) GetEdgePack(w http.ResponseWriter, r *http.Request, params http
 // SearchPackages handles GET /packages/search.
 //
 // Omitting `q` browses a repository's catalog instead of searching it — the
-// `limit`/`offset` pair pages through the result either way.
+// `limit`/`offset` pair pages through the result either way. `names` instead
+// looks up exactly those packages, unpaginated.
 func (s *Server) SearchPackages(w http.ResponseWriter, r *http.Request, params httpapi.SearchPackagesParams) {
-	var query string
-	if params.Q != nil {
-		query = *params.Q
-	}
 	var repos []string
 	if params.Repos != nil {
 		repos = *params.Repos
+	}
+	if params.Names != nil {
+		hits, err := s.svc.LookupPackages(r.Context(), params.Os, *params.Names, repos)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, fromPackageSearchResults("", hits, len(hits)))
+		return
+	}
+	var query string
+	if params.Q != nil {
+		query = *params.Q
 	}
 	limit := 0
 	if params.Limit != nil {

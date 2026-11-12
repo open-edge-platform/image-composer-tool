@@ -300,23 +300,21 @@ function MergedPane({
     const missing = baseLock.concreteNames.filter((name) => !(name in known))
     if (missing.length === 0) return
     let cancelled = false
-    Promise.all(
-      missing.map((name) =>
-        api
-          .searchPackages({ os, repos: [repoId], q: name, limit: 20 })
-          .then((r) => r.packages.find((p) => p.name === name) ?? null)
-          .catch(() => null),
-      ),
-    ).then((found) => {
-      if (cancelled) return
-      setTemplateHits((prev) => {
-        const next = { ...prev[repoId] }
-        missing.forEach((name, i) => {
-          next[name] = found[i]
+    // One request for the whole list: one search per name queued the
+    // browser's few connections per host and held up the catalog fetch
+    // itself, for a template with a couple of hundred packages.
+    api
+      .lookupPackages({ os, repos: [repoId], names: missing })
+      .catch(() => [] as PackageSearchResult[])
+      .then((found) => {
+        if (cancelled) return
+        const byName = new Map(found.map((p) => [p.name, p]))
+        setTemplateHits((prev) => {
+          const next = { ...prev[repoId] }
+          for (const name of missing) next[name] = byName.get(name) ?? null
+          return { ...prev, [repoId]: next }
         })
-        return { ...prev, [repoId]: next }
       })
-    })
     return () => {
       cancelled = true
     }

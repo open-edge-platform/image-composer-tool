@@ -42,7 +42,10 @@ type PackageVersion struct {
 const (
 	defaultSearchLimit = 20
 	maxSearchLimit     = 100
-	minSearchQueryLen  = 2
+	// maxLookupNames caps LookupPackages' name list. A template's package
+	// list is the largest list a caller sends today (a couple of hundred).
+	maxLookupNames    = 1000
+	minSearchQueryLen = 2
 	// maxConcurrentLookups bounds how many pkgindex.Cache.Lookup calls one
 	// search issues at once, so fanning out across a repo's several indexes
 	// doesn't open dozens of simultaneous upstream connections.
@@ -116,6 +119,45 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 		return hits[i].RepoID < hits[j].RepoID
 	})
 	return paginate(hits, offset, limit), len(hits), nil
+}
+
+// LookupPackages returns the entries for exactly the given package names in
+// osID's catalog repositories (narrowed by repoFilter, as SearchPackages
+// does): one hit per name some matched repository publishes, carrying every
+// version found, sorted by name. Names no repository publishes are absent.
+//
+// It answers "which of these does this repository carry" for a whole list in
+// one pass over each index. The web UI used to ask that with one prefix
+// search per name, which for a template's couple of hundred packages queued
+// the browser's few connections per host behind hundreds of requests.
+func (s *Service) LookupPackages(ctx context.Context, osID string, names, repoFilter []string) ([]PackageSearchHit, error) {
+	if len(names) > maxLookupNames {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
+			fmt.Sprintf("at most %d names can be looked up at once", maxLookupNames))
+	}
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+
+	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	lookups := s.planLookups(osID, repos)
+	results := runLookups(ctx, s.pkgindexCache, lookups)
+	// Narrowed to the wanted names before dedupAndFilter, which would
+	// otherwise build and version-sort a hit for every package in the index.
+	for i := range results {
+		kept := make([]pkgindex.Entry, 0, len(names))
+		for _, e := range results[i].entries {
+			if want[e.Name] {
+				kept = append(kept, e)
+			}
+		}
+		results[i].entries = kept
+	}
+
+	hits := dedupAndFilter(results, "", rpmRepoSet(lookups))
+	sort.Slice(hits, func(i, j int) bool { return hits[i].Name < hits[j].Name })
+	return hits, nil
 }
 
 // curatedNameSet unions the CuratedPackages of every given repo into a
