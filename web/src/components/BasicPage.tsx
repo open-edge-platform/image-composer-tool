@@ -232,7 +232,7 @@ export function BasicPage({
             )}
             {buildInProgress && (
               <span className="text-sm text-amber-600">
-                A compose is already in progress. Switch to the Compose Image tab to monitor it.
+                additional concurrent builds are currently restricted
               </span>
             )}
           </div>
