@@ -596,7 +596,7 @@ function MergedPane({
           }
           className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
         >
-          {pinning ? 'Pinning…' : `Pin to newest (${addedPackages.length})`}
+          {pinning ? 'Updating…' : `Update to latest version (${addedPackages.length})`}
         </button>
         {/* Sits on the controls row rather than a line of its own, so the
             vertical space goes to package rows instead. */}

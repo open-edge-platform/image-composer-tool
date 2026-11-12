@@ -90,7 +90,7 @@ export function useVersionResolver(os: string, repoIds: string[]) {
 
   // The newest version of each name across the checked repos, for callers
   // that need the answers themselves rather than just the liveResolved
-  // update — "Pin to newest" turns each one into an exact pin. Unlike
+  // update — "Update to latest version" turns each one into an exact pin. Unlike
   // resolveVersion this looks up pinned names too, since a pin says nothing
   // about whether a newer version exists. A name with no exact match, or
   // whose lookup failed, is simply absent from the result. Resolves to {} if

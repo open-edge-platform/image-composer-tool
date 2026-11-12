@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// "Pin to newest", above the Repositories tab's package list: every added
+// "Update to latest version", above the Repositories tab's package list: every added
 // package, floating or pinned and from any repo, becomes an exact pin on the
 // newest version the checked repos offer, so the template records that
 // version instead of resolving "Latest" at build time.
@@ -53,7 +53,7 @@ beforeEach(() => {
   mockApi.searchPackages.mockImplementation((args: { q?: string }) => Promise.resolve(answer(args)))
 })
 
-const pinButton = () => screen.getByRole('button', { name: /^Pin to newest/ }) as HTMLButtonElement
+const pinButton = () => screen.getByRole('button', { name: /^Update to latest version/ }) as HTMLButtonElement
 
 const renderBrowser = async () => {
   await act(async () => {
@@ -61,7 +61,7 @@ const renderBrowser = async () => {
   })
 }
 
-describe('PackageRepoBrowser — Pin to newest', () => {
+describe('PackageRepoBrowser — Update to latest version', () => {
   it('is shown but disabled with nothing added', async () => {
     await renderBrowser()
     expect(pinButton().disabled).toBe(true)
@@ -75,7 +75,7 @@ describe('PackageRepoBrowser — Pin to newest', () => {
       ],
     })
     await renderBrowser()
-    expect(pinButton().textContent).toBe('Pin to newest (2)')
+    expect(pinButton().textContent).toBe('Update to latest version (2)')
     await act(async () => fireEvent.click(pinButton()))
 
     const byName = Object.fromEntries(useStore.getState().addedPackages.map((p) => [p.name, p]))
@@ -117,7 +117,7 @@ describe('PackageRepoBrowser — Pin to newest', () => {
     mockApi.searchPackages.mockImplementation((args: { q?: string }) => gate.then(() => answer(args)))
     const button = pinButton()
     await act(async () => fireEvent.click(button))
-    expect(button.textContent).toBe('Pinning…')
+    expect(button.textContent).toBe('Updating…')
     expect(button.disabled).toBe(true)
 
     act(() => useStore.getState().removePackage('curl', { releaseRepo: false }))
