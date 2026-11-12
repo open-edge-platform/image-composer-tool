@@ -187,6 +187,24 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     expect(screen.getByRole('status').textContent).toMatch(/changed while checking, so nothing was updated/)
   })
 
+  it('discards the answer when the step unmounts while the lookup was in flight', async () => {
+    // Next → Back unmounts and remounts the Packages step; an answer from the
+    // old mount must not land after a repo was disabled in the new one.
+    useStore.setState({ addedPackages: [{ name: 'curl', version: '', repo: 'base' }] })
+    let unmount!: () => void
+    await act(async () => {
+      unmount = render(<Browser />).unmount
+    })
+    const release = gateLookups()
+    await act(async () => fireEvent.click(pinButton()))
+
+    unmount()
+    act(() => useStore.setState({ enabledRepos: [] }))
+    await release()
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'curl', version: '', repo: 'base' }])
+  })
+
   it('changes nothing, and says which repo, when a repo index could not be read', async () => {
     useStore.setState({
       addedPackages: [
