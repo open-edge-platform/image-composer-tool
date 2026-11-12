@@ -47,9 +47,9 @@ const pinClick = async () => {
 }
 
 describe('SelectedPackages — Pin to newest', () => {
-  it('is not offered with nothing added', () => {
+  it('is shown but disabled with nothing added', () => {
     render(<Selected />)
-    expect(screen.queryByRole('button', { name: 'Pin to newest' })).toBeNull()
+    expect((screen.getByRole('button', { name: 'Pin to newest' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('pins a floating "Latest" pick and bumps an older pin to the newest version', async () => {

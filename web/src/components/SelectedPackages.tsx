@@ -191,17 +191,23 @@ export function SelectedPackages({
         <span className="text-[13px] font-bold text-[#00285a]">
           Selected ({total})
         </span>
-        {addedPackages.length > 0 && (
-          <span className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={pinAllToNewest}
-              disabled={pinning}
-              title="Pin every package you are adding to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time"
-              className="text-[12px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
-            >
-              {pinning ? 'Pinning…' : 'Pin to newest'}
-            </button>
+        {/* Pin to newest stays visible, disabled, before anything is added,
+            so it can be found before it has anything to act on. */}
+        <span className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={pinAllToNewest}
+            disabled={pinning || addedPackages.length === 0}
+            title={
+              addedPackages.length === 0
+                ? 'Add packages first: this pins every package you are adding to its newest version'
+                : 'Pin every package you are adding to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time'
+            }
+            className="text-[12px] font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+          >
+            {pinning ? 'Pinning…' : 'Pin to newest'}
+          </button>
+          {addedPackages.length > 0 && (
             <button
               type="button"
               onClick={() => clearPackages(lockedRepoIds)}
@@ -209,8 +215,8 @@ export function SelectedPackages({
             >
               Clear
             </button>
-          </span>
-        )}
+          )}
+        </span>
       </div>
       {/* The list's cap tracks the viewport so the rail, which starts level
           with the search box, still ends above the Back/Next row (25rem is the
