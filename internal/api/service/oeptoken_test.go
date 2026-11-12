@@ -4,7 +4,9 @@
 package service
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -215,5 +217,25 @@ func TestRemoveStaleOEPTokens(t *testing.T) {
 	removeStaleOEPTokens(s.cfg.WorkDir)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("stale token file survived: %v", err)
+	}
+}
+
+// A token longer than the OpenAPI maxLength is rejected before a build starts;
+// one at the limit is accepted.
+func TestStartBuildRejectsOversizedOEPToken(t *testing.T) {
+	s, record := newOEPTokenTestService(t)
+	sel := oepSelection
+	_, err := s.StartBuild(BuildRequest{Compose: &sel, OEPInstallerToken: strings.Repeat("a", maxOEPTokenLen+1)})
+	var se *Error
+	if !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Fatalf("StartBuild with an oversized token: err = %v, want 400", err)
+	}
+	if args := readOrEmpty(t, filepath.Join(record, "args")); args != "" {
+		t.Errorf("a build ran with an oversized token:\n%s", args)
+	}
+	token := strings.Repeat("a", maxOEPTokenLen)
+	runToEnd(t, s, BuildRequest{Compose: &sel, OEPInstallerToken: token})
+	if got := readOrEmpty(t, filepath.Join(record, "token")); got != token {
+		t.Errorf("token at the limit: build got %d characters, want %d", len(got), len(token))
 	}
 }

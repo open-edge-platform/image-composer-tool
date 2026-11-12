@@ -18,6 +18,10 @@ import (
 // to a build's history, logs, or archived template.
 const oepTokenDirName = ".oep-installer-tokens"
 
+// maxOEPTokenLen is a request-size guard, matching the OpenAPI maxLength of
+// BuildRequest.oepInstallerToken. GitHub tokens are far shorter.
+const maxOEPTokenLen = 1024
+
 // OEPInstallerInfo tells a caller whether a resolved template downloads
 // OEP Installer files, and so may need a GitHub token, and whether the server
 // already gives builds one.

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -337,6 +338,10 @@ type retryInput struct {
 // id. Client errors (bad input, no match) return a 400 *Error; server errors
 // (workspace creation, template write) return a 500 *Error.
 func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
+	if utf8.RuneCountInString(req.OEPInstallerToken) > maxOEPTokenLen {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
+			fmt.Sprintf("oepInstallerToken is longer than %d characters", maxOEPTokenLen))
+	}
 	id := uuid.NewString()
 
 	// Claim the single-build slot before doing any setup. If a build is already
