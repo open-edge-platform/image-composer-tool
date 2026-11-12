@@ -102,6 +102,12 @@ image or corrupt generated configuration:
   is immutable.
 * A `password` value that is already a crypt(3) hash is always set as a hash,
   so a pre-hashed password can never become the literal login password.
+* OEP Installer files are verified against a SHA-256 digest when one is
+  given: `sbomSha256` for the output, and `sha256` or the output's `cli-sha256`
+  header for the CLI. A template may leave them out to follow a development
+  branch; ICT then downloads the files unverified over HTTPS, warns in the
+  build log, and records the digests of what it downloaded in the template the
+  image carries. Release templates should pin `sbomUrl` with `sbomSha256`.
 * The GitHub token for OEP Installer files in private repositories is read at
   build time from `ICT_OEP_INSTALLER_TOKEN`, or from a file that
   `ICT_OEP_INSTALLER_TOKEN_FILE` or the global configuration's

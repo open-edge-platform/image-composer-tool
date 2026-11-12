@@ -21,13 +21,13 @@ var sha256HexRe = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 // file the OEP Installer publishes with the CLI; on first boot the CLI
 // completes the installation.
 type OEPInstallerConfig struct {
-	URL        string   `yaml:"url,omitempty"`        // HTTPS URL of the rendered openedge-cli, pinned to a commit
-	SHA256     string   `yaml:"sha256,omitempty"`     // hex SHA-256 of the file at URL
-	SBOMURL    string   `yaml:"sbomUrl,omitempty"`    // HTTPS URL of the published list --sbom output for Modules
-	SBOMSHA256 string   `yaml:"sbomSha256,omitempty"` // hex SHA-256 of the file at SBOMURL
-	Modules    []string `yaml:"modules,omitempty"`    // profiles or modules, as accepted by openedge-cli install
+	URL        string   `yaml:"url,omitempty"`        // rendered openedge-cli; omitted: the output's cli-url
+	SHA256     string   `yaml:"sha256,omitempty"`     // hex SHA-256 of the file at URL; required with URL
+	SBOMURL    string   `yaml:"sbomUrl,omitempty"`    // HTTPS URL of the published list --sbom output
+	SBOMSHA256 string   `yaml:"sbomSha256,omitempty"` // hex SHA-256 of the file at SBOMURL; omitted: not verified
+	Modules    []string `yaml:"modules,omitempty"`    // openedge-cli install modules; omitted: the output's module-list
 	User       string   `yaml:"user,omitempty"`       // systemConfig.users entry that runs openedge-cli on first boot
-	Args       []string `yaml:"args,omitempty"`       // extra arguments passed to openedge-cli install
+	Args       []string `yaml:"args,omitempty"`       // install arguments; omitted: the output's install-cmdline
 }
 
 // IsEmpty reports whether the section is absent.
@@ -46,14 +46,23 @@ func (t *ImageTemplate) validateOEPInstaller() error {
 	if !slices.Contains(OEPInstallerTargetOS, t.Target.OS) {
 		return fmt.Errorf("systemConfig.oepInstaller is only supported for ubuntu targets (got %q)", t.Target.OS)
 	}
-	if err := validateOEPInstallerDownload("url", o.URL, "sha256", o.SHA256); err != nil {
+	// The CLI is optional as a pair: without it ICT installs the CLI the output
+	// names in cli-url, the one it was generated with.
+	if o.URL != "" || o.SHA256 != "" {
+		if o.URL == "" {
+			return fmt.Errorf("systemConfig.oepInstaller.sha256 needs systemConfig.oepInstaller.url")
+		}
+		if err := validateOEPInstallerDownload("url", o.URL, "sha256", o.SHA256, true); err != nil {
+			return err
+		}
+	}
+	if err := validateOEPInstallerDownload("sbomUrl", o.SBOMURL, "sbomSha256", o.SBOMSHA256, false); err != nil {
 		return err
 	}
-	if err := validateOEPInstallerDownload("sbomUrl", o.SBOMURL, "sbomSha256", o.SBOMSHA256); err != nil {
-		return err
-	}
-	if err := validateOEPInstallerModules(o.Modules); err != nil {
-		return err
+	if len(o.Modules) > 0 {
+		if err := validateOEPInstallerModules(o.Modules); err != nil {
+			return err
+		}
 	}
 	if err := t.validateOEPInstallerUser(o.User); err != nil {
 		return err
@@ -67,9 +76,10 @@ func (t *ImageTemplate) validateOEPInstaller() error {
 	return nil
 }
 
-// validateOEPInstallerDownload checks a pinned download: an https:// URL of
-// the file itself and the hex SHA-256 digest it must match.
-func validateOEPInstallerDownload(urlField, raw, shaField, sha string) error {
+// validateOEPInstallerDownload checks a download: an https:// URL of the file
+// itself and, when set or required, the hex SHA-256 digest it must match. An
+// unpinned download, such as a file on a branch, is not verified.
+func validateOEPInstallerDownload(urlField, raw, shaField, sha string, shaRequired bool) error {
 	if raw == "" {
 		return fmt.Errorf("systemConfig.oepInstaller.%s is required", urlField)
 	}
@@ -84,7 +94,7 @@ func validateOEPInstallerDownload(urlField, raw, shaField, sha string) error {
 		return fmt.Errorf("systemConfig.oepInstaller.%s %q is a GitHub web page, not the file; use %q",
 			urlField, u, rawURL)
 	}
-	if !sha256HexRe.MatchString(sha) {
+	if (sha != "" || shaRequired) && !sha256HexRe.MatchString(sha) {
 		return fmt.Errorf("systemConfig.oepInstaller.%s must be a 64-character hex SHA-256 digest", shaField)
 	}
 	return nil

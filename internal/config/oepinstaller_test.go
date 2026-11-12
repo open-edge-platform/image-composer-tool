@@ -61,6 +61,32 @@ func TestParseOEPInstaller(t *testing.T) {
 	}
 }
 
+// The template may name only the package list and the user: the CLI, its
+// digest, the list's digest, the modules and the arguments are all optional.
+func TestOEPInstallerSchemaAcceptsSBOMOnly(t *testing.T) {
+	t.Parallel()
+	yaml := oepInstallerTemplateYAML
+	for _, line := range []string{
+		"    url: https://raw.githubusercontent.com/example/oep-installer-cli/0123abc/rendered/openedge-cli\n",
+		"    sha256: " + testOEPSHA256 + "\n",
+		"    sbomSha256: " + testOEPSBOMSHA256 + "\n",
+		"    modules:\n      - handheld_multi_modal\n",
+		"    args: [\"--gpu\"]\n",
+	} {
+		if !strings.Contains(yaml, line) {
+			t.Fatalf("test input %q not found in the template", line)
+		}
+		yaml = strings.Replace(yaml, line, "", 1)
+	}
+	tmpl, err := parseYAMLTemplate([]byte(yaml), false)
+	if err != nil {
+		t.Fatalf("parseYAMLTemplate: %v", err)
+	}
+	if err := tmpl.validateOEPInstaller(); err != nil {
+		t.Fatalf("validateOEPInstaller: %v", err)
+	}
+}
+
 func TestOEPInstallerSchemaRejects(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, find, replace string }{
@@ -72,6 +98,9 @@ func TestOEPInstallerSchemaRejects(t *testing.T) {
 		{"missing user", "    user: edge\n", ""},
 		{"missing sbomUrl", "    sbomUrl: " + testOEPSBOMURL + "\n", ""},
 		{"short sbomSha256", "sbomSha256: " + testOEPSBOMSHA256, "sbomSha256: abc"},
+		{"url without sha256", "    sha256: " + testOEPSHA256 + "\n", ""},
+		{"sha256 without url",
+			"    url: https://raw.githubusercontent.com/example/oep-installer-cli/0123abc/rendered/openedge-cli\n", ""},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -98,7 +127,9 @@ func TestValidateOEPInstaller(t *testing.T) {
 	}{
 		{"valid", "ubuntu", func(*OEPInstallerConfig) {}, ""},
 		{"unsupported os", "azure-linux", func(*OEPInstallerConfig) {}, "only supported for ubuntu"},
-		{"missing url", "ubuntu", func(o *OEPInstallerConfig) { o.URL = "" }, "url is required"},
+		{"no CLI: the output's cli-url is used", "ubuntu", func(o *OEPInstallerConfig) { o.URL, o.SHA256 = "", "" }, ""},
+		{"sha256 without url", "ubuntu", func(o *OEPInstallerConfig) { o.URL = "" }, "needs systemConfig.oepInstaller.url"},
+		{"url without sha256", "ubuntu", func(o *OEPInstallerConfig) { o.SHA256 = "" }, "sha256"},
 		{"http url", "ubuntu", func(o *OEPInstallerConfig) { o.URL = "http://example.com/cli" }, "https:// URL"},
 		{"url with credentials", "ubuntu", func(o *OEPInstallerConfig) { o.URL = "https://u:p@example.com/cli" },
 			"credentials"},
@@ -116,8 +147,11 @@ func TestValidateOEPInstaller(t *testing.T) {
 			o.SBOMURL = "https://github.com/intel-sandbox/oep-installer-cli/blob/main/rendered/sbom-handheld.yaml"
 		}, "systemConfig.oepInstaller.sbomUrl"},
 		{"bad sbomSha256", "ubuntu", func(o *OEPInstallerConfig) { o.SBOMSHA256 = "xyz" }, "sbomSha256"},
+		{"no sbomSha256: not verified", "ubuntu", func(o *OEPInstallerConfig) { o.SBOMSHA256 = "" }, ""},
 		{"bad sha256", "ubuntu", func(o *OEPInstallerConfig) { o.SHA256 = "xyz" }, "sha256"},
-		{"no modules", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = nil }, "at least one"},
+		{"no modules: the output's module-list is used", "ubuntu", func(o *OEPInstallerConfig) {
+			o.Modules, o.Args = nil, nil
+		}, ""},
 		{"duplicate module", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = []string{"a", "a"} }, "duplicate"},
 		{"invalid module", "ubuntu", func(o *OEPInstallerConfig) { o.Modules = []string{"a;b"} }, "invalid"},
 		{"missing user", "ubuntu", func(o *OEPInstallerConfig) { o.User = "" }, "user is required"},

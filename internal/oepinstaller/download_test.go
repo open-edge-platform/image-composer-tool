@@ -2,22 +2,16 @@ package oepinstaller
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
 
 // TestDownload is not parallel: it replaces the package's HTTP client.
 func TestDownload(t *testing.T) {
@@ -45,6 +39,7 @@ func TestDownload(t *testing.T) {
 		{"digest mismatch", "/sbom.yaml", sha256Hex([]byte("other")), "SHA-256 is"},
 		{"not found", "/missing", sha256Hex(body), "404"},
 		{"too large", "/big", sha256Hex(body), "larger than"},
+		{"no digest: not verified", "/sbom.yaml", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,24 +178,28 @@ func TestCheckCLI(t *testing.T) {
 	t.Parallel()
 	const pinned = "https://raw.githubusercontent.com/org/oep-installer-cli/8d24c5b/rendered/" +
 		"openedge-cli-federal-aerospace"
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	tests := []struct {
-		name, cliURL, templateURL, wantErr string
+		name, cliURL, cliSHA256, templateURL, wantErr string
 	}{
-		{"same pinned CLI", pinned, pinned, ""},
-		{"no cli-url", "", pinned, ""},
+		{"same pinned CLI", pinned, "", pinned, ""},
+		{"same pinned CLI and digest", pinned, digest, pinned, ""},
+		{"same pinned CLI, other digest", pinned, strings.Repeat("f", 64), pinned, "SHA-256"},
+		{"no cli-url", "", "", pinned, ""},
 		{"branch page of the same file", "https://github.com/org/oep-installer-cli/blob/main/rendered/" +
-			"openedge-cli-federal-aerospace", pinned, ""},
-		{"pinned CLI at another commit", pinned,
+			"openedge-cli-federal-aerospace", "", pinned, ""},
+		{"pinned CLI at another commit", pinned, "",
 			"https://raw.githubusercontent.com/org/oep-installer-cli/1234abc/rendered/openedge-cli-federal-aerospace",
 			"a different version"},
-		{"another CLI file", pinned,
+		{"another CLI file", pinned, "",
 			"https://raw.githubusercontent.com/org/oep-installer-cli/8d24c5b/rendered/openedge-cli", "a different CLI"},
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := checkCLI(tt.cliURL, tt.templateURL)
+			out := &Output{CLIURL: tt.cliURL, CLISHA256: tt.cliSHA256}
+			err := checkCLI(out, config.OEPInstallerConfig{URL: tt.templateURL, SHA256: digest})
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -236,5 +235,67 @@ func TestLoad(t *testing.T) {
 	o.Modules = []string{"uncrewed_aerial_vehicle_blueprint"}
 	if _, err := Load(o); err == nil || !strings.Contains(err.Error(), "module-list") {
 		t.Fatalf("Load with other modules: err = %v", err)
+	}
+}
+
+// TestResolve is not parallel: it replaces the package's HTTP client.
+func TestResolve(t *testing.T) {
+	cli := []byte("#!/bin/bash\necho openedge-cli\n")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(cli) }))
+	defer srv.Close()
+	orig := httpClient
+	httpClient = srv.Client
+	defer func() { httpClient = orig }()
+
+	cliURL := srv.URL + "/rendered/openedge-cli-federal-aerospace"
+	out := &Output{CLIURL: cliURL, CLISHA256: sha256Hex(cli), SHA256: "sbom-digest",
+		Modules: []string{"handheld_blueprint"}, Arguments: []string{"--edgepack", "--docker"}}
+	sbomOnly := config.OEPInstallerConfig{SBOMURL: "https://example.com/sbom.yaml", User: "admin"}
+
+	got, data, err := Resolve(sbomOnly, out)
+	if err != nil || string(data) != string(cli) {
+		t.Fatalf("Resolve = %q, %v", data, err)
+	}
+	want := config.OEPInstallerConfig{URL: cliURL, SHA256: sha256Hex(cli), SBOMURL: sbomOnly.SBOMURL,
+		SBOMSHA256: "sbom-digest", Modules: out.Modules, User: "admin", Args: out.Arguments}
+	if got.URL != want.URL || got.SHA256 != want.SHA256 || got.SBOMSHA256 != want.SBOMSHA256 ||
+		!slices.Equal(got.Modules, want.Modules) || !slices.Equal(got.Args, want.Args) || got.User != want.User {
+		t.Errorf("Resolve = %+v, want %+v", got, want)
+	}
+
+	// Without cli-sha256 the CLI is still installed, unverified, and its digest recorded.
+	unpinned := *out
+	unpinned.CLISHA256 = ""
+	if got, _, err := Resolve(sbomOnly, &unpinned); err != nil || got.SHA256 != sha256Hex(cli) {
+		t.Errorf("Resolve without cli-sha256 = %+v, %v", got, err)
+	}
+
+	tests := []struct {
+		name    string
+		o       config.OEPInstallerConfig
+		modify  func(*Output)
+		wantErr string
+	}{
+		{"cli-sha256 mismatch", sbomOnly, func(o *Output) { o.CLISHA256 = strings.Repeat("0", 64) }, "SHA-256 is"},
+		{"no cli-url", sbomOnly, func(o *Output) { o.CLIURL = "" }, "names no CLI"},
+		{"http cli-url", sbomOnly, func(o *Output) { o.CLIURL = "http://example.com/cli" }, "not an https:// URL"},
+		{"template CLI digest mismatch", config.OEPInstallerConfig{URL: cliURL, SHA256: strings.Repeat("0", 64)},
+			func(*Output) {}, "SHA-256 is"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := *out
+			tt.modify(&o)
+			if _, _, err := Resolve(tt.o, &o); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	// A template that names its own CLI and modules keeps them.
+	own := config.OEPInstallerConfig{URL: cliURL, SHA256: sha256Hex(cli), Modules: []string{"handheld_blueprint"},
+		Args: []string{"--edgepack", "--docker"}}
+	if got, _, err := Resolve(own, out); err != nil || got.URL != cliURL || !slices.Equal(got.Args, own.Args) {
+		t.Errorf("Resolve with the template's CLI = %+v, %v", got, err)
 	}
 }

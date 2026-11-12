@@ -98,8 +98,8 @@ func TestParseInstallCmdline(t *testing.T) {
 		{"no arguments", `["openedge-cli","install","handheld_blueprint"]`, nil, []string{}, ""},
 		{"different arguments", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
 			[]string{"--k3s"}, nil, "do not match"},
-		{"template without arguments", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
-			nil, nil, "do not match"},
+		{"template without arguments takes the output's", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
+			nil, []string{"--edgepack"}, ""},
 		{"not an install command", `["openedge-cli","list","handheld_blueprint"]`, nil, nil, "must be the CLI"},
 		{"other modules", `["openedge-cli","install","uav_blueprint"]`, nil, nil, "must be the CLI"},
 		{"too short", `["openedge-cli"]`, nil, nil, "must be the CLI"},
@@ -121,6 +121,30 @@ func TestParseInstallCmdline(t *testing.T) {
 		})
 	}
 }
+
+// A template may omit the modules and arguments; Parse then reports the
+// output's own, and the CLI digest from the header.
+func TestParseWithoutModules(t *testing.T) {
+	t.Parallel()
+	const data = "\"schema-version\": \"1\"\n\"cli-version\": \"8d24c5b\"\n" +
+		"\"cli-url\": \"https://raw.githubusercontent.com/org/cli/8d24c5b/rendered/openedge-cli\"\n" +
+		"\"cli-sha256\": \"" + testCLISHA256 + "\"\n" +
+		"\"install-cmdline\": [\"openedge-cli\",\"install\",\"handheld_blueprint\",\"--edgepack\",\"--docker\"]\n" +
+		"\"module-list\": [\"handheld_blueprint\"]\n"
+	out, err := Parse([]byte(data), nil, nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !slices.Equal(out.Modules, []string{"handheld_blueprint"}) ||
+		!slices.Equal(out.Arguments, []string{"--edgepack", "--docker"}) || out.CLISHA256 != testCLISHA256 {
+		t.Fatalf("Parse = %+v", out)
+	}
+	if _, err := Parse([]byte(strings.Replace(data, testCLISHA256, "abc", 1)), nil, nil); err == nil {
+		t.Fatal("a malformed cli-sha256 was accepted")
+	}
+}
+
+const testCLISHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestParseRejects(t *testing.T) {
 	t.Parallel()
