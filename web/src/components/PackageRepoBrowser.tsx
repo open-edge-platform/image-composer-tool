@@ -284,18 +284,27 @@ function MergedPane({
     setPage(0)
   }, [selectedOnly])
   // Per repo, each template package name mapped to that repo's own entry
-  // for it, or null when the repo doesn't publish it (or the lookup
-  // failed — counted as not published rather than retried in a loop).
-  // Filled for whichever repo is browsed, once per repo, so the review list
-  // and its count below can say which template packages come from here.
+  // for it, or null when the repo doesn't publish it. Filled for whichever
+  // repo is browsed, once per repo, so the review list and its count below
+  // can say which template packages come from here.
   const [templateHits, setTemplateHits] = useState<Record<string, Record<string, PackageSearchResult | null>>>({})
+  // The browsed repo, when its lookup failed or the server couldn't read its
+  // index. Only what was found is cached then: caching the rest as "not
+  // published" would show a confident 0 for the whole session over what may
+  // be a mirror blip. This stops the lookup retrying in a loop; browsing the
+  // repo again clears it and retries.
+  const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
   const templateNamesKey = baseLock.concreteNames.join(',')
   useEffect(() => {
     setTemplateHits({})
+    setTemplateLookupFailed(null)
   }, [os, templateNamesKey])
   useEffect(() => {
+    setTemplateLookupFailed(null)
+  }, [selectedRepo?.id])
+  useEffect(() => {
     const repoId = selectedRepo?.id
-    if (!repoId) return
+    if (!repoId || templateLookupFailed === repoId) return
     const known = templateHits[repoId] ?? {}
     const missing = baseLock.concreteNames.filter((name) => !(name in known))
     if (missing.length === 0) return
@@ -305,22 +314,27 @@ function MergedPane({
     // itself, for a template with a couple of hundred packages.
     api
       .lookupPackages({ os, repos: [repoId], names: missing })
-      .then((r) => r.packages)
-      .catch(() => [] as PackageSearchResult[])
-      .then((found) => {
+      .then((r) => ({ found: r.packages, complete: !r.unavailableRepos.includes(repoId) }))
+      .catch(() => ({ found: [] as PackageSearchResult[], complete: false }))
+      .then(({ found, complete }) => {
         if (cancelled) return
         const byName = new Map(found.map((p) => [p.name, p]))
         setTemplateHits((prev) => {
           const next = { ...prev[repoId] }
-          for (const name of missing) next[name] = byName.get(name) ?? null
+          for (const name of missing) {
+            const hit = byName.get(name)
+            if (hit) next[name] = hit
+            else if (complete) next[name] = null
+          }
           return { ...prev, [repoId]: next }
         })
+        if (!complete) setTemplateLookupFailed(repoId)
       })
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- templateNamesKey stands in for baseLock.concreteNames
-  }, [selectedRepo?.id, os, templateNamesKey, templateHits])
+  }, [selectedRepo?.id, os, templateNamesKey, templateHits, templateLookupFailed])
 
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
@@ -504,8 +518,11 @@ function MergedPane({
   // checked. Template names are bare (no repo), so the only way to tell is
   // to look each one up in the browsed repo; see templateHits above.
   const browsedTemplateHits = selectedRepo ? templateHits[selectedRepo.id] : undefined
+  const templateCheckFailed = !!selectedRepo && templateLookupFailed === selectedRepo.id
   const checkingTemplate =
-    !!selectedRepo && baseLock.concreteNames.some((name) => !(name in (browsedTemplateHits ?? {})))
+    !!selectedRepo &&
+    !templateCheckFailed &&
+    baseLock.concreteNames.some((name) => !(name in (browsedTemplateHits ?? {})))
   const lockedRows: PackageSearchResult[] = baseLock.concreteNames
     .filter((name) => browsedTemplateHits?.[name] && !addedRows.some((r) => r.name === name))
     .map((name) => browsedTemplateHits![name]!)
@@ -513,6 +530,12 @@ function MergedPane({
   const selectedRows: PackageSearchResult[] = [...addedRows, ...lockedRows].sort((a, b) =>
     a.name.localeCompare(b.name),
   )
+
+  const selectedCountLabel = checkingTemplate
+    ? 'checking…'
+    : templateCheckFailed
+      ? `${selectedRows.length} selected, couldn't check template packages`
+      : `${selectedRows.length} selected`
 
   const displayRows = selectedOnly ? selectedRows : hits
 
@@ -613,7 +636,7 @@ function MergedPane({
               base packages — reads as "none from here" rather than as a
               missing count. */}
           <span className="text-slate-500">
-            ({checkingTemplate ? 'checking…' : `${selectedRows.length} selected`})
+            ({selectedCountLabel})
           </span>
         </label>
         {!selectedOnly && hits.length > 0 && (

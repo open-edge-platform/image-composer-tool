@@ -376,11 +376,34 @@ describe('"Show only selected"', () => {
     expect(mockApi.lookupPackages).toHaveBeenCalledTimes(2)
   })
 
-  it('counts nothing from a repo whose lookup failed, without retrying in a loop', async () => {
+  it('says a failed lookup could not check, without retrying in a loop, and retries on a revisit', async () => {
     mockApi.lookupPackages.mockRejectedValue(new Error('offline'))
     render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
 
+    await screen.findByRole('checkbox', {
+      name: "Show only selected (0 selected, couldn't check template packages)",
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+
+    // Not cached as "not published": browsing the repo again asks again.
+    mockRepos({ base: ['curl'] })
+    browse('Intel ECI')
     await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
+    browse('Ubuntu Base')
+    await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' })
+  })
+
+  it("keeps what a partial answer found but doesn't count the rest as not published", async () => {
+    mockApi.lookupPackages.mockResolvedValue({
+      packages: [{ name: 'curl', version: '1.0', repository: 'base', versions: [] }],
+      unavailableRepos: ['base'],
+    })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'vim'])} />)
+
+    await screen.findByRole('checkbox', {
+      name: "Show only selected (1 selected, couldn't check template packages)",
+    })
     await new Promise((r) => setTimeout(r, 50))
     expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
   })
