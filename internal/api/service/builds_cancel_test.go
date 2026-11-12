@@ -727,9 +727,14 @@ func TestStartBuildRejectsConcurrent(t *testing.T) {
 	_, err := s.StartBuild(BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 	}})
-	code, _ := assertServiceError(t, err, http.StatusConflict)
+	code, msg := assertServiceError(t, err, http.StatusConflict)
 	if code != "BUILD_IN_PROGRESS" {
 		t.Fatalf("code = %q, want BUILD_IN_PROGRESS", code)
+	}
+	// The UI shows this message verbatim, so it is pinned word for word and
+	// must not name the build holding the slot.
+	if msg != "additional concurrent builds are currently restricted" {
+		t.Fatalf("message = %q, want the fixed concurrency message", msg)
 	}
 	// No second build should have been tracked.
 	if n := len(s.tracker.all()); n != 0 {
