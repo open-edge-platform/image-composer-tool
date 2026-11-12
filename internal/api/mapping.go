@@ -354,12 +354,16 @@ func fromEdgePackPackage(p service.EdgePackPackage) httpapi.EdgePackPackage {
 // fromPackageSearchResults maps a search's hits to the wire type. Repository
 // is the hit's RepoID — the same id the `repos` filter param and
 // /package-repos both use, so a client can round-trip one into the other.
-func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int) httpapi.PackageSearchResults {
-	return httpapi.PackageSearchResults{
+func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int, unavailable []string) httpapi.PackageSearchResults {
+	out := httpapi.PackageSearchResults{
 		Packages: fromPackageSearchHits(hits),
 		Query:    query,
 		Total:    total,
 	}
+	if len(unavailable) > 0 {
+		out.UnavailableRepos = &unavailable
+	}
+	return out
 }
 
 // fromPackageSearchHits maps hits to the wire type. Shared with the SSE search

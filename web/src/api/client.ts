@@ -16,6 +16,9 @@ import type {
 } from './types'
 
 const BASE = '/api/v1'
+// Names per lookupPackages request: well under both the server's cap (1000)
+// and common URL-length limits, at a typical package name's length.
+const LOOKUP_BATCH = 200
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await jsonFetchRaw(path, init)
@@ -93,6 +96,34 @@ export const api = {
     if (params.offset != null) qs.set('offset', String(params.offset))
     if (params.curated) qs.set('curated', 'true')
     return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
+  },
+
+  // Exactly these package names in the given repos, one entry per name some
+  // repo publishes (with every version found), in as few requests as the URL
+  // length allows rather than one search per name. Names no repo publishes
+  // are simply absent, and `unavailableRepos` lists any repo whose index the
+  // server couldn't read. The client-side name check also keeps the answer
+  // right against an older backend that ignores `names` and browses instead.
+  lookupPackages: async (params: { os: string; repos: string[]; names: string[] }) => {
+    const unique = [...new Set(params.names)]
+    const batches: string[][] = []
+    for (let i = 0; i < unique.length; i += LOOKUP_BATCH) batches.push(unique.slice(i, i + LOOKUP_BATCH))
+    const results = await Promise.all(
+      batches.map((names) => {
+        const qs = new URLSearchParams()
+        qs.set('os', params.os)
+        for (const r of params.repos) qs.append('repos', r)
+        for (const n of names) qs.append('names', n)
+        return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
+      }),
+    )
+    const wanted = new Set(unique)
+    return {
+      packages: results.flatMap((r) => r.packages).filter((p) => wanted.has(p.name)),
+      // Repos the server couldn't read in any batch: their packages may be
+      // missing, so a caller acting on "newest" must treat this as partial.
+      unavailableRepos: [...new Set(results.flatMap((r) => r.unavailableRepos ?? []))].sort(),
+    }
   },
 
   // SSE URL for a cross-repository search. Each repository's matches arrive as

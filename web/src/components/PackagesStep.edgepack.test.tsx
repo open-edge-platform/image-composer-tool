@@ -11,6 +11,7 @@ const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
   getEdgePack: vi.fn(),
   searchPackages: vi.fn(),
+  lookupPackages: vi.fn(async () => ({ packages: [], unavailableRepos: [] })),
 }))
 
 vi.mock('../api/client', () => ({ api: mockApi }))
@@ -177,5 +178,41 @@ describe('PackagesStep Edge Pack', () => {
     await advance(0)
     expect(screen.getByText(UNAVAILABLE)).toBeTruthy()
     expect(screen.queryByText('Loading Edge Pack…')).toBeNull()
+  })
+})
+
+describe('PackagesStep index warm-up', () => {
+  it('looks the template packages up across every repo once, as soon as the step opens', async () => {
+    mockApi.getEdgePack.mockResolvedValue(pack('1.0'))
+    mockApi.lookupPackages.mockResolvedValue({ packages: [], unavailableRepos: [] })
+    mockApi.listPackageRepos.mockResolvedValue({
+      repos: [
+        { id: 'base', displayName: 'Base', url: 'https://example.com/base', enabledByDefault: true },
+        { id: 'intel-eci', displayName: 'Intel ECI', url: 'https://example.com', enabledByDefault: false },
+      ],
+    })
+
+    const { rerender } = render(<PackagesStep os="ubuntu24" active basePackages={['vim', 'curl_8.5']} />)
+    await advance(0)
+
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith({
+      os: 'ubuntu24',
+      repos: ['base', 'intel-eci'],
+      names: ['curl', 'vim'],
+    })
+
+    // Re-rendering the same target doesn't warm it again.
+    rerender(<PackagesStep os="ubuntu24" active basePackages={['vim', 'curl_8.5']} />)
+    await advance(0)
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not warm anything while the tab is hidden', async () => {
+    mockApi.getEdgePack.mockResolvedValue(pack('1.0'))
+    render(<PackagesStep os="ubuntu24" active={false} basePackages={['vim']} />)
+    await advance(0)
+
+    expect(mockApi.lookupPackages).not.toHaveBeenCalled()
   })
 })
