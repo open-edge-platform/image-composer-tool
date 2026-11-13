@@ -74,6 +74,7 @@ func buildExt4ImageWithSBOM(t *testing.T, fileName string, sbom []byte) string {
 		PhysicalSectorSize: int(sectorSize),
 		Partitions: []*gpt.Partition{
 			{
+				Index: 1,
 				Start: uint64(partStartLBA),
 				End:   uint64(partStartLBA + partSizeBytes/sectorSize - 1),
 				Type:  gpt.LinuxFilesystem,
