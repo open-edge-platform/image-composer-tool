@@ -45,6 +45,9 @@ export function BasicPage({
   // Accounts the user asked to add on top of the template's own. Transient for
   // the same reason credentials are: each entry carries a password.
   const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
+  // A GitHub token for this build's OEP Installer downloads, transient for the
+  // same reason, and sent with the build but never with a compose.
+  const [oepInstallerToken, setOEPInstallerToken] = useState('')
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -66,6 +69,7 @@ export function BasicPage({
     // the previous one is dropped rather than silently sent with the new build.
     setCredentials([])
     setNewUsers([])
+    setOEPInstallerToken('')
     let cancelled = false
     setLoadingSummary(true)
     api
@@ -113,12 +117,15 @@ export function BasicPage({
       // since the last auto-fetch (or that fetch is still in flight).
       const fresh = await api.compose(req)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
-      const accepted = await api.startBuild(req)
+      // The token goes to the build only, never to compose: it is not part of
+      // the selection.
+      const accepted = await api.startBuild(req, oepInstallerToken.trim() || undefined)
       // The server has them now, and this page stays mounted while the Compose
       // tab is shown, so a plain-text password would otherwise sit in memory
       // and reappear in the dialog after the build.
       setCredentials([])
       setNewUsers([])
+      setOEPInstallerToken('')
       setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
@@ -286,6 +293,9 @@ export function BasicPage({
         onChange={setCredentials}
         newUsers={newUsers}
         onNewUsersChange={setNewUsers}
+        oepInstaller={review?.oepInstaller}
+        oepInstallerToken={oepInstallerToken}
+        onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}

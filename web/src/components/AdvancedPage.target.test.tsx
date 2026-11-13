@@ -17,6 +17,7 @@ const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
   getEdgePack: vi.fn(),
   searchPackages: vi.fn(async () => []),
+  lookupPackages: vi.fn(async () => ({ packages: [], unavailableRepos: [] })),
   searchStreamUrl: () => '',
 }))
 vi.mock('../api/client', () => ({ api: mockApi }))

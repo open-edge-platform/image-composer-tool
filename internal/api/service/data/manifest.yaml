@@ -171,7 +171,7 @@ verticals:
   - id: fed-aero
     displayName: Fed Aero
   - id: platform-enablement
-    displayName: Platform Enablement
+    displayName: Platform Enablement Upstream BKC
   - id: platform-enablement-bkc
     displayName: Platform Enablement - BKC
 

@@ -141,76 +141,84 @@ export function PackageRow({
         className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
         title={locked ? "Already included by the matched template — this can't be unchecked" : undefined}
       />
-      <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-baseline gap-1.5">
-          <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
-            {name}
-          </span>
-          <span className="font-mono text-[11px] text-slate-500">
-            {locked && currentVersion ? currentVersion : version || 'latest'}
-          </span>
-          {repoNames.length > 0 && (
-            <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
-          )}
-        </span>
-        {description && (
-          <span className="mt-0.5 block truncate text-[11px] text-slate-500" title={description}>
-            {description}
-          </span>
-        )}
-        <VersionChips
-          versions={versions}
-          pinned={selection?.version}
-          pinnedRepo={selection?.repo}
-          onChoose={chooseVersion}
-          repoLabelFor={repoLabelFor}
-          currentVersion={locked ? currentVersion : undefined}
-          currentIsFloating={locked ? currentIsFloating : undefined}
-          disabled={disabled}
-        />
-        {pinnedElsewhere && (
-          <span className="mt-1.5 block text-[11px] text-slate-500">
-            Pinned to <span className="font-mono">{selection!.version}</span> from{' '}
-            {repoLabelFor(selection!.repo)} — picking a version here pins a different repository instead.
-          </span>
-        )}
-        {!locked && selection?.version === '' && resolvedVersion && (
-          <span className="mt-1.5 block text-[11px] text-slate-500">
-            Latest — currently resolves to <span className="font-mono">{resolvedVersion}</span>
-            {resolvedRepo && resolvedRepo !== selection.repo ? ` from ${repoLabelFor(resolvedRepo)}` : ''}.
-          </span>
-        )}
-        {locked && (
-          <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
-            <span className="font-medium text-slate-500">
-              Already in template
-              {currentVersion
-                ? currentIsFloating
-                  ? ` — currently resolves to ${currentVersion} (unpinned; pin a chip to freeze it)`
-                  : ` (${currentVersion})`
-                : ' (version resolved at build time)'}
+      {/* A container, not a viewport, breakpoint: this row is shared by the
+          full-width repo browser and narrower surfaces (the search dropdown,
+          Edge Pack domains), and only the space the row itself gets decides
+          whether the version chips fit beside the name instead of under it. */}
+      <span className="@container min-w-0 flex-1">
+        <span className="flex flex-col @2xl:flex-row @2xl:items-start @2xl:gap-4">
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-baseline gap-1.5">
+              <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
+                {name}
+              </span>
+              <span className="font-mono text-[11px] text-slate-500">
+                {locked && currentVersion ? currentVersion : version || 'latest'}
+              </span>
+              {repoNames.length > 0 && (
+                <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
+              )}
             </span>
-            {overridden && (
-              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-                Overrides with {selection?.version || 'latest'}
+            {description && (
+              <span className="mt-0.5 block truncate text-[11px] text-slate-500" title={description}>
+                {description}
               </span>
             )}
+            {pinnedElsewhere && (
+              <span className="mt-0.5 block text-[11px] text-slate-500">
+                Pinned to <span className="font-mono">{selection!.version}</span> from{' '}
+                {repoLabelFor(selection!.repo)} — picking a version here pins a different repository instead.
+              </span>
+            )}
+            {!locked && selection?.version === '' && resolvedVersion && (
+              <span className="mt-0.5 block text-[11px] text-slate-500">
+                Latest — currently resolves to <span className="font-mono">{resolvedVersion}</span>
+                {resolvedRepo && resolvedRepo !== selection.repo ? ` from ${repoLabelFor(resolvedRepo)}` : ''}.
+              </span>
+            )}
+            {locked && (
+              <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="font-medium text-slate-500">
+                  Already in template
+                  {currentVersion
+                    ? currentIsFloating
+                      ? ` — currently resolves to ${currentVersion} (unpinned; pin a chip to freeze it)`
+                      : ` (${currentVersion})`
+                    : ' (version resolved at build time)'}
+                </span>
+                {overridden && (
+                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
+                    Overrides with {selection?.version || 'latest'}
+                  </span>
+                )}
+              </span>
+            )}
+            {onResolve && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onResolve()
+                }}
+                disabled={resolving}
+                className="mt-1 block text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
+              >
+                {resolving ? 'Resolving…' : 'Resolve version'}
+              </button>
+            )}
           </span>
-        )}
-        {onResolve && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onResolve()
-            }}
-            disabled={resolving}
-            className="mt-1 block text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
-          >
-            {resolving ? 'Resolving…' : 'Resolve version'}
-          </button>
-        )}
+          <VersionChips
+            versions={versions}
+            pinned={selection?.version}
+            pinnedRepo={selection?.repo}
+            onChoose={chooseVersion}
+            repoLabelFor={repoLabelFor}
+            currentVersion={locked ? currentVersion : undefined}
+            currentIsFloating={locked ? currentIsFloating : undefined}
+            disabled={disabled}
+          />
+        </span>
       </span>
     </label>
   )
@@ -284,7 +292,7 @@ function VersionChips({
   const latestIsCurrent = pinned === '' || (currentIsFloating === true && currentVersion === undefined)
 
   return (
-    <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+    <span className="mt-1.5 flex flex-wrap items-center gap-1.5 @2xl:mt-0 @2xl:max-w-[50%] @2xl:shrink-0 @2xl:justify-end">
       <button
         type="button"
         disabled={disabled || currentIsFloating || noRepoKnown}

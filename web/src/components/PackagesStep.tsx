@@ -125,6 +125,21 @@ export function PackagesStep({ os, active, basePackages, overlay = false }: Pack
   }, [active, os])
 
   const baseLock = useBaseLock(os, repos, basePackages)
+
+  // The first time the server touches a repository it downloads that
+  // repository's index from the upstream mirror, which through a proxy can
+  // take seconds to tens of seconds, and the Repositories tab's catalog and
+  // "Show only selected" count wait on it. So as soon as the step opens, look
+  // the template's packages up across every repository at once: the server
+  // fetches all the indexes in parallel and keeps them cached (hours), and by
+  // the time a repository is picked in the Repositories tab it is usually
+  // already warm. The answer itself isn't needed here, only the warming.
+  const warmKey = active && repos && baseLock.concreteNames.length > 0 ? `${os}|${repos.map((r) => r.id).join(',')}` : ''
+  useEffect(() => {
+    if (!warmKey || !repos) return
+    api.lookupPackages({ os, repos: repos.map((r) => r.id), names: baseLock.concreteNames }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- warmKey stands in for os/repos; one warm-up per target
+  }, [warmKey])
   const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
   // Repos the matched template already draws an Edge Pack package from —

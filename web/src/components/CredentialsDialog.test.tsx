@@ -95,4 +95,31 @@ describe('CredentialsDialog', () => {
     expect(screen.getByText(/admin needs a password or an SSH public key/i)).toBeTruthy()
     expect(screen.getByText(/New user tester: Set a password or add an SSH public key/i)).toBeTruthy()
   })
+
+  it('asks for a GitHub token only for a template that uses the OEP Installer', () => {
+    const props = {
+      open: true,
+      requirements,
+      credentials: [],
+      onChange: () => {},
+      onOEPInstallerTokenChange: () => {},
+      credentialsReady: true,
+      busy: false,
+      buildInProgress: false,
+      error: null,
+      onCancel: () => {},
+      onCompose: () => {},
+    }
+    const { rerender } = render(<CredentialsDialog {...props} oepInstaller={{ uses: false, serverToken: false }} />)
+    expect(screen.queryByLabelText('GitHub token for the OEP Installer')).toBeNull()
+
+    rerender(<CredentialsDialog {...props} oepInstaller={{ uses: true, serverToken: false }} />)
+    const field = screen.getByLabelText<HTMLInputElement>('GitHub token for the OEP Installer')
+    expect(field.type).toBe('password')
+    expect(field.autocomplete).toBe('off')
+    expect(screen.getByText(/private repository/)).toBeTruthy()
+
+    rerender(<CredentialsDialog {...props} oepInstaller={{ uses: true, serverToken: true }} />)
+    expect(screen.getByText(/token the server is configured with/)).toBeTruthy()
+  })
 })
