@@ -192,6 +192,16 @@ export interface ComposeResponse {
   // login. Any entry with satisfied: false must be covered by a credentials
   // entry on the request before a build will start.
   credentials?: CredentialRequirement[]
+  // Present when the resolved template downloads OEP Installer files, which
+  // may need a GitHub token for a private repository.
+  oepInstaller?: OEPInstallerInfo
+}
+
+// Whether a template downloads OEP Installer files, and whether the server
+// already gives builds a GitHub token for them.
+export interface OEPInstallerInfo {
+  uses: boolean
+  serverToken: boolean
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a

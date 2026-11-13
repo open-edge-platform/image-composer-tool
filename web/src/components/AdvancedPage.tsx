@@ -9,6 +9,7 @@ import type {
   CredentialRequirement,
   EdgePack,
   NewUserInput,
+  OEPInstallerInfo,
 } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
@@ -85,6 +86,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Accounts the user asked to add on top of the template's own, held for the
   // same reason credentials are: each entry carries a password.
   const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
+  // A GitHub token for this build's OEP Installer downloads, held like the
+  // passwords and never added to a compose request.
+  const [oepInstallerToken, setOEPInstallerToken] = useState('')
+  // The last successful compose's OEP Installer use, held for the same reason
+  // lastRequirements is.
+  const [lastOEPInstaller, setLastOEPInstaller] = useState<OEPInstallerInfo | undefined>(undefined)
   // The matched template's own package list from the last successful compose,
   // null until one lands for this selection. Held for the same reason
   // lastRequirements is: the effect clears `composed` before each refetch, and
@@ -172,6 +179,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setNewUsers([])
     setLastRequirements([])
     setLastBasePackages(null)
+    setOEPInstallerToken('')
+    setLastOEPInstaller(undefined)
   }, [selection])
 
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
@@ -257,6 +266,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
           setLastBasePackages(r.basePackages ?? [])
+          setLastOEPInstaller(r.oepInstaller)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
           // *Edited flags in the store). The disk block is read out of the
@@ -351,10 +361,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // build actually runs rather than the debounced preview.
       const fresh = await api.compose(buildReq)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
-      const accepted = await api.startBuild(buildReq)
+      const accepted = await api.startBuild(buildReq, oepInstallerToken.trim() || undefined)
       setCredentialsOpen(false)
       // Kept, they would mark the accounts satisfied and the next build would skip the prompt.
       setCredentials([])
+      setOEPInstallerToken('')
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
@@ -630,6 +641,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         onChange={setCredentials}
         newUsers={newUsers}
         onNewUsersChange={setNewUsers}
+        oepInstaller={composed?.oepInstaller ?? lastOEPInstaller}
+        oepInstallerToken={oepInstallerToken}
+        onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}

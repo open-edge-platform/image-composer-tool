@@ -950,3 +950,23 @@ func TestHandleListBuilds(t *testing.T) {
 		t.Fatalf("builds = %d, want 1", len(out.Builds))
 	}
 }
+
+// The token entered for a build reaches the service trimmed, and the compose
+// response reports OEP Installer use only when the template has it.
+func TestOEPInstallerTokenMapping(t *testing.T) {
+	t.Parallel()
+	token := "  github_pat_x \n"
+	req := toBuildRequest(httpapi.BuildRequest{Yaml: optStr("y"), OepInstallerToken: &token})
+	if req.OEPInstallerToken != "github_pat_x" {
+		t.Errorf("OEPInstallerToken = %q, want trimmed", req.OEPInstallerToken)
+	}
+	if got := fromComposeResult(&service.ComposeResult{}).OepInstaller; got != nil {
+		t.Errorf("oepInstaller = %+v for a template without it, want nil", got)
+	}
+	got := fromComposeResult(&service.ComposeResult{
+		OEPInstaller: service.OEPInstallerInfo{Uses: true, ServerToken: true},
+	}).OepInstaller
+	if got == nil || !got.Uses || !got.ServerToken {
+		t.Errorf("oepInstaller = %+v, want uses and serverToken", got)
+	}
+}
