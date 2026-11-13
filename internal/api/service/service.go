@@ -218,6 +218,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
 	}
+	removeStaleOEPTokens(cfg.WorkDir)
 	svc := &Service{
 		cfg:           cfg,
 		manifest:      m,

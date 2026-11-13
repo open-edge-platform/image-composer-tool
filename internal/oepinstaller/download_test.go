@@ -94,7 +94,8 @@ func TestDownloadHint(t *testing.T) {
 	noToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "")
 	withToken, _ := newDownloadRequest(context.Background(), "https://raw.githubusercontent.com/org/repo/abc/f", "secret")
 	other, _ := newDownloadRequest(context.Background(), "https://example.com/f", "")
-	if hint := downloadHint(noToken, http.StatusNotFound); !strings.Contains(hint, TokenEnv) ||
+	if hint := downloadHint(noToken, http.StatusNotFound); !strings.Contains(hint, TokenFileFlag) ||
+		!strings.Contains(hint, TokenEnv) ||
 		!strings.Contains(hint, TokenFileEnv) || !strings.Contains(hint, tokenFileConfig) ||
 		!strings.Contains(hint, "private repository") {
 		t.Errorf("hint without token = %q", hint)
@@ -121,6 +122,7 @@ func TestResolveToken(t *testing.T) {
 		}
 		return path
 	}
+	flagFile := write("flag-token", "from-flag\n", 0o600)
 	envFile := write("env-token", "from-env-file\n", 0o600)
 	cfgFile := write("cfg-token", "  from-config  \n", 0o600)
 	empty := write("empty", " \n", 0o600)
@@ -130,23 +132,26 @@ func TestResolveToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name, env, envFile, cfgFile, want, wantErr string
+		name, flag, env, envFile, cfgFile, want, wantErr string
 	}{
-		{"nothing set", "", "", "", "", ""},
-		{"environment", "from-env", envFile, cfgFile, "from-env", ""},
-		{"file from the environment", "", envFile, cfgFile, "from-env-file", ""},
-		{"file from the configuration, trimmed", "", "", cfgFile, "from-config", ""},
-		{"symlink to a file", "", link, "", "from-config", ""},
-		{"readable by others still works", "", shared, "", "readable-by-all", ""},
-		{"empty file", "", empty, "", "", "is empty"},
-		{"missing file", "", filepath.Join(dir, "missing"), "", "", TokenFileEnv},
-		{"missing configured file", "", "", filepath.Join(dir, "missing"), "", tokenFileConfig},
-		{"directory", "", dir, "", "", "not a regular file"},
+		{"nothing set", "", "", "", "", "", ""},
+		{"build flag wins over the environment", flagFile, "from-env", envFile, cfgFile, "from-flag", ""},
+		{"missing build flag file", filepath.Join(dir, "missing"), "from-env", "", "", "", TokenFileFlag},
+		{"environment", "", "from-env", envFile, cfgFile, "from-env", ""},
+		{"file from the environment", "", "", envFile, cfgFile, "from-env-file", ""},
+		{"file from the configuration, trimmed", "", "", "", cfgFile, "from-config", ""},
+		{"symlink to a file", "", "", link, "", "from-config", ""},
+		{"readable by others still works", "", "", shared, "", "readable-by-all", ""},
+		{"empty file", "", "", empty, "", "", "is empty"},
+		{"missing file", "", "", filepath.Join(dir, "missing"), "", "", TokenFileEnv},
+		{"missing configured file", "", "", "", filepath.Join(dir, "missing"), "", tokenFileConfig},
+		{"directory", "", "", dir, "", "", "not a regular file"},
 	}
 	orig := *config.Global()
-	t.Cleanup(func() { config.SetGlobal(&orig) })
+	t.Cleanup(func() { config.SetGlobal(&orig); SetTokenFile("") })
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			SetTokenFile(tt.flag)
 			t.Setenv(TokenEnv, tt.env)
 			t.Setenv(TokenFileEnv, tt.envFile)
 			cfg := orig

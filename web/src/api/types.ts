@@ -196,6 +196,16 @@ export interface ComposeResponse {
   // (its packageRepositories through extends and the default config), before
   // this request's overrides. The Packages step shows them as in use.
   templateRepos?: string[]
+  // Present when the resolved template downloads OEP Installer files, which
+  // may need a GitHub token for a private repository.
+  oepInstaller?: OEPInstallerInfo
+}
+
+// Whether a template downloads OEP Installer files, and whether the server
+// already gives builds a GitHub token for them.
+export interface OEPInstallerInfo {
+  uses: boolean
+  serverToken: boolean
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a
@@ -265,6 +275,10 @@ export interface PackageSearchResults {
   query: string
   total: number
   packages: PackageSearchResult[]
+  // Repos with an index the server couldn't load, so their packages may be
+  // missing from `packages`. Absent when every index loaded (and from an
+  // older backend that doesn't report it).
+  unavailableRepos?: string[]
 }
 
 // The Edge Pack grouping for one target (from GET /edge-pack): the same

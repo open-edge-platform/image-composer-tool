@@ -9,13 +9,13 @@ import type { VersionResolver } from '../lib/useVersionResolver'
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
 
-// Height cap shared by the repository rail and the package pane. It tracks the
-// viewport so the step's Back/Next row stays on screen: 34rem is roughly the
-// page chrome above the panes (header, stepper, search, tabs, notice) plus the
-// nav row below them. The floor keeps a few package cards visible on short
+// Height cap for the package list. It tracks the viewport so the step's
+// Back/Next row stays on screen: 37rem is roughly the page chrome above the
+// list (header, stepper, search, tabs, repository toolbar, list controls) plus
+// the nav row below it. The floor keeps several compact rows visible on short
 // windows (the page scrolls instead); the ceiling stops very tall windows from
-// stretching the panes into a wall of rows.
-const PANE_MAX_H = 'max-h-[clamp(280px,calc(100vh-34rem),640px)]'
+// stretching the list into a wall of rows.
+const LIST_MAX_H = 'max-h-[clamp(240px,calc(100vh-37rem),680px)]'
 
 interface PackageRepoBrowserProps {
   repos: PackageRepo[]
@@ -33,18 +33,17 @@ interface PackageRepoBrowserProps {
 
 const noLockedRepos = new Set<string>()
 
-// PackageRepoBrowser is the two-pane repository browser: a rail of
-// repositories and a pane listing the catalog of whichever one is currently
-// clicked. A repository's checkbox is a separate action from clicking it —
-// the checkbox controls whether a build resolves packages from it at all,
-// while clicking (anywhere on the row but the checkbox) controls which
-// repository's catalog is shown on the right. Keeping these apart is what
-// lets a repo with tens of thousands of packages (Ubuntu's base repo, say)
-// be checked for the build without flooding the browse list the moment it
-// is.
+// PackageRepoBrowser is the repository browser: a toolbar whose dropdown picks
+// which repository's catalog is listed, above a full-width pane listing it.
+// Using a repository for the build (the toolbar's "Use in builds" checkbox) is
+// a separate action from browsing it — the checkbox controls whether a build
+// resolves packages from it at all, while the dropdown only controls which
+// catalog is shown. Keeping these apart is what lets a repo with tens of
+// thousands of packages (Ubuntu's base repo, say) be checked for the build
+// without flooding the browse list the moment it is.
 //
-// A rail checkbox can be checked either because the user checked it directly
-// or because adding a package (from here or from search) enabled it on their
+// A repo can be in use either because the user checked it directly or
+// because adding a package (from here or from search) enabled it on their
 // behalf — the store doesn't distinguish the two. Every package mutation
 // here therefore runs through confirmRepoRelease before it could uncheck a
 // repo as a side effect, the same as the search dropdown does.
@@ -59,12 +58,12 @@ export function PackageRepoBrowser({
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   // A base repo or a template-locked one is always enabled and can't be
-  // turned off, so either belongs at the top of the rail rather than
+  // turned off, so either belongs at the top of the dropdown rather than
   // wherever its priority happens to land it among the optional repos.
   // Stable sort keeps the server's priority-descending order within each
   // group.
   const alwaysOn = (r: PackageRepo) => r.enabledByDefault || lockedRepoIds.has(r.id)
-  const railRepos = [...repos].sort((a, b) => Number(alwaysOn(b)) - Number(alwaysOn(a)))
+  const pickerRepos = [...repos].sort((a, b) => Number(alwaysOn(b)) - Number(alwaysOn(a)))
 
   // A repo the catalog marks enabledByDefault is the target's base repository:
   // every build reads it, so it cannot be turned off. A repo in
@@ -72,20 +71,20 @@ export function PackageRepoBrowser({
   // template already draws a package from it.
   const isEnabled = (r: PackageRepo) => alwaysOn(r) || enabledRepos.includes(r.id)
 
-  // Which repository's catalog is shown on the right — independent of which
-  // repos are checked. Defaults to the top-ranked rail repo (base or
+  // Which repository's catalog is listed — independent of which
+  // repos are checked. Defaults to the top-ranked repo (base or
   // template-locked, if either exists) so there's always something to look
   // at, and re-picks a default if the current selection disappears (e.g. the
   // target OS changes) without overriding a user's own click.
   const [selectedRepoId, setSelectedRepoId] = useState<string | undefined>(undefined)
-  const railRepoIdsKey = railRepos.map((r) => r.id).join(',')
+  const pickerRepoIdsKey = pickerRepos.map((r) => r.id).join(',')
   useEffect(() => {
-    if (railRepos.length === 0) return
-    if (selectedRepoId && railRepos.some((r) => r.id === selectedRepoId)) return
-    setSelectedRepoId(railRepos[0].id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- railRepoIdsKey stands in for railRepos
-  }, [railRepoIdsKey, selectedRepoId])
-  const selectedRepo = railRepos.find((r) => r.id === selectedRepoId)
+    if (pickerRepos.length === 0) return
+    if (selectedRepoId && pickerRepos.some((r) => r.id === selectedRepoId)) return
+    setSelectedRepoId(pickerRepos[0].id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pickerRepoIdsKey stands in for pickerRepos
+  }, [pickerRepoIdsKey, selectedRepoId])
+  const selectedRepo = pickerRepos.find((r) => r.id === selectedRepoId)
 
   // The curated-subset toggle only makes sense against whichever repo is
   // currently browsed, so switching repos resets it rather than carrying a
@@ -95,129 +94,138 @@ export function PackageRepoBrowser({
     setFrequentOnly(false)
   }, [selectedRepoId])
 
+  const inUseCount = pickerRepos.filter(isEnabled).length
+
   return (
-    <>
-      <p className="mb-2 text-[11px] font-medium text-amber-700">
-        Only checked repositories are used when resolving packages at build
-        time — checking or unchecking one can change what an unpinned pick
-        resolves to.
-      </p>
-      {selectedRepo?.hasCuratedPackages && (
-        <label className="mb-2 flex items-center gap-1.5 text-[12px] text-slate-600">
-          <input
-            type="checkbox"
-            checked={frequentOnly}
-            onChange={(e) => setFrequentOnly(e.target.checked)}
-            className="h-[13px] w-[13px] accent-[#0071c5]"
-          />
-          Show frequently used
-        </label>
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      {selectedRepo && (
+        <RepoToolbar
+          repos={pickerRepos}
+          selectedRepo={selectedRepo}
+          isEnabled={isEnabled}
+          isAlwaysOn={alwaysOn}
+          locked={lockedRepoIds.has(selectedRepo.id)}
+          inUseCount={inUseCount}
+          onSelect={setSelectedRepoId}
+          onToggle={(on) => setRepoEnabled(selectedRepo.id, on)}
+        />
       )}
-      <div className="grid grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200">
-        <div
-          role="group"
-          aria-label="Package repositories"
-          className={`${PANE_MAX_H} overflow-y-auto border-r border-slate-200 bg-slate-50`}
-        >
-          {railRepos.map((r) => (
-            <RepoRailRow
-              key={r.id}
-              repo={r}
-              enabled={isEnabled(r)}
-              locked={lockedRepoIds.has(r.id)}
-              selected={r.id === selectedRepo?.id}
-              onToggle={(on) => setRepoEnabled(r.id, on)}
-              onSelect={() => setSelectedRepoId(r.id)}
-            />
-          ))}
-        </div>
-        <div
-          role="region"
-          aria-label="Repository packages"
-          className={`${PANE_MAX_H} overflow-y-auto bg-[#d6ecf8] px-[18px] py-3.5`}
-        >
-          <MergedPane
-            repos={repos}
-            isEnabled={isEnabled}
-            selectedRepo={selectedRepo}
-            os={os}
-            baseLock={baseLock}
-            resolver={resolver}
-            lockedRepoIds={lockedRepoIds}
-            frequentOnly={frequentOnly}
-          />
-        </div>
+      <div role="region" aria-label="Repository packages" className="bg-[#d6ecf8] px-3 py-2">
+        <MergedPane
+          repos={repos}
+          isEnabled={isEnabled}
+          selectedRepo={selectedRepo}
+          os={os}
+          baseLock={baseLock}
+          resolver={resolver}
+          lockedRepoIds={lockedRepoIds}
+          frequentOnly={frequentOnly}
+          onFrequentOnlyChange={selectedRepo?.hasCuratedPackages ? setFrequentOnly : undefined}
+        />
       </div>
-    </>
+    </div>
   )
 }
 
-function RepoRailRow({
-  repo,
-  enabled,
+// RepoToolbar picks which repository's catalog is browsed (the dropdown) and,
+// as a separate control, whether that repository is used by the build (the
+// "Use in builds" checkbox). The dropdown alone never enables anything, so a
+// repo with tens of thousands of packages can be looked through without
+// changing what an unpinned pick resolves to.
+//
+// Only the browsed repo's checkbox is on screen, so the dropdown's own option
+// labels carry every repo's state ("✓" for an optional repo in use) and the
+// "N of M in use" count keeps the overall picture a list of every repo would give.
+function RepoToolbar({
+  repos,
+  selectedRepo,
+  isEnabled,
+  isAlwaysOn,
   locked,
-  selected,
-  onToggle,
+  inUseCount,
   onSelect,
+  onToggle,
 }: {
-  repo: PackageRepo
-  enabled: boolean
+  repos: PackageRepo[]
+  selectedRepo: PackageRepo
+  isEnabled: (r: PackageRepo) => boolean
+  isAlwaysOn: (r: PackageRepo) => boolean
   locked: boolean
-  selected: boolean
+  inUseCount: number
+  onSelect: (repoId: string) => void
   onToggle: (on: boolean) => void
-  onSelect: () => void
 }) {
-  const badge = repo.enabledByDefault ? 'Base — always on' : locked ? 'In template — always on' : null
-  const title = repo.enabledByDefault
+  const alwaysOnRepos = repos.filter(isAlwaysOn)
+  const optionalRepos = repos.filter((r) => !isAlwaysOn(r))
+  const badge = selectedRepo.enabledByDefault ? 'Base — always on' : locked ? 'In template — always on' : null
+  const title = selectedRepo.enabledByDefault
     ? 'Base repository — always enabled'
     : locked
       ? "Already in template — can't be unchecked"
-      : undefined
+      : 'Only repositories in use are read when resolving packages at build time'
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        // Guards against the nested checkbox: its own Space keydown bubbles
-        // up here too, and without this check preventDefault() would cancel
-        // the checkbox's native toggle and select the repository instead —
-        // keyboard users could never enable or disable one. Only handle the
-        // row div's own key, not ones from something inside it.
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onSelect()
-        }
-      }}
-      className={
-        'flex cursor-pointer items-center gap-2.5 border-b border-slate-100 px-3 py-2.5 ' +
-        (selected ? 'bg-[#d6ecf8] font-semibold' : 'hover:bg-[#eef4fb]')
-      }
-    >
-      <input
-        type="checkbox"
-        id={`repo-${repo.id}`}
-        aria-label={repo.displayName}
-        checked={enabled}
-        disabled={repo.enabledByDefault || locked}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => onToggle(e.target.checked)}
-        className="h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
-        title={title}
-      />
-      <span className="min-w-0 flex-1">
-        <span
-          // The 240px rail truncates the longer Intel repo names, so keep the
-          // full one reachable on hover.
-          title={repo.displayName}
-          className="block truncate text-[13px] font-semibold text-slate-700"
+    <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label className="flex min-w-[280px] flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
+          Repository
+          <select
+            value={selectedRepo.id}
+            onChange={(e) => onSelect(e.target.value)}
+            // Long Intel repo names are why this caps rather than sizing to
+            // content; the full name is in the option list and the tooltip.
+            title={selectedRepo.displayName}
+            className="min-w-0 max-w-[420px] flex-1 cursor-pointer truncate rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-semibold text-slate-700 hover:border-[#0071c5] focus:border-[#0071c5] focus:outline-none focus:ring-2 focus:ring-[#0071c5]/25"
+          >
+            {alwaysOnRepos.length > 0 && (
+              <optgroup label="Always on">
+                {alwaysOnRepos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.displayName}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {optionalRepos.length > 0 && (
+              <optgroup label="Optional">
+                {optionalRepos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {isEnabled(r) ? `✓ ${r.displayName}` : r.displayName}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </label>
+        <label
+          title={title}
+          className={
+            'flex items-center gap-1.5 text-[12px] font-medium text-slate-700 ' +
+            (badge ? 'cursor-not-allowed' : 'cursor-pointer')
+          }
         >
-          {repo.displayName}
+          <input
+            type="checkbox"
+            aria-label={`Use ${selectedRepo.displayName} in builds`}
+            checked={isEnabled(selectedRepo)}
+            disabled={badge != null}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="h-[14px] w-[14px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
+          />
+          Use in builds
+          {badge && (
+            <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+              {badge}
+            </span>
+          )}
+        </label>
+        <span className="ml-auto text-[11px] text-slate-500">
+          {inUseCount} of {repos.length} repositories in use
         </span>
-        {badge && <span className="text-[11px] text-slate-500">{badge}</span>}
-      </span>
+      </div>
+      <p className="mt-1 text-[11px] text-amber-700">
+        Only repositories in use are read at build time — adding or removing one
+        can change what an unpinned pick resolves to.
+      </p>
     </div>
   )
 }
@@ -231,6 +239,7 @@ function MergedPane({
   resolver,
   lockedRepoIds,
   frequentOnly,
+  onFrequentOnlyChange,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
@@ -240,6 +249,8 @@ function MergedPane({
   resolver: VersionResolver
   lockedRepoIds: Set<string>
   frequentOnly: boolean
+  // Set only when the browsed repo has a curated subset to filter down to.
+  onFrequentOnlyChange?: (on: boolean) => void
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -272,6 +283,59 @@ function MergedPane({
   useEffect(() => {
     setPage(0)
   }, [selectedOnly])
+  // Per repo, each template package name mapped to that repo's own entry
+  // for it, or null when the repo doesn't publish it. Filled for whichever
+  // repo is browsed, once per repo, so the review list and its count below
+  // can say which template packages come from here.
+  const [templateHits, setTemplateHits] = useState<Record<string, Record<string, PackageSearchResult | null>>>({})
+  // The browsed repo, when its lookup failed or the server couldn't read its
+  // index. Only what was found is cached then: caching the rest as "not
+  // published" would show a confident 0 for the whole session over what may
+  // be a mirror blip. This stops the lookup retrying in a loop; browsing the
+  // repo again clears it and retries.
+  const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
+  const templateNamesKey = baseLock.concreteNames.join(',')
+  useEffect(() => {
+    setTemplateHits({})
+    setTemplateLookupFailed(null)
+  }, [os, templateNamesKey])
+  useEffect(() => {
+    setTemplateLookupFailed(null)
+  }, [selectedRepo?.id])
+  useEffect(() => {
+    const repoId = selectedRepo?.id
+    if (!repoId || templateLookupFailed === repoId) return
+    const known = templateHits[repoId] ?? {}
+    const missing = baseLock.concreteNames.filter((name) => !(name in known))
+    if (missing.length === 0) return
+    let cancelled = false
+    // One request for the whole list: one search per name queued the
+    // browser's few connections per host and held up the catalog fetch
+    // itself, for a template with a couple of hundred packages.
+    api
+      .lookupPackages({ os, repos: [repoId], names: missing })
+      .then((r) => ({ found: r.packages, complete: !r.unavailableRepos.includes(repoId) }))
+      .catch(() => ({ found: [] as PackageSearchResult[], complete: false }))
+      .then(({ found, complete }) => {
+        if (cancelled) return
+        const byName = new Map(found.map((p) => [p.name, p]))
+        setTemplateHits((prev) => {
+          const next = { ...prev[repoId] }
+          for (const name of missing) {
+            const hit = byName.get(name)
+            if (hit) next[name] = hit
+            else if (complete) next[name] = null
+          }
+          return { ...prev, [repoId]: next }
+        })
+        if (!complete) setTemplateLookupFailed(repoId)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- templateNamesKey stands in for baseLock.concreteNames
+  }, [selectedRepo?.id, os, templateNamesKey, templateHits, templateLookupFailed])
+
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
@@ -280,9 +344,61 @@ function MergedPane({
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   const enabledRepoIds = repos.filter(isEnabled).map((r) => r.id)
-  const { liveResolved, resolvingNames, resolveVersion, resolveAll: resolveAllVersions, bulkResolving } = resolver
+  const {
+    liveResolved,
+    resolvingNames,
+    resolveVersion,
+    resolveAll: resolveAllVersions,
+    bulkResolving,
+    lookupNewest,
+  } = resolver
+  const [pinning, setPinning] = useState(false)
+  // Why the last "Update to latest version" changed nothing, if it didn't.
+  const [pinNotice, setPinNotice] = useState<string | null>(null)
+
+  // "Latest" ('') is written to the template unpinned and resolved only at
+  // build time, so the image can differ from what was reviewed here. This
+  // pins every added package, floating or already pinned and from any repo,
+  // to the exact newest version the checked repos offer right now, so the
+  // YAML records it. The repo a package was picked from stays enabled even if
+  // the newest version lives elsewhere: releasing it would change the repo
+  // scope the versions were just looked up in.
+  //
+  // Nothing changes unless the answer is complete: with a repo unreadable,
+  // "newest" could be an older version or a downgrade of a pin. And only
+  // entries still exactly as they were when the button was clicked are
+  // updated. The store replaces an entry whenever its version is picked,
+  // it's removed and re-added, or the target changes, so comparing the
+  // entry objects themselves skips every one of those rather than
+  // overwriting a newer choice (or another OS's package) with this answer.
+  const pinAllToNewest = () => {
+    const dispatched = addedPackages
+    setPinning(true)
+    setPinNotice(null)
+    lookupNewest(dispatched.map((p) => p.name))
+      .then(({ found, complete, unavailableRepos, stale }) => {
+        if (stale) {
+          setPinNotice('The target or checked repositories changed while checking, so nothing was updated. Try again.')
+          return
+        }
+        if (!complete) {
+          setPinNotice(
+            unavailableRepos.length > 0
+              ? `Couldn't read ${unavailableRepos.map(repoLabelFor).join(', ')} right now, so nothing was updated: the newest version could be there. Try again.`
+              : "Couldn't check for newer versions, so nothing was updated. Try again.",
+          )
+          return
+        }
+        const pins = useStore
+          .getState()
+          .addedPackages.filter((p) => dispatched.includes(p) && found[p.name])
+          .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
+        if (pins.length > 0) setPackages(pins)
+      })
+      .finally(() => setPinning(false))
+  }
   // What the pane is actually fetched against — only the one repository
-  // currently clicked in the rail, checked or not. Kept separate from
+  // currently picked in the dropdown, checked or not. Kept separate from
   // enabledRepoIds: resolveVersion and the "already added" rows below
   // intentionally stay scoped to what's checked regardless of which repo is
   // being browsed, since those answer "what does this resolve to given my
@@ -392,30 +508,34 @@ function MergedPane({
       }
     })
 
-  // The base repo's own rows are mostly satisfied by the matched template
-  // directly (baseLock), never touching addedPackages at all — without
-  // these, "Show only selected" on the base repo would say nothing's picked
-  // even though every one of those names shows checked in the normal view.
-  // Only the base repo's own concrete names are considered: a locked name's
-  // currentVersion is specifically a default-repo lookup (see baseLock.ts),
-  // so it isn't meaningful attributed to any other repo.
-  const lockedRows: PackageSearchResult[] = selectedRepo?.enabledByDefault
-    ? baseLock.concreteNames
-        .filter((name) => !addedRows.some((r) => r.name === name))
-        .map((name) => {
-          const lock = baseLock.info(name)
-          return {
-            name,
-            version: lock.currentVersion ?? '',
-            repository: selectedRepo.id,
-            versions: lock.currentVersion ? [{ version: lock.currentVersion, repository: selectedRepo.id }] : [],
-          }
-        })
-    : []
+  // The matched template's own packages never touch addedPackages, yet the
+  // normal view shows each one checked in every repo that publishes it. So
+  // the review list includes the template names the browsed repo publishes,
+  // the same rule, and uses that repo's own row for each, exactly as the
+  // normal view would. Previously only the base repo listed them, and it
+  // listed every template name whether it published it or not, so e.g.
+  // Intel EdgePack read "0 selected" while its template packages showed
+  // checked. Template names are bare (no repo), so the only way to tell is
+  // to look each one up in the browsed repo; see templateHits above.
+  const browsedTemplateHits = selectedRepo ? templateHits[selectedRepo.id] : undefined
+  const templateCheckFailed = !!selectedRepo && templateLookupFailed === selectedRepo.id
+  const checkingTemplate =
+    !!selectedRepo &&
+    !templateCheckFailed &&
+    baseLock.concreteNames.some((name) => !(name in (browsedTemplateHits ?? {})))
+  const lockedRows: PackageSearchResult[] = baseLock.concreteNames
+    .filter((name) => browsedTemplateHits?.[name] && !addedRows.some((r) => r.name === name))
+    .map((name) => browsedTemplateHits![name]!)
 
   const selectedRows: PackageSearchResult[] = [...addedRows, ...lockedRows].sort((a, b) =>
     a.name.localeCompare(b.name),
   )
+
+  const selectedCountLabel = checkingTemplate
+    ? 'checking…'
+    : templateCheckFailed
+      ? `${selectedRows.length} selected, couldn't check template packages`
+      : `${selectedRows.length} selected`
 
   const displayRows = selectedOnly ? selectedRows : hits
 
@@ -482,15 +602,25 @@ function MergedPane({
   if (fetchRepoIds.length === 0) {
     return (
       <p className="px-5 py-12 text-center text-[13px] text-slate-500">
-        No repository selected — click one on the left to browse its
-        packages.
+        No repository selected — pick one above to browse its packages.
       </p>
     )
   }
 
   return (
     <>
-      <div className="mb-2 flex flex-wrap items-center gap-4 text-[12px] text-slate-600">
+      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-slate-600">
+        {onFrequentOnlyChange && (
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={frequentOnly}
+              onChange={(e) => onFrequentOnlyChange(e.target.checked)}
+              className="h-[13px] w-[13px] accent-[#0071c5]"
+            />
+            Show frequently used
+          </label>
+        )}
         <label className="flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -506,7 +636,7 @@ function MergedPane({
               base packages — reads as "none from here" rather than as a
               missing count. */}
           <span className="text-slate-500">
-            ({selectedRows.length} selected)
+            ({selectedCountLabel})
           </span>
         </label>
         {!selectedOnly && hits.length > 0 && (
@@ -532,7 +662,44 @@ function MergedPane({
               : `Resolve versions (${unresolvedNames.length})`}
           </button>
         )}
+        {/* Acts on everything added, not just this repo or page, so it sits
+            apart toward the end of the row, before the pager. Disabled rather than hidden until
+            something is added, so it can be found before it's needed. */}
+        <button
+          type="button"
+          onClick={pinAllToNewest}
+          disabled={pinning || addedPackages.length === 0}
+          title={
+            addedPackages.length === 0
+              ? 'Add packages first: this pins every package you are adding to its newest version'
+              : 'Pin every package you are adding, from any repository, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time'
+          }
+          className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+        >
+          {pinning ? 'Updating…' : `Update to latest version (${addedPackages.length})`}
+        </button>
+        {/* Sits on the controls row rather than a line of its own, so the
+            vertical space goes to package rows instead. */}
+        {!selectedOnly && pageCount > 1 && displayRows.length > 0 && !error && (
+          <Pager
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            pageInput={pageInput}
+            loading={loading}
+            onPrev={() => setPage((p) => Math.max(0, p - 1))}
+            onNext={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            onPageInputChange={setPageInput}
+            onJump={jumpToPage}
+            compact
+          />
+        )}
       </div>
+      {pinNotice && (
+        <p role="status" className="mb-2 text-[11px] font-medium text-amber-700">
+          {pinNotice}
+        </p>
+      )}
       {error ? (
         <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
       ) : displayRows.length === 0 ? (
@@ -546,22 +713,10 @@ function MergedPane({
                 : `No packages found in ${repoLabelFor(selectedRepo?.id ?? '')}.`}
         </p>
       ) : (
-        <>
-          {!selectedOnly && pageCount > 1 && (
-            <Pager
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              pageInput={pageInput}
-              loading={loading}
-              onPrev={() => setPage((p) => Math.max(0, p - 1))}
-              onNext={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-              onPageInputChange={setPageInput}
-              onJump={jumpToPage}
-              className="mb-2"
-            />
-          )}
-          <div className="rounded border border-slate-100">
+        // Only the list scrolls: the toolbar and controls above it stay put,
+        // so switching repo or page never needs a scroll back up.
+        <div className={`${LIST_MAX_H} overflow-y-auto`}>
+          <div className="rounded border border-slate-100 bg-white">
             {displayRows.map((h) => {
               const lock = baseLock.info(h.name)
               // A pin resolves the same way regardless of which repos are
@@ -653,7 +808,7 @@ function MergedPane({
               className="mt-2"
             />
           )}
-        </>
+        </div>
       )}
     </>
   )
@@ -673,6 +828,7 @@ function Pager({
   onNext,
   onPageInputChange,
   onJump,
+  compact = false,
   className = '',
 }: {
   page: number
@@ -684,6 +840,9 @@ function Pager({
   onNext: () => void
   onPageInputChange: (v: string) => void
   onJump: () => void
+  // Drops the "Page" prefix and moves the package total into a tooltip, so
+  // the copy on the list's controls row fits on that row instead of wrapping.
+  compact?: boolean
   className?: string
 }) {
   return (
@@ -696,8 +855,8 @@ function Pager({
       >
         Previous
       </button>
-      <span className="flex items-center gap-1">
-        Page
+      <span className="flex items-center gap-1" title={compact ? `${total.toLocaleString()} packages` : undefined}>
+        {!compact && 'Page'}
         <input
           type="number"
           min={1}
@@ -708,10 +867,11 @@ function Pager({
             if (e.key === 'Enter') onJump()
           }}
           onBlur={onJump}
-          className="w-14 rounded border border-slate-200 px-1 py-0.5 text-center"
+          className="w-14 rounded border border-slate-200 bg-white px-1 py-0.5 text-center"
           aria-label="Page number"
         />
-        of {pageCount} ({total} packages)
+        of {pageCount.toLocaleString()}
+        {!compact && ` (${total.toLocaleString()} packages)`}
       </span>
       <button
         type="button"

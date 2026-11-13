@@ -9,6 +9,7 @@ import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
 import { templateInUseRepos } from '../lib/templateRepos'
+import { overlayIncompatiblePackages } from '../lib/edgepack'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -24,6 +25,10 @@ interface PackagesStepProps {
   // Ids of the repositories the matched template itself installs from
   // (ComposeResponse.templateRepos), through extends and the default config.
   templateRepos?: string[]
+  // True for an overlay-mode template. Edge Pack packages turn on DKMS module
+  // builds, which an overlay cannot run, so the Edge Packs tab is not offered
+  // and any Edge Pack package added some other way is flagged.
+  overlay?: boolean
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -48,7 +53,7 @@ const EDGE_PACK_RETRY_LIMIT = 24
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
 // running list of added packages.
-export function PackagesStep({ os, active, basePackages, templateRepos = [] }: PackagesStepProps) {
+export function PackagesStep({ os, active, basePackages, templateRepos = [], overlay = false }: PackagesStepProps) {
   const [repos, setRepos] = useState<PackageRepo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // undefined while in flight, null once it is known there is no Edge Pack to
@@ -60,9 +65,18 @@ export function PackagesStep({ os, active, basePackages, templateRepos = [] }: P
   // Tab choice is local state: selections live in the store, so switching tabs
   // cannot disturb them. Edge Pack leads because a capability is the question
   // most users arrive with; provenance is the follow-up.
-  const [tab, setTab] = useState<TabID>('edge-pack')
+  const [tab, setTab] = useState<TabID>(overlay ? 'repos' : 'edge-pack')
   const manifest = useStore((s) => s.manifest)
   const enabledRepos = useStore((s) => s.enabledRepos)
+  const addedPackages = useStore((s) => s.addedPackages)
+
+  // An overlay has nothing to show on the Edge Packs tab, so open on the
+  // Repositories tab instead — including when the selection changes to an
+  // overlay while this step is open.
+  useEffect(() => {
+    if (overlay) setTab('repos')
+  }, [overlay])
+  const incompatible = overlay && edgePack ? overlayIncompatiblePackages(edgePack, addedPackages) : []
 
   useEffect(() => {
     if (!os) {
@@ -115,6 +129,21 @@ export function PackagesStep({ os, active, basePackages, templateRepos = [] }: P
   }, [active, os])
 
   const baseLock = useBaseLock(os, repos, basePackages)
+
+  // The first time the server touches a repository it downloads that
+  // repository's index from the upstream mirror, which through a proxy can
+  // take seconds to tens of seconds, and the Repositories tab's catalog and
+  // "Show only selected" count wait on it. So as soon as the step opens, look
+  // the template's packages up across every repository at once: the server
+  // fetches all the indexes in parallel and keeps them cached (hours), and by
+  // the time a repository is picked in the Repositories tab it is usually
+  // already warm. The answer itself isn't needed here, only the warming.
+  const warmKey = active && repos && baseLock.concreteNames.length > 0 ? `${os}|${repos.map((r) => r.id).join(',')}` : ''
+  useEffect(() => {
+    if (!warmKey || !repos) return
+    api.lookupPackages({ os, repos: repos.map((r) => r.id), names: baseLock.concreteNames }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- warmKey stands in for os/repos; one warm-up per target
+  }, [warmKey])
   const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
   // Repos the matched template already installs from (see templateInUseRepos).
@@ -146,6 +175,14 @@ export function PackagesStep({ os, active, basePackages, templateRepos = [] }: P
         template and is installed by the build.
       </p>
       {error && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+      {incompatible.length > 0 && (
+        <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">
+          Edge Pack packages cannot be added to an image built on a baseline image, because
+          they need DKMS driver builds the overlay does not run. Remove{' '}
+          <span className="font-mono">{incompatible.join(', ')}</span> to compose.
+        </div>
+      )}
 
       {!error && !os && (
         <p className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-400">
@@ -185,6 +222,12 @@ export function PackagesStep({ os, active, basePackages, templateRepos = [] }: P
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
                 <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+              ) : overlay ? (
+                <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
+                  Edge Packs are not available for an image built on a baseline image: they need
+                  DKMS driver builds, which the overlay does not run. Use the Repositories tab
+                  to pick packages.
+                </p>
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}

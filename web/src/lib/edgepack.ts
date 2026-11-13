@@ -314,3 +314,22 @@ export function versionsOf(pkg: EdgePackPackage, repo: string): PackageVersion[]
   if (pkg.version) return [{ version: pkg.version, repository: repo }]
   return []
 }
+
+// edgePackPackageNames is every package name the pack publishes, base runtimes
+// included: the same set the server checks a selection against when it decides
+// to enable DKMS for the build (Service.edgePackNameSet).
+export function edgePackPackageNames(pack: EdgePack): Set<string> {
+  const names = new Set(pack.baseRuntimes.map((r) => r.package.name))
+  for (const d of pack.domains) for (const p of d.packages) names.add(p.name)
+  return names
+}
+
+// overlayIncompatiblePackages lists the added packages an overlay-mode build
+// cannot take. Selecting any Edge Pack package turns on DKMS module builds,
+// which an overlay cannot run, so the server rejects the compose. That holds
+// however the package was picked — the Edge Packs tab, the Repositories tab or
+// search — so the check is on the selection itself.
+export function overlayIncompatiblePackages(pack: EdgePack, added: AddedPackage[]): string[] {
+  const names = edgePackPackageNames(pack)
+  return added.filter((p) => names.has(p.name)).map((p) => p.name)
+}

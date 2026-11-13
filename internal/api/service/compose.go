@@ -447,6 +447,9 @@ type ComposeResult struct {
 	// overrides. Like BasePackages it is populated unconditionally, so the
 	// Packages step can show them as in use rather than as optional repos.
 	TemplateRepos []string
+	// OEPInstaller says whether the resolved template downloads OEP Installer
+	// files, so a caller can ask for a GitHub token for the build.
+	OEPInstaller OEPInstallerInfo
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -567,7 +570,8 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		TemplateRepos: s.templateRepoIDs(sel.OS, merged.PackageRepositories),
 		// Reported from the resolved template, so a credential supplied in this
 		// same request shows as satisfied and the caller stops prompting.
-		Credentials: credentialRequirements(merged),
+		Credentials:  credentialRequirements(merged),
+		OEPInstaller: s.oepInstallerInfo(merged),
 	}
 
 	// With overrides in play, resolve the curated parent a second time so the
