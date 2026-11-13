@@ -159,6 +159,7 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--http-proxy URL`, `--https-proxy URL`, `--ftp-proxy URL` | Override `systemConfig.proxy.httpProxy`, `.httpsProxy`, `.ftpProxy`: the proxy persisted into the deployed system. A flag given an empty value (for example `--http-proxy ''`) clears the template's setting. Create mode only. |
 | `--no-proxy LIST` | Override `systemConfig.proxy.noProxy` (comma-separated, no spaces); `--no-proxy ''` clears it. Create mode only. |
 | `--ssh-authorized-key USER=FILE` | Add the public keys in `FILE` to `USER`'s `authorized_keys`. `USER` must be defined in `systemConfig.users`. Repeatable. |
+| `--oep-installer-token-file FILE` | Read the GitHub token for downloading `systemConfig.oepInstaller` files from a private repository from `FILE`, for this build only. Takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`. The file is read like a `token_file`: a regular file (or a symlink to one), trimmed, not empty. |
 
 The composition override flags change only the fields they name; an unset flag
 leaves the template untouched. Overridden values are validated exactly like
