@@ -102,7 +102,9 @@ sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`. Composition overrides: `--disk-strategy`,
 `--hostname`, `--http-proxy`, `--https-proxy`, `--ftp-proxy`,
-`--no-proxy`, `--ssh-authorized-key`.
+`--no-proxy`, `--ssh-authorized-key`. For `systemConfig.oepInstaller` files in a
+private repository, `--oep-installer-token-file FILE` reads the GitHub token
+for that build from `FILE`.
 See the full
 [build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
 for descriptions and additional flags like `--system-packages-only`.
