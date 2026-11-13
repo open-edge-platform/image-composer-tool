@@ -41,9 +41,10 @@ type document struct {
 // Parse validates `openedge-cli list --sbom` output produced for modules and
 // args and returns its contents. Every document must match the embedded
 // schema, and the first document must be the only header. When modules is
-// set, the header's module-list must equal it; when args is set, the arguments
-// of its install-cmdline must equal them. Either may be omitted, so a template
-// can take both from the output it names.
+// set, the header's module-list must equal it; when args is not nil, the
+// arguments of its install-cmdline must equal them, so an explicitly empty
+// list means no arguments. Either may be omitted, so a template can take both
+// from the output it names.
 func Parse(data []byte, modules, args []string) (*Output, error) {
 	docs, err := decodeDocuments(data)
 	if err != nil {
@@ -74,7 +75,7 @@ func newOutput(header document, modules, args []string) (*Output, error) {
 	if err != nil {
 		return nil, err
 	}
-	if installArgs != nil && len(args) > 0 && !slices.Equal(installArgs, args) {
+	if installArgs != nil && args != nil && !slices.Equal(installArgs, args) {
 		return nil, fmt.Errorf("openedge-cli output: install-cmdline arguments %v do not match the requested "+
 			"arguments %v", installArgs, args)
 	}

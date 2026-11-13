@@ -100,6 +100,8 @@ func TestParseInstallCmdline(t *testing.T) {
 			[]string{"--k3s"}, nil, "do not match"},
 		{"template without arguments takes the output's", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
 			nil, []string{"--edgepack"}, ""},
+		{"explicitly no arguments must match", `["openedge-cli","install","handheld_blueprint","--edgepack"]`,
+			[]string{}, nil, "do not match"},
 		{"not an install command", `["openedge-cli","list","handheld_blueprint"]`, nil, nil, "must be the CLI"},
 		{"other modules", `["openedge-cli","install","uav_blueprint"]`, nil, nil, "must be the CLI"},
 		{"too short", `["openedge-cli"]`, nil, nil, "must be the CLI"},

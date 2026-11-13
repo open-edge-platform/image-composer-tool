@@ -60,20 +60,14 @@ func (t *ImageTemplate) validateOEPInstaller() error {
 		return err
 	}
 	if len(o.Modules) > 0 {
-		if err := validateOEPInstallerModules(o.Modules); err != nil {
+		if err := ValidateOEPInstallerModules("systemConfig.oepInstaller.modules", o.Modules); err != nil {
 			return err
 		}
 	}
 	if err := t.validateOEPInstallerUser(o.User); err != nil {
 		return err
 	}
-	for i, a := range o.Args {
-		if a == "" || !provisioningValueRe.MatchString(a) {
-			return fmt.Errorf("systemConfig.oepInstaller.args[%d] must be 1-256 characters of "+
-				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", i)
-		}
-	}
-	return nil
+	return ValidateOEPInstallerArgs("systemConfig.oepInstaller.args", o.Args)
 }
 
 // validateOEPInstallerDownload checks a download: an https:// URL of the file
@@ -83,19 +77,29 @@ func validateOEPInstallerDownload(urlField, raw, shaField, sha string, shaRequir
 	if raw == "" {
 		return fmt.Errorf("systemConfig.oepInstaller.%s is required", urlField)
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return fmt.Errorf("systemConfig.oepInstaller.%s must be an https:// URL (got %q)", urlField, raw)
-	}
-	if u.User != nil {
-		return fmt.Errorf("systemConfig.oepInstaller.%s must not contain credentials", urlField)
-	}
-	if rawURL, ok := githubRawURL(u); ok {
-		return fmt.Errorf("systemConfig.oepInstaller.%s %q is a GitHub web page, not the file; use %q",
-			urlField, u, rawURL)
+	if err := ValidateOEPInstallerURL("systemConfig.oepInstaller."+urlField, raw); err != nil {
+		return err
 	}
 	if (sha != "" || shaRequired) && !sha256HexRe.MatchString(sha) {
 		return fmt.Errorf("systemConfig.oepInstaller.%s must be a 64-character hex SHA-256 digest", shaField)
+	}
+	return nil
+}
+
+// ValidateOEPInstallerURL checks that raw, which name describes in messages,
+// is an https:// URL of the file itself: with a host, without credentials, and
+// not a GitHub web page. ICT applies it to a template's url and sbomUrl, and to
+// a CLI URL it takes from an OEP Installer output.
+func ValidateOEPInstallerURL(name, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("%s must be an https:// URL (got %q)", name, raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s must not contain credentials", name)
+	}
+	if rawURL, ok := githubRawURL(u); ok {
+		return fmt.Errorf("%s %q is a GitHub web page, not the file; use %q", name, u, rawURL)
 	}
 	return nil
 }
@@ -114,20 +118,35 @@ func githubRawURL(u *url.URL) (string, bool) {
 	return "https://raw.githubusercontent.com/" + parts[0] + "/" + parts[1] + "/" + parts[3], true
 }
 
-func validateOEPInstallerModules(modules []string) error {
+// ValidateOEPInstallerModules checks modules, which name describes in
+// messages: at least one, each a valid module name, none twice. ICT applies it
+// to a template's modules and to the module-list it takes from an output.
+func ValidateOEPInstallerModules(name string, modules []string) error {
 	if len(modules) == 0 {
-		return fmt.Errorf("systemConfig.oepInstaller.modules must list at least one profile or module")
+		return fmt.Errorf("%s must list at least one profile or module", name)
 	}
 	seen := make(map[string]bool, len(modules))
 	for _, m := range modules {
 		if !provisioningScriptNameRe.MatchString(m) {
-			return fmt.Errorf("invalid systemConfig.oepInstaller.modules entry %q: must match %s",
-				m, provisioningScriptNameRe.String())
+			return fmt.Errorf("invalid %s entry %q: must match %s", name, m, provisioningScriptNameRe.String())
 		}
 		if seen[m] {
-			return fmt.Errorf("duplicate systemConfig.oepInstaller.modules entry %q", m)
+			return fmt.Errorf("duplicate %s entry %q", name, m)
 		}
 		seen[m] = true
+	}
+	return nil
+}
+
+// ValidateOEPInstallerArgs checks install arguments, which name describes in
+// messages; they become arguments of the first-boot unit. ICT applies it to a
+// template's args and to the arguments it takes from an output.
+func ValidateOEPInstallerArgs(name string, args []string) error {
+	for i, a := range args {
+		if a == "" || !provisioningValueRe.MatchString(a) {
+			return fmt.Errorf("%s[%d] must be 1-256 characters of "+
+				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", name, i)
+		}
 	}
 	return nil
 }

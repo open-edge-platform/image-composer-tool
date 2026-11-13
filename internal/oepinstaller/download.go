@@ -218,19 +218,17 @@ func Load(o config.OEPInstallerConfig) (*Output, error) {
 
 // checkCLI compares the CLI that generated the output (cli-url) with the CLI
 // the template installs on first boot (url). A cli-url that is a raw URL, and
-// so pinned to a commit, must equal url, and a cli-sha256 must then equal
-// sha256. A web-page cli-url on a branch can only be compared by repository
-// and path.
+// so pinned to a commit, must equal url, and a cli-sha256 must equal sha256
+// whatever the URLs. A web-page cli-url on a branch can only be compared by
+// repository and path.
 func checkCLI(out *Output, o config.OEPInstallerConfig) error {
-	cliURL, templateURL := out.CLIURL, o.URL
-	if cliURL == templateURL {
-		if out.CLISHA256 != "" && !strings.EqualFold(out.CLISHA256, o.SHA256) {
-			return fmt.Errorf("the output gives the CLI's SHA-256 as %s, but systemConfig.oepInstaller.sha256 is %s",
-				out.CLISHA256, o.SHA256)
-		}
-		return nil
+	// The digests pin content, so they must agree whatever the URLs say.
+	if out.CLISHA256 != "" && !strings.EqualFold(out.CLISHA256, o.SHA256) {
+		return fmt.Errorf("the output gives the CLI's SHA-256 as %s, but systemConfig.oepInstaller.sha256 is %s",
+			out.CLISHA256, o.SHA256)
 	}
-	if cliURL == "" {
+	cliURL, templateURL := out.CLIURL, o.URL
+	if cliURL == "" || cliURL == templateURL {
 		return nil
 	}
 	if cliFile(cliURL) != cliFile(templateURL) {
@@ -253,16 +251,9 @@ func checkCLI(out *Output, o config.OEPInstallerConfig) error {
 // one, and records the digests of what was downloaded, so the template the
 // image carries pins exactly what was installed.
 func Resolve(o config.OEPInstallerConfig, out *Output) (resolved config.OEPInstallerConfig, cli []byte, err error) {
-	resolved = o
-	if resolved.URL == "" {
-		if out.CLIURL == "" {
-			return o, nil, fmt.Errorf("%s names no CLI (cli-url); set systemConfig.oepInstaller.url and sha256",
-				o.SBOMURL)
-		}
-		if u, perr := url.Parse(out.CLIURL); perr != nil || u.Scheme != "https" {
-			return o, nil, fmt.Errorf("%s: cli-url %q is not an https:// URL", o.SBOMURL, out.CLIURL)
-		}
-		resolved.URL, resolved.SHA256 = out.CLIURL, out.CLISHA256
+	resolved, err = complete(o, out)
+	if err != nil {
+		return o, nil, fmt.Errorf("%s: %w", o.SBOMURL, err)
 	}
 	cli, err = Download(resolved.URL, resolved.SHA256)
 	if err != nil {
@@ -270,15 +261,39 @@ func Resolve(o config.OEPInstallerConfig, out *Output) (resolved config.OEPInsta
 	}
 	resolved.SHA256 = sha256Hex(cli)
 	resolved.SBOMSHA256 = out.SHA256
-	if len(resolved.Modules) == 0 {
-		resolved.Modules = slices.Clone(out.Modules)
-	}
-	if len(resolved.Args) == 0 {
-		resolved.Args = slices.Clone(out.Arguments)
-	}
 	logger.Logger().Infof("OEP Installer: CLI %s (SHA-256 %s); openedge-cli install %s",
 		resolved.URL, resolved.SHA256, strings.Join(append(slices.Clone(resolved.Modules), resolved.Args...), " "))
 	return resolved, cli, nil
+}
+
+// complete fills in what o omits from out, checking each value it takes with
+// the rules for the template's own field: the CLI (cli-url and cli-sha256)
+// when o has no url, the modules when o lists none, and the arguments when o
+// omits args. An explicitly empty args is kept, and Parse has already checked
+// that it matches the output.
+func complete(o config.OEPInstallerConfig, out *Output) (config.OEPInstallerConfig, error) {
+	if o.URL == "" {
+		if out.CLIURL == "" {
+			return o, fmt.Errorf("the output names no CLI (cli-url); set systemConfig.oepInstaller.url and sha256")
+		}
+		if err := config.ValidateOEPInstallerURL("the output's cli-url", out.CLIURL); err != nil {
+			return o, err
+		}
+		o.URL, o.SHA256 = out.CLIURL, out.CLISHA256
+	}
+	if len(o.Modules) == 0 {
+		if err := config.ValidateOEPInstallerModules("the output's module-list", out.Modules); err != nil {
+			return o, err
+		}
+		o.Modules = slices.Clone(out.Modules)
+	}
+	if o.Args == nil {
+		if err := config.ValidateOEPInstallerArgs("the output's install-cmdline arguments", out.Arguments); err != nil {
+			return o, err
+		}
+		o.Args = slices.Clone(out.Arguments)
+	}
+	return o, nil
 }
 
 // cliFile identifies a CLI file on GitHub by repository and path, ignoring

@@ -193,6 +193,9 @@ func TestCheckCLI(t *testing.T) {
 		{"no cli-url", "", "", pinned, ""},
 		{"branch page of the same file", "https://github.com/org/oep-installer-cli/blob/main/rendered/" +
 			"openedge-cli-federal-aerospace", "", pinned, ""},
+		{"branch page of the same file, other digest", "https://github.com/org/oep-installer-cli/blob/main/rendered/" +
+			"openedge-cli-federal-aerospace", strings.Repeat("f", 64), pinned, "SHA-256"},
+		{"no cli-url, other digest", "", strings.Repeat("f", 64), pinned, "SHA-256"},
 		{"pinned CLI at another commit", pinned, "",
 			"https://raw.githubusercontent.com/org/oep-installer-cli/1234abc/rendered/openedge-cli-federal-aerospace",
 			"a different version"},
@@ -283,7 +286,22 @@ func TestResolve(t *testing.T) {
 	}{
 		{"cli-sha256 mismatch", sbomOnly, func(o *Output) { o.CLISHA256 = strings.Repeat("0", 64) }, "SHA-256 is"},
 		{"no cli-url", sbomOnly, func(o *Output) { o.CLIURL = "" }, "names no CLI"},
-		{"http cli-url", sbomOnly, func(o *Output) { o.CLIURL = "http://example.com/cli" }, "not an https:// URL"},
+		{"http cli-url", sbomOnly, func(o *Output) { o.CLIURL = "http://example.com/cli" }, "must be an https:// URL"},
+		{"cli-url with credentials", sbomOnly, func(o *Output) {
+			o.CLIURL = strings.Replace(o.CLIURL, "https://", "https://user:secret@", 1)
+		}, "must not contain credentials"},
+		{"cli-url a GitHub page", sbomOnly, func(o *Output) {
+			o.CLIURL = "https://github.com/org/oep-installer-cli/blob/main/rendered/openedge-cli-federal-aerospace"
+		}, "GitHub web page"},
+		{"module-list entry that is an option", sbomOnly, func(o *Output) {
+			o.Modules = []string{"--docker"}
+		}, "invalid the output's module-list entry"},
+		{"duplicate module-list entry", sbomOnly, func(o *Output) {
+			o.Modules = []string{"handheld_blueprint", "handheld_blueprint"}
+		}, "duplicate"},
+		{"install argument with a space", sbomOnly, func(o *Output) {
+			o.Arguments = []string{"--edgepack --docker"}
+		}, "install-cmdline arguments[0]"},
 		{"template CLI digest mismatch", config.OEPInstallerConfig{URL: cliURL, SHA256: strings.Repeat("0", 64)},
 			func(*Output) {}, "SHA-256 is"},
 	}
@@ -295,6 +313,13 @@ func TestResolve(t *testing.T) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
 			}
 		})
+	}
+
+	// An explicitly empty args stays empty rather than taking the output's.
+	none := sbomOnly
+	none.Args = []string{}
+	if got, _, err := Resolve(none, out); err != nil || got.Args == nil || len(got.Args) != 0 {
+		t.Errorf("Resolve with args: [] = %+v, %v; want no arguments", got.Args, err)
 	}
 
 	// A template that names its own CLI and modules keeps them.

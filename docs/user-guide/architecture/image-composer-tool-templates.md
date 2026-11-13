@@ -1332,7 +1332,7 @@ described in the
 | `url` | string | No | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. The same GitHub rule as for `sbomUrl` applies. When omitted, ICT installs the CLI the output was generated with, named by its `cli-url` header |
 | `sha256` | string | With `url` | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
 | `modules` | string[] | No | Profiles or modules to install, as accepted by `openedge-cli install`. When omitted, the output's `module-list`; when set, it must equal it |
-| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install` (no spaces, quotes, `$` or `;`). When omitted, the arguments in the output's `install-cmdline`; when set, they must equal them, since some profiles choose modules based on them |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install` (no spaces, quotes, `$` or `;`). When omitted, the arguments in the output's `install-cmdline`; when set, including `[]` for none, they must equal them, since some profiles choose modules based on them |
 
 At build time ICT downloads the file at `sbomUrl`, checks it against
 `sbomSha256` when set, and then:
@@ -1346,8 +1346,10 @@ At build time ICT downloads the file at `sbomUrl`, checks it against
   entry with the same URL and suite is replaced by the one from the file.
 - Downloads the CLI: the one at `url`, checked against `sha256`, or, without
   `url`, the one at the file's `cli-url`, checked against its `cli-sha256`
-  header when present. The build fails when `url` names a different version of
-  the CLI than `cli-url`, or when a digest does not match. ICT then completes
+  header when present. A `cli-url`, `module-list`, or `install-cmdline` it
+  takes in place of an omitted field must pass the same checks as that field.
+  The build fails when `url` names a different version of the CLI than
+  `cli-url`, or when a digest does not match. ICT then completes
   the section with the CLI it installed, the digests of both files, and the
   modules and arguments, so the template the image carries records exactly
   what was installed.

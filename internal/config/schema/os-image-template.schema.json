@@ -419,7 +419,7 @@
         "args": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{1,256}$" },
-          "description": "Extra arguments passed to openedge-cli install (no spaces, quotes, $ or ;). Optional: when omitted, the arguments of the sbomUrl output's install-cmdline; when set, must equal them"
+          "description": "Extra arguments passed to openedge-cli install (no spaces, quotes, $ or ;). Optional: when omitted, the arguments of the sbomUrl output's install-cmdline; when set, including [] for none, must equal them"
         }
       },
       "required": ["sbomUrl", "user"],
