@@ -1372,7 +1372,7 @@ read access, for example the one the GitHub CLI stores
 versions). ICT uses the first of these that is set:
 
 1. `build --oep-installer-token-file FILE`: a file holding the token for that
-   build only.
+   build only. The Web UI uses this for a token entered for one build.
 2. `ICT_OEP_INSTALLER_TOKEN`: the token itself, for a build run from a shell.
 3. `ICT_OEP_INSTALLER_TOKEN_FILE`: the path of a file holding the token, such
    as a mounted Docker or Kubernetes secret.

@@ -140,10 +140,12 @@ export const api = {
     return `${BASE}/packages/search/stream?${qs.toString()}`
   },
 
-  startBuild: (req: ComposeRequest) =>
+  // oepInstallerToken is a GitHub token for this build only. It is sent beside
+  // the selection, never inside it: the server stores the selection for retry.
+  startBuild: (req: ComposeRequest, oepInstallerToken?: string) =>
     jsonFetch<BuildAccepted>('/builds', {
       method: 'POST',
-      body: JSON.stringify({ compose: req }),
+      body: JSON.stringify(oepInstallerToken ? { compose: req, oepInstallerToken } : { compose: req }),
     }),
 
   // Compose history, newest-first (merges live builds + on-disk meta records).

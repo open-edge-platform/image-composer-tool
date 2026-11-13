@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
-import type { CredentialInput, CredentialRequirement, NewUserInput } from '../api/types'
+import type { CredentialInput, CredentialRequirement, NewUserInput, OEPInstallerInfo } from '../api/types'
 import { CredentialsStep, missingCredentials } from './CredentialsStep'
+import { Input } from './Input'
 import { NewUsersSection, newUserIssues } from './NewUsersSection'
 
 interface CredentialsDialogProps {
@@ -12,6 +13,11 @@ interface CredentialsDialogProps {
   // the section entirely, for a caller that only collects logins.
   newUsers?: NewUserInput[]
   onNewUsersChange?: (users: NewUserInput[]) => void
+  // The resolved template's OEP Installer use. When it uses one, the dialog asks
+  // for a GitHub token for this build; omitting the handler hides the field.
+  oepInstaller?: OEPInstallerInfo
+  oepInstallerToken?: string
+  onOEPInstallerTokenChange?: (token: string) => void
   credentialsReady: boolean
   busy: boolean
   buildInProgress: boolean
@@ -27,6 +33,9 @@ export function CredentialsDialog({
   onChange,
   newUsers,
   onNewUsersChange,
+  oepInstaller,
+  oepInstallerToken,
+  onOEPInstallerTokenChange,
   credentialsReady,
   busy,
   buildInProgress,
@@ -139,6 +148,22 @@ export function CredentialsDialog({
             users={newUsers ?? []}
             onChange={onNewUsersChange}
             disabled={busy || buildInProgress}
+          />
+        )}
+        {oepInstaller?.uses && onOEPInstallerTokenChange && (
+          <Input
+            label="GitHub token for the OEP Installer"
+            type="password"
+            autoComplete="off"
+            value={oepInstallerToken ?? ''}
+            disabled={busy || buildInProgress}
+            hint={
+              oepInstaller.serverToken
+                ? 'Optional. Leave empty to use the token the server is configured with.'
+                : 'Needed when the OEP Installer files are in a private repository: a token with read access ' +
+                  'to its contents. Used for this build only and not stored.'
+            }
+            onChange={onOEPInstallerTokenChange}
           />
         )}
         {error && (
