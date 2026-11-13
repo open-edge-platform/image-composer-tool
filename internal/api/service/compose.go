@@ -441,6 +441,12 @@ type ComposeResult struct {
 	// A caller can use this to prompt for missing credentials rather than
 	// discovering the gap partway through a build.
 	Credentials []CredentialRequirement
+	// TemplateRepos are the ids of the catalog repositories the matched
+	// template itself installs from — its packageRepositories through the
+	// whole extends chain and the default config — before this selection's
+	// overrides. Like BasePackages it is populated unconditionally, so the
+	// Packages step can show them as in use rather than as optional repos.
+	TemplateRepos []string
 	// OEPInstaller says whether the resolved template downloads OEP Installer
 	// files, so a caller can ask for a GitHub token for the build.
 	OEPInstaller OEPInstallerInfo
@@ -560,7 +566,8 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		DeltaYAML: deltaYAML,
 		// With no overrides, merged *is* the base template — set here so it's
 		// still correct if the overrides branch below skips the second resolve.
-		BasePackages: merged.SystemConfig.Packages,
+		BasePackages:  merged.SystemConfig.Packages,
+		TemplateRepos: s.templateRepoIDs(sel.OS, merged.PackageRepositories),
 		// Reported from the resolved template, so a credential supplied in this
 		// same request shows as satisfied and the caller stops prompting.
 		Credentials:  credentialRequirements(merged),
@@ -580,6 +587,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			}
 			res.PinConflicts = pinConflicts(sel.Packages, base.SystemConfig.Packages)
 			res.BasePackages = base.SystemConfig.Packages
+			// Without the overrides, so a repo the user enabled is not reported
+			// as one the template ships.
+			res.TemplateRepos = s.templateRepoIDs(sel.OS, base.PackageRepositories)
 		} else {
 			logger.Logger().Warnf("compose: baseline resolve of %s failed, omitting base view: %v", tmpl, berr)
 		}

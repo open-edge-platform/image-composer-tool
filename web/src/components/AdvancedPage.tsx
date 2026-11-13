@@ -102,6 +102,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // the Packages check below must keep seeing what the template ships while a
   // recompose is in flight.
   const [lastBasePackages, setLastBasePackages] = useState<string[] | null>(null)
+  // The repositories the matched template itself installs from, from the last
+  // successful compose. Held for the same reason lastBasePackages is: the
+  // Repositories list must not drop them to "optional" while a recompose is in
+  // flight.
+  const [lastTemplateRepos, setLastTemplateRepos] = useState<string[]>([])
   // The Edge Pack for the selected OS, for the same check. Fetched here rather
   // than taken from the Packages step, which unmounts once the wizard moves on
   // and starts each visit with nothing loaded. Keyed by OS so a stale pack is
@@ -188,6 +193,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setNewUsers([])
     setLastRequirements([])
     setLastBasePackages(null)
+    setLastTemplateRepos([])
     setOverlay(false)
     setOEPInstallerToken('')
     setLastOEPInstaller(undefined)
@@ -277,6 +283,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
           setLastBasePackages(r.basePackages ?? [])
+          setLastTemplateRepos(r.templateRepos ?? [])
           setLastOEPInstaller(r.oepInstaller)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
@@ -525,6 +532,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             os={selection.os}
             active={active}
             basePackages={composed?.basePackages ?? []}
+            templateRepos={lastTemplateRepos}
             overlay={overlay}
           />
         )}
