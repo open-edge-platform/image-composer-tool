@@ -134,21 +134,22 @@ combinations:
     imageType: iso
     template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
 
-  # Demo SKU: installs only the Standard base runtime, no Media or
-  # Manageability add-ons — used to exercise the Web UI Advanced tab's Edge
-  # Pack "already in template" pre-check against a selection that locks in a
-  # base runtime but leaves every domain unselected.
+  # Demo SKU: installs only the Standard base runtime, no Media,
+  # Manageability or TSN add-ons — used to exercise the Web UI Advanced tab's
+  # Edge Pack "already in template" pre-check against a selection that locks in
+  # a base runtime but leaves every domain unselected. The template targets
+  # Ubuntu 26.04 despite its ubuntu24/ path.
   - vertical: platform-enablement
     sku: edgepack-standard-only
     platform: ptl
-    os: ubuntu24
+    os: ubuntu26
     imageType: iso
     template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack-standard-only
     platform: wcl
-    os: ubuntu24
+    os: ubuntu26
     imageType: iso
     template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
 
