@@ -22,6 +22,7 @@ type document struct {
 	SchemaVersion     string   `yaml:"schema-version"`
 	CLIVersion        string   `yaml:"cli-version"`
 	CLIURL            string   `yaml:"cli-url"`
+	CLISHA256         string   `yaml:"cli-sha256"`
 	ModuleList        []string `yaml:"module-list"`
 	InstallCmdline    []string `yaml:"install-cmdline"`
 	PkgList           []string `yaml:"pkg-list"`
@@ -39,9 +40,11 @@ type document struct {
 
 // Parse validates `openedge-cli list --sbom` output produced for modules and
 // args and returns its contents. Every document must match the embedded
-// schema, the first document must be the only header, the header's
-// module-list must equal modules, and the arguments of its install-cmdline,
-// when present, must equal args.
+// schema, and the first document must be the only header. When modules is
+// set, the header's module-list must equal it; when args is not nil, the
+// arguments of its install-cmdline must equal them, so an explicitly empty
+// list means no arguments. Either may be omitted, so a template can take both
+// from the output it names.
 func Parse(data []byte, modules, args []string) (*Output, error) {
 	docs, err := decodeDocuments(data)
 	if err != nil {
@@ -64,7 +67,7 @@ func Parse(data []byte, modules, args []string) (*Output, error) {
 
 // newOutput checks the header against the requested modules and arguments.
 func newOutput(header document, modules, args []string) (*Output, error) {
-	if !slices.Equal(header.ModuleList, modules) {
+	if len(modules) > 0 && !slices.Equal(header.ModuleList, modules) {
 		return nil, fmt.Errorf("openedge-cli output: module-list %v does not match the requested modules %v",
 			header.ModuleList, modules)
 	}
@@ -72,12 +75,14 @@ func newOutput(header document, modules, args []string) (*Output, error) {
 	if err != nil {
 		return nil, err
 	}
-	if installArgs != nil && !slices.Equal(installArgs, args) {
+	if installArgs != nil && args != nil && !slices.Equal(installArgs, args) {
 		return nil, fmt.Errorf("openedge-cli output: install-cmdline arguments %v do not match the requested "+
 			"arguments %v", installArgs, args)
 	}
-	return &Output{CLIVersion: header.CLIVersion, CLIURL: header.CLIURL, Modules: header.ModuleList,
-		InstallCmdline: header.InstallCmdline, Arguments: installArgs}, nil
+	return &Output{
+		CLIVersion: header.CLIVersion, CLIURL: header.CLIURL, CLISHA256: header.CLISHA256,
+		Modules: header.ModuleList, InstallCmdline: header.InstallCmdline, Arguments: installArgs,
+	}, nil
 }
 
 // installArguments returns the arguments of an install-cmdline of the form

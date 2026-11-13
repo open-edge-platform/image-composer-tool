@@ -463,14 +463,16 @@ func (p *ubuntu) downloadImagePkgs(template *config.ImageTemplate) error {
 	return nil
 }
 
-// addOEPInstallerFirstBoot downloads the CLI the template pins and adds the
-// first-boot installation that runs it.
-func addOEPInstallerFirstBoot(template *config.ImageTemplate) error {
-	o := template.SystemConfig.OEPInstaller
-	cli, err := oepinstaller.Download(o.URL, o.SHA256)
+// addOEPInstallerFirstBoot downloads the CLI, the template's or the one out
+// was generated with, and adds the first-boot installation that runs it. The
+// template's section is completed from out first, so the first boot and the
+// template the image carries name exactly what was installed.
+func addOEPInstallerFirstBoot(template *config.ImageTemplate, out *oepinstaller.Output) error {
+	resolved, cli, err := oepinstaller.Resolve(template.SystemConfig.OEPInstaller, out)
 	if err != nil {
 		return err
 	}
+	template.SystemConfig.OEPInstaller = resolved
 	if err := os.MkdirAll(config.TempDir(), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", config.TempDir(), err)
 	}
@@ -497,7 +499,7 @@ func applyOEPInstaller(template *config.ImageTemplate) (*oepinstaller.Output, er
 	if err := oepinstaller.Apply(template, out); err != nil {
 		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
 	}
-	if err := addOEPInstallerFirstBoot(template); err != nil {
+	if err := addOEPInstallerFirstBoot(template, out); err != nil {
 		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
 	}
 	return out, nil

@@ -1326,16 +1326,16 @@ described in the
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `url` | string | Yes | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
-| `sha256` | string | Yes | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
-| `sbomUrl` | string | Yes | `https://` URL of the published `list --sbom` output for `modules`, pinned to a commit or tag. The same GitHub rule as for `url` applies |
-| `sbomSha256` | string | Yes | Hex SHA-256 digest of the file at `sbomUrl` |
-| `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install`. Must equal the `module-list` of the `sbomUrl` output |
+| `sbomUrl` | string | Yes | `https://` URL of the published `list --sbom` output, pinned to a commit or tag, or on a branch (see below). For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
+| `sbomSha256` | string | No | Hex SHA-256 digest of the file at `sbomUrl`; the build fails if the download does not match. When omitted, the file is not verified, and the build log records the digest of what was downloaded |
 | `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
-| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must equal the arguments in the `install-cmdline` of the `sbomUrl` output, since some profiles choose modules based on them; the build fails otherwise (no spaces, quotes, `$` or `;`) |
+| `url` | string | No | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. The same GitHub rule as for `sbomUrl` applies. When omitted, ICT installs the CLI the output was generated with, named by its `cli-url` header |
+| `sha256` | string | With `url` | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
+| `modules` | string[] | No | Profiles or modules to install, as accepted by `openedge-cli install`. When omitted, the output's `module-list`; when set, it must equal it |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install` (no spaces, quotes, `$` or `;`). When omitted, the arguments in the output's `install-cmdline`; when set, including `[]` for none, they must equal them, since some profiles choose modules based on them |
 
 At build time ICT downloads the file at `sbomUrl`, checks it against
-`sbomSha256`, and then:
+`sbomSha256` when set, and then:
 
 - Adds the packages it lists to `systemConfig.packages`. Versions written as
   `name=version` or `name=version*` (the newest version starting with
@@ -1344,6 +1344,15 @@ At build time ICT downloads the file at `sbomUrl`, checks it against
 - Adds the apt repositories it lists, writing their sources list, keyring, and
   preferences files at the paths `openedge-cli` uses. A `packageRepositories`
   entry with the same URL and suite is replaced by the one from the file.
+- Downloads the CLI: the one at `url`, checked against `sha256`, or, without
+  `url`, the one at the file's `cli-url`, checked against its `cli-sha256`
+  header when present. A `cli-url`, `module-list`, or `install-cmdline` it
+  takes in place of an omitted field must pass the same checks as that field.
+  The build fails when `url` names a different version of the CLI than
+  `cli-url`, or when a digest does not match. ICT then completes
+  the section with the CLI it installed, the digests of both files, and the
+  modules and arguments, so the template the image carries records exactly
+  what was installed.
 - Fails the build when the file's `module-list` differs from `modules`, a
   listed package conflicts with the template's version of it, a package the
   file requires not to be installed is in `systemConfig.packages`, or a
@@ -1408,6 +1417,24 @@ systemConfig:
 The output file pins the kernel of the host it was generated on (for example
 `linux-headers-7.0.0-38-generic`), so the template must install that exact
 kernel.
+
+**Following a branch.** While the OEP Installer is in development, a template
+can name only the output, on a branch, and the user:
+
+```yaml
+systemConfig:
+  oepInstaller:
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/release-2026.3.0/rendered/sbom-handheld-blueprint-docker-ubuntu-24.04.5.yaml
+    user: edge
+```
+
+Each build then uses the output at the tip of the branch, with the CLI, modules,
+and arguments it names, so fixes on the branch need no template change. Builds
+of the same template are not reproducible, and the output is not verified; the
+CLI is verified only when the output gives its `cli-sha256`. A change of
+kernel or kernel parameters on the branch still needs the template to change
+with it. For a release, pin `sbomUrl` to a commit or tag and set `sbomSha256`:
+the output then pins the CLI by commit and, with `cli-sha256`, by digest.
 
 ## Package Repositories
 

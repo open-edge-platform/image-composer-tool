@@ -134,7 +134,8 @@ documents are allowed and ignored.
 | `schema-version` | string | yes | `"1"` for this specification. ICT rejects versions it does not support. |
 | `cli-version` | string | yes | The `openedge-cli` version: the release version (for example `"v2026.3.0"`), which changes with each release, or the commit the CLI was built from for files generated before a release. ICT records it. |
 | `module-list` | array of string | yes | The profiles or modules the output was produced for, in the order requested. |
-| `cli-url` | string | no | Raw URL of the CLI file that generated the output, pinned to a commit or tag (for example `https://raw.githubusercontent.com/intel-sandbox/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace`). ICT fails the build when it differs from the template's CLI `url`, so first boot runs the CLI that generated the output. For a web-page URL on a branch, ICT can only compare the repository and file name, and warns. |
+| `cli-url` | string | no | Raw URL of the CLI file that generated the output, pinned to a commit or tag (for example `https://raw.githubusercontent.com/intel-sandbox/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace`). A template that names no CLI `url` gets this CLI, so first boot always runs the CLI that generated the output. A template that names one fails the build when it differs from this one; for a web-page URL on a branch, ICT can only compare the repository and file name, and warns. |
+| `cli-sha256` | string | no | Lowercase hex SHA-256 digest of the file at `cli-url`. ICT verifies the CLI against it, which pins the CLI by content for a template that names only the output. Required for release outputs. |
 | `install-cmdline` | array of string | no | The install command the output was generated for: the CLI, `install`, the `module-list`, then any arguments (for example `["openedge-cli","install","handheld_blueprint","--edgepack"]`). ICT checks that the arguments equal the template's `args`, which first boot passes to `install`. |
 
 ### A.6 Component documents
@@ -278,9 +279,10 @@ ICT imports the output file on the build host before it resolves packages:
    longer needed once the files are published in a public repository.
 2. **Parse and validate.** ICT reads the YAML stream and checks that:
    - the first document is the header, its `schema-version` is supported,
-     its `module-list` equals the template's `modules`, the arguments of its
-     `install-cmdline`, when present, equal the template's `args`, and its
-     `cli-url`, when present, matches the template's CLI `url` (A.5)
+     its `module-list` equals the template's `modules` and the arguments of
+     its `install-cmdline` equal the template's `args`, when the template sets
+     them (otherwise ICT uses the header's), and its `cli-url`, when present,
+     matches the template's CLI `url` when the template names one (A.5)
    - every document matches the JSON Schema in the appendix
    - the rules the schema cannot express hold: `signed-by` in `apt-source`
      equals `key-file`, and every package name or glob in `pkg-list`
@@ -400,6 +402,7 @@ identical.
         "schema-version": { "const": "1" },
         "cli-version": { "$ref": "#/$defs/nonEmpty" },
         "cli-url": { "$ref": "#/$defs/url" },
+        "cli-sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
         "install-cmdline": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } },
         "module-list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
       }
