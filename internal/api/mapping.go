@@ -4,6 +4,7 @@
 package api
 
 import (
+	"strings"
 	"time"
 
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
@@ -190,6 +191,9 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 	if r.Yaml != nil {
 		req.YAML = *r.Yaml
 	}
+	if r.OepInstallerToken != nil {
+		req.OEPInstallerToken = strings.TrimSpace(*r.OepInstallerToken)
+	}
 	return req
 }
 
@@ -350,12 +354,16 @@ func fromEdgePackPackage(p service.EdgePackPackage) httpapi.EdgePackPackage {
 // fromPackageSearchResults maps a search's hits to the wire type. Repository
 // is the hit's RepoID — the same id the `repos` filter param and
 // /package-repos both use, so a client can round-trip one into the other.
-func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int) httpapi.PackageSearchResults {
-	return httpapi.PackageSearchResults{
+func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int, unavailable []string) httpapi.PackageSearchResults {
+	out := httpapi.PackageSearchResults{
 		Packages: fromPackageSearchHits(hits),
 		Query:    query,
 		Total:    total,
 	}
+	if len(unavailable) > 0 {
+		out.UnavailableRepos = &unavailable
+	}
+	return out
 }
 
 // fromPackageSearchHits maps hits to the wire type. Shared with the SSE search
@@ -473,6 +481,9 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 			})
 		}
 		out.Credentials = &creds
+	}
+	if r.OEPInstaller.Uses {
+		out.OepInstaller = &httpapi.OEPInstallerInfo{Uses: true, ServerToken: r.OEPInstaller.ServerToken}
 	}
 	return out
 }

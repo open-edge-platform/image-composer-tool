@@ -18,9 +18,11 @@ import {
   domainLockReason,
   domainPackageNames,
   domainSelectable,
+  edgePackPackageNames,
   groupSelectionState,
   groupToggleMode,
   isSelected,
+  overlayIncompatiblePackages,
   packToggleMode,
   reposToEnable,
   selectedBaseRuntime,
@@ -546,5 +548,19 @@ describe('packToggleMode', () => {
 
   it('locks once everything addable is already covered by the template', () => {
     expect(mode(true, [], lockOf('media-ffmpeg', 'shared-runtime'))).toBe('locked')
+  })
+})
+
+describe('overlayIncompatiblePackages', () => {
+  it('names every package the pack publishes, base runtimes and unavailable domains included', () => {
+    expect([...edgePackPackageNames(pack)].sort()).toEqual(
+      ['base-realtime', 'base-standard', 'media-ffmpeg', 'npu-driver', 'shared-runtime'],
+    )
+  })
+
+  it('flags Edge Pack packages however they were added, and nothing else', () => {
+    expect(overlayIncompatiblePackages(pack, add('vim', 'base-standard', 'jq', 'shared-runtime')))
+      .toEqual(['base-standard', 'shared-runtime'])
+    expect(overlayIncompatiblePackages(pack, add('vim', 'jq'))).toEqual([])
   })
 })

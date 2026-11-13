@@ -110,12 +110,21 @@ image or corrupt generated configuration:
   image carries. Release templates should pin `sbomUrl` with `sbomSha256`.
 * The GitHub token for OEP Installer files in private repositories is read at
   build time from `ICT_OEP_INSTALLER_TOKEN`, or from a file that
-  `ICT_OEP_INSTALLER_TOKEN_FILE` or the global configuration's
-  `oep_installer.token_file` names. The file form keeps the token off command
+  `build --oep-installer-token-file`, `ICT_OEP_INSTALLER_TOKEN_FILE` or the
+  global configuration's `oep_installer.token_file` names. The file form keeps the token off command
   lines (the Web UI's `serve --sudo` passes only a path) and out of
   `docker inspect`; ICT warns when other users can read the file. The token is
   sent only to GitHub hosts, is never logged, and is not written to the image
   or to the template carried on the ISO.
+* A token entered in the Web UI for one build travels in the build request,
+  beside the selection rather than in it, so it is not stored with the build
+  for **Retry**. The server keeps it in memory, writes it to a mode `0600` file
+  under the work directory's `.oep-installer-tokens/<server PID>/` for that
+  build's `--oep-installer-token-file`, and deletes the file when the build
+  process exits. At start, a server deletes the files of servers that are no
+  longer running (left by one that stopped mid-build), but not those of another
+  server still running on the same work directory. The token is not in the build's command line, log, history record, or
+  archived template, and the browser sends it once and does not keep it.
 * The template carried on the ISO references provisioning inputs through
   their on-ISO copies; build-host paths of scripts, cloud-init files, and SSH
   key files are not included.

@@ -18,6 +18,7 @@ const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(async () => ({ repos: [] })),
   getEdgePack: vi.fn(async () => null),
   searchPackages: vi.fn(async () => []),
+  lookupPackages: vi.fn(async () => ({ packages: [], unavailableRepos: [] })),
   searchStreamUrl: () => '',
 }))
 vi.mock('../api/client', () => ({ api: mockApi }))
@@ -78,5 +79,33 @@ describe('AdvancedPage credentials', () => {
 
     expect(await screen.findByRole('dialog')).toBeTruthy()
     expect(mockApi.startBuild).toHaveBeenCalledTimes(1)
+  })
+
+  // The selection is stored with the build for retry, so the token must travel
+  // beside it to startBuild and never in a compose request.
+  it('sends the OEP Installer token with the build only, then forgets it', async () => {
+    mockApi.compose.mockImplementation(async (req: ComposeRequest) => ({
+      ...composeResponse(req),
+      oepInstaller: { uses: true, serverToken: false },
+    }))
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/Password/), { target: { value: 'hunter2' } })
+    fireEvent.change(within(dialog).getByLabelText('GitHub token for the OEP Installer'), {
+      target: { value: ' github_pat_secret ' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Compose Image' }))
+    await waitFor(() => expect(mockApi.startBuild).toHaveBeenCalledTimes(1))
+    expect(mockApi.startBuild.mock.calls[0][1]).toBe('github_pat_secret')
+    expect(JSON.stringify(mockApi.startBuild.mock.calls[0][0])).not.toContain('github_pat_secret')
+    expect(JSON.stringify(mockApi.compose.mock.calls)).not.toContain('github_pat_secret')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
+    const again = await screen.findByRole('dialog')
+    expect(within(again).getByLabelText<HTMLInputElement>('GitHub token for the OEP Installer').value).toBe('')
   })
 })

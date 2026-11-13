@@ -423,11 +423,21 @@ export function usedMiB(model: DiskModel): number {
 
 // --- Emission ----------------------------------------------------------------
 
+// An overlay-mode template builds on a baseline image and keeps that image's
+// own partition layout: the overlay builder detects it rather than reading
+// disk.partitions or disk.partitionTableType, and only grows the last
+// partition. So for an overlay, `overlay: true` leaves those fields out of the
+// block rather than sending edits the build would silently ignore.
+export interface DiskConfigOptions {
+  overlay?: boolean
+}
+
 // toDiskConfig renders the model as the plain object for a user template's
 // `disk:` block. Empty values are dropped: the resolved template spells every
 // key out (the Go structs have no `omitempty`), but echoing `typeUUID: ""` back
 // into a user template is noise the schema does not require.
-export function toDiskConfig(model: DiskModel): Record<string, unknown> {
+export function toDiskConfig(model: DiskModel, opts: DiskConfigOptions = {}): Record<string, unknown> {
+  if (opts.overlay) model = withoutLayout(model)
   const offsets = computeOffsets(model)
 
   const disk: Record<string, unknown> = { name: model.name }
@@ -440,7 +450,7 @@ export function toDiskConfig(model: DiskModel): Record<string, unknown> {
   }
   if (model.size) disk.size = model.size
   if (model.maxSize) disk.maxSize = model.maxSize
-  disk.partitionTableType = model.partitionTableType
+  if (!opts.overlay) disk.partitionTableType = model.partitionTableType
   if (model.extendLastPartitionToFillDisk) disk.extendLastPartitionToFillDisk = true
 
   if (model.partitions.length > 0) {
@@ -468,11 +478,17 @@ export function toDiskConfig(model: DiskModel): Record<string, unknown> {
   return disk
 }
 
+// withoutLayout drops what an overlay build takes from its baseline image
+// instead: the partitions and whether the last one is forced to fill the disk.
+function withoutLayout(model: DiskModel): DiskModel {
+  return { ...model, partitions: [], extendLastPartitionToFillDisk: false }
+}
+
 // diskYamlFragment renders the `disk:` block the way the Disk step previews it.
 // lineWidth: -1 stops js-yaml folding long values (typeUUIDs, mount options)
 // onto continuation lines, which would not match how the templates are written.
-export function diskYamlFragment(model: DiskModel): string {
-  return yaml.dump({ disk: toDiskConfig(model) }, { lineWidth: -1, noRefs: true })
+export function diskYamlFragment(model: DiskModel, opts: DiskConfigOptions = {}): string {
+  return yaml.dump({ disk: toDiskConfig(model, opts) }, { lineWidth: -1, noRefs: true })
 }
 
 // --- Validation ---------------------------------------------------------------
@@ -487,12 +503,16 @@ export interface DiskContext {
   // extendLastPartitionToFillDisk is constrained by it, and imageType lives
   // outside the disk block.
   imageType?: string
+  // True for an overlay-mode template, whose partition layout comes from its
+  // baseline image (see DiskConfigOptions), so no partition rule applies.
+  overlay?: boolean
 }
 
 // validateDisk applies the constraints the schema and the builder enforce, so
 // the user sees them here rather than at build time. It is not a substitute for
 // POST /templates/validate — it only covers what this step can get wrong.
 export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssues {
+  if (ctx.overlay) model = withoutLayout(model)
   const errors: string[] = []
   const warnings: string[] = []
 

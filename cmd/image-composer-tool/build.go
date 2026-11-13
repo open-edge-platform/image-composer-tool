@@ -11,6 +11,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/cache"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/oepinstaller"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/azl"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/debian13"
@@ -70,6 +71,8 @@ var (
 	ftpProxy     string
 	noProxy      string
 	sshKeyFlags  []string // --ssh-authorized-key USER=FILE, repeatable
+
+	oepTokenFile string // --oep-installer-token-file: GitHub token for systemConfig.oepInstaller downloads
 )
 
 // createBuildCommand creates the build subcommand
@@ -116,6 +119,9 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().StringVar(&noProxy, "no-proxy", "", "Override systemConfig.proxy.noProxy (comma-separated)")
 	buildCmd.Flags().StringArrayVar(&sshKeyFlags, "ssh-authorized-key", nil,
 		"Add SSH public keys from FILE for an existing template user, as USER=FILE (repeatable)")
+	buildCmd.Flags().StringVar(&oepTokenFile, strings.TrimPrefix(oepinstaller.TokenFileFlag, "--"), "",
+		"Read the GitHub token for systemConfig.oepInstaller downloads from FILE; takes precedence over "+
+			oepinstaller.TokenEnv+", "+oepinstaller.TokenFileEnv+" and oep_installer.token_file")
 
 	return buildCmd
 }
@@ -139,6 +145,7 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		currentConfig.WorkDir = workDir
 		config.SetGlobal(currentConfig)
 	}
+	oepinstaller.SetTokenFile(oepTokenFile)
 
 	// When --no-cache is set, run the build in fresh, unique cache and workspace
 	// directories so nothing is reused from previous builds, then remove them once the

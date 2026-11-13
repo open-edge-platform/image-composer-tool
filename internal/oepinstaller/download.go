@@ -33,6 +33,20 @@ const TokenFileEnv = "ICT_OEP_INSTALLER_TOKEN_FILE"
 // tokenFileConfig names the global configuration setting in messages.
 const tokenFileConfig = "oep_installer.token_file"
 
+// TokenFileFlag names the build flag that sets a token file for one build.
+const TokenFileFlag = "--oep-installer-token-file"
+
+// buildTokenFile is the file SetTokenFile named; "" when unset.
+var buildTokenFile string
+
+// SetTokenFile sets the file holding the token for this build. It takes
+// precedence over every other source: the Web UI passes the token a user enters
+// for one build this way, and the build may inherit a token from the server's
+// environment that must not override it.
+func SetTokenFile(path string) {
+	buildTokenFile = path
+}
+
 // maxDownloadSize bounds a downloaded file; the CLI and its output are scripts
 // and text of a few hundred kilobytes.
 const maxDownloadSize = 32 << 20
@@ -91,16 +105,20 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// resolveToken returns the GitHub token from the first source that is set:
-// TokenEnv, the file TokenFileEnv names, or the file the global configuration's
-// oep_installer.token_file names. It returns "" when none is set. A file that is
-// set but missing, unreadable, not a regular file, or empty is an error.
+// resolveToken returns the GitHub token from the first source that is set: the
+// file SetTokenFile named, TokenEnv, the file TokenFileEnv names, or the file the
+// global configuration's oep_installer.token_file names. It returns "" when none
+// is set. A file that is set but missing, unreadable, not a regular file, or
+// empty is an error.
 func resolveToken() (string, error) {
-	if token := os.Getenv(TokenEnv); token != "" {
-		logger.Logger().Debugf("OEP Installer: using the GitHub token from %s", TokenEnv)
-		return token, nil
+	path, source := buildTokenFile, TokenFileFlag
+	if path == "" {
+		if token := os.Getenv(TokenEnv); token != "" {
+			logger.Logger().Debugf("OEP Installer: using the GitHub token from %s", TokenEnv)
+			return token, nil
+		}
+		path, source = os.Getenv(TokenFileEnv), TokenFileEnv
 	}
-	path, source := os.Getenv(TokenFileEnv), TokenFileEnv
 	if path == "" {
 		path, source = config.Global().OEPInstaller.TokenFile, tokenFileConfig
 	}
@@ -168,7 +186,8 @@ func downloadHint(req *http.Request, status int) string {
 	}
 	if req.Header.Get("Authorization") == "" {
 		return fmt.Sprintf(" (the file may be in a private repository; provide a GitHub token with read access in "+
-			"%s, or in a file that %s or the global configuration's %s names)", TokenEnv, TokenFileEnv, tokenFileConfig)
+			"a file that build %s names, in %s, or in a file that %s or the global configuration's %s names)",
+			TokenFileFlag, TokenEnv, TokenFileEnv, tokenFileConfig)
 	}
 	return " (check the URL, and that the GitHub token has read access to the repository)"
 }

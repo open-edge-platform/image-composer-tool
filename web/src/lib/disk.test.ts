@@ -560,3 +560,27 @@ describe('toDiskConfig', () => {
     )
   })
 })
+
+describe('overlay templates', () => {
+  // An overlay keeps its baseline image's partition layout, so the block
+  // carries only what the overlay builder reads.
+  it('leaves the partition layout out of the emitted block', () => {
+    const model = { ...seed(minimalPtlPvRaw), size: '32GiB', maxSize: '64GiB', extendLastPartitionToFillDisk: true }
+    const out = toDiskConfig(model, { overlay: true })
+    expect(out).not.toHaveProperty('partitions')
+    expect(out).not.toHaveProperty('partitionTableType')
+    expect(out).not.toHaveProperty('extendLastPartitionToFillDisk')
+    expect(out).toMatchObject({ name: model.name, size: '32GiB', maxSize: '64GiB' })
+    expect(diskYamlFragment(model, { overlay: true })).not.toContain('partitions')
+    // Unchanged for a create-mode template.
+    expect(toDiskConfig(model)).toHaveProperty('partitions')
+  })
+
+  it('applies no partition rule', () => {
+    const model = seed(minimalPtlPvRaw)
+    // A disk too small for the partitions is an error only when they are built.
+    const tooSmall = { ...model, size: '1MiB' }
+    expect(validateDisk(tooSmall).errors.some((e) => e.includes('Partitions need'))).toBe(true)
+    expect(validateDisk(tooSmall, { overlay: true }).errors).toEqual([])
+  })
+})
