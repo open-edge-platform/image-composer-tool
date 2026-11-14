@@ -37,10 +37,10 @@ const TEMPLATE = 'ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml'
 
 const manifest: Manifest = {
   combinations: [
-    { vertical: 'platform-enablement-bkc', sku: 'bkc', platform: 'nvl', os: 'ubuntu26', imageType: 'raw', template: TEMPLATE },
+    { vertical: 'platform-enablement-bkc', platform: 'nvl', os: 'ubuntu26', imageType: 'raw', template: TEMPLATE },
   ],
-  verticals: [{ id: 'platform-enablement-bkc', displayName: 'Platform Enablement - BKC' }],
-  skus: [{ id: 'bkc', displayName: 'BKC' }],
+  verticals: [{ id: 'platform-enablement-bkc', displayName: 'Platform Enablement Upstream BKC' }],
+  skus: [],
   platforms: [{ id: 'nvl', displayName: 'NVL (Nova Lake)' }],
   targets: [{ id: 'ubuntu26', displayName: 'Ubuntu 26.04', os: 'ubuntu', arch: 'x86_64' }],
 }
@@ -69,7 +69,7 @@ beforeEach(() => {
   mockApi.getEdgePack.mockReset().mockResolvedValue(pack)
   useStore.setState({
     manifest,
-    selection: { vertical: 'platform-enablement-bkc', sku: 'bkc', platform: 'nvl', os: 'ubuntu26', kernel: '', imageType: 'raw' },
+    selection: { vertical: 'platform-enablement-bkc', sku: '', platform: 'nvl', os: 'ubuntu26', kernel: '', imageType: 'raw' },
     // Kept from an earlier EdgePack selection on the same OS.
     addedPackages: [{ name: 'base-standard', version: '', repo: 'intel-eci' }],
     enabledRepos: [],
@@ -85,6 +85,8 @@ describe('AdvancedPage for an overlay template', () => {
   it('knows the mode and applies the safeguards even when the overridden compose fails', async () => {
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
     await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
+    // The use case offers no SKU, so the field is disabled rather than an empty list.
+    expect(screen.getByLabelText<HTMLSelectElement>('SKU').disabled).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(await screen.findByText(/Edge Pack packages cannot be added/)).toBeTruthy()

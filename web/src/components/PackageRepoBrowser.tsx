@@ -157,7 +157,7 @@ function RepoToolbar({
 }) {
   const alwaysOnRepos = repos.filter(isAlwaysOn)
   const optionalRepos = repos.filter((r) => !isAlwaysOn(r))
-  const badge = selectedRepo.enabledByDefault ? 'Base — always on' : locked ? 'In template — always on' : null
+  const badge = selectedRepo.enabledByDefault ? 'Base — already included' : locked ? 'In template — already included' : null
   const title = selectedRepo.enabledByDefault
     ? 'Base repository — always enabled'
     : locked
@@ -177,7 +177,7 @@ function RepoToolbar({
             className="min-w-0 max-w-[420px] flex-1 cursor-pointer truncate rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-semibold text-slate-700 hover:border-[#0071c5] focus:border-[#0071c5] focus:outline-none focus:ring-2 focus:ring-[#0071c5]/25"
           >
             {alwaysOnRepos.length > 0 && (
-              <optgroup label="Always on">
+              <optgroup label="Already included">
                 {alwaysOnRepos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.displayName}

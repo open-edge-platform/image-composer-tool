@@ -5,7 +5,7 @@
 # The full NVL BKC package set (Intel kernel, vendor userspace pins, firmware)
 # is maintained outside this repository and replaces this file, under the same
 # name, wherever it is deployed. This starter keeps the Web UI's
-# Platform Enablement - BKC selection buildable until then.
+# Platform Enablement Upstream BKC selection buildable until then.
 #
 # The baseline path below is a placeholder: point baseline.source at an
 # installed Ubuntu 26.04 RAW image on your build host before building.
