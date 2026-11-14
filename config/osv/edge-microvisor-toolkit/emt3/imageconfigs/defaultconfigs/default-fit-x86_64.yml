@@ -1,0 +1,28 @@
+image:
+  name: emt3-default-fit-x86_64
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit # Target OS name
+  dist: emt3 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: fit # Image type, valid value: [raw, img, fit, iso, wsl2].
+
+systemConfig:
+  name: Default_Fit
+  description: Default yml configuration for FIT image
+
+  # A FIT image is a kernel + device tree(s) + ramdisk bundle assembled by
+  # mkimage, not a disk image: there is no local bootloader to install and
+  # no partition layout to configure. Omitting bootloader (rather than
+  # setting a provider) leaves it unconfigured, matching
+  # Bootloader.IsNone() -- see the img/wsl2 defaults for the same pattern.
+  packages:
+    - core-packages-base-image
+    - ca-certificates
+    - shadow-utils
+
+  kernel:
+    name: kernel
+    packages:
+      - kernel
