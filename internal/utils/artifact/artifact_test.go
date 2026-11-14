@@ -29,6 +29,7 @@ func TestClassify(t *testing.T) {
 		{"vmdk", "edge-1.0.vmdk", artifact.TypeImage},
 		{"vdi", "edge-1.0.vdi", artifact.TypeImage},
 		{"wsl2 tar archive", "my-custom-ubuntu-1.0.tar.gz", artifact.TypeImage},
+		{"fit image", "emt3-x86_64-minimal-fit-25.06.03.itb", artifact.TypeImage},
 		{"uppercase extension", "EDGE-1.0.ISO", artifact.TypeImage},
 		{"full path", "/var/tmp/ict/builds/abc/minimal/image.raw.gz", artifact.TypeImage},
 

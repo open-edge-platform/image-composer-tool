@@ -36,9 +36,10 @@ const (
 // imageFormats are the disk/optical formats ICT can emit: the target.imageType
 // values ("raw", "img", "iso") plus every disk.artifacts type the converter
 // supports (see DiskOverrideArtifactsType in the API contract). "tar" is the
-// wsl2 root filesystem archive.
+// wsl2 root filesystem archive. "itb" is the FIT image mkimage emits for the
+// "fit" target.imageType.
 var imageFormats = []string{
-	"raw", "img", "iso", "qcow2", "vhd", "vhdx", "vmdk", "vdi", "tar",
+	"raw", "img", "iso", "qcow2", "vhd", "vhdx", "vmdk", "vdi", "tar", "itb",
 }
 
 // compressions are the disk.artifacts compression suffixes an image format may
