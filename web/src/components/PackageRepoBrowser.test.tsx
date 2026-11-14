@@ -82,7 +82,7 @@ describe('a repo the matched template already draws a package from', () => {
     const box = useInBuilds('Intel ECI')
     expect(box.checked).toBe(true)
     expect(box.disabled).toBe(true)
-    expect(screen.getByText('In template — always on')).toBeTruthy()
+    expect(screen.getByText('In template — already included')).toBeTruthy()
   })
 
   it('is not written into enabledRepos — it is checked by lockedRepoIds alone', () => {
@@ -126,7 +126,7 @@ describe('a repo the matched template already draws a package from', () => {
 
     const order = screen.getAllByRole('option').map((el) => (el as HTMLOptionElement).value)
     expect(order).toEqual(['base', 'intel-eci', 'intel-graphics', 'docker'])
-    const always = screen.getByRole('group', { name: 'Always on' })
+    const always = screen.getByRole('group', { name: 'Already included' })
     expect(Array.from(always.querySelectorAll('option')).map((o) => o.value)).toEqual(['base', 'intel-eci'])
   })
 
@@ -157,7 +157,7 @@ describe('the dropdown browses a repository, independent of using it in builds',
     const box = useInBuilds('Ubuntu Base')
     expect(box.checked).toBe(true)
     expect(box.disabled).toBe(true)
-    expect(screen.getByText('Base — always on')).toBeTruthy()
+    expect(screen.getByText('Base — already included')).toBeTruthy()
   })
 
   it('switches the fetched repo when a different repository is picked', async () => {
