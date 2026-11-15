@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore, confirmRepoRelease } from '../store'
+import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
 import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 import { ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import type { VersionResolver } from '../lib/useVersionResolver'
+import { MAX_SELECTED_PACKAGES, planTemplateUpdates } from '../lib/templateUpdates'
 
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
+
+// Names the template pins that "Update to latest version" left alone, and why.
+function unverifiableNotice(names: string[]): string | null {
+  if (names.length === 0) return null
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : ''
+  return `Kept the template's own pinned version of ${names.slice(0, 5).join(', ')}${more}: no checked repository publishes that version, so it can't be told whether the newest one found is newer or older.`
+}
 
 // Height cap for the package list. It tracks the viewport so the step's
 // Back/Next row stays on screen: 37rem is roughly the page chrome above the
@@ -353,8 +361,20 @@ function MergedPane({
     lookupNewest,
   } = resolver
   const [pinning, setPinning] = useState(false)
-  // Why the last "Update to latest version" changed nothing, if it didn't.
+  // Why the last "Update to latest version" changed nothing, or left some
+  // packages as they were.
   const [pinNotice, setPinNotice] = useState<string | null>(null)
+  // The matched template's own packages the button covers: those not already
+  // overridden under "You are adding".
+  const addedNames = new Set(addedPackages.map((p) => p.name))
+  const templateNames = baseLock.concreteNames.filter((name) => !addedNames.has(name))
+  const pinCount = addedPackages.length + templateNames.length
+  // The template as of the latest render, for an answer to check it against
+  // once it settles: a different template means a different package list.
+  const latestTemplateKey = useRef(templateNamesKey)
+  useEffect(() => {
+    latestTemplateKey.current = templateNamesKey
+  }, [templateNamesKey])
 
   // "Latest" ('') is written to the template unpinned and resolved only at
   // build time, so the image can differ from what was reviewed here. This
@@ -362,7 +382,9 @@ function MergedPane({
   // to the exact newest version the checked repos offer right now, so the
   // YAML records it. The repo a package was picked from stays enabled even if
   // the newest version lives elsewhere: releasing it would change the repo
-  // scope the versions were just looked up in.
+  // scope the versions were just looked up in. The matched template's own
+  // packages are pinned too, as overrides added under "You are adding" (see
+  // planTemplateUpdates for which ones).
   //
   // Nothing changes unless the answer is complete: with a repo unreadable,
   // "newest" could be an older version or a downgrade of a pin. And only
@@ -371,11 +393,14 @@ function MergedPane({
   // it's removed and re-added, or the target changes, so comparing the
   // entry objects themselves skips every one of those rather than
   // overwriting a newer choice (or another OS's package) with this answer.
+  // A template package added by hand meanwhile is skipped the same way.
   const pinAllToNewest = () => {
     const dispatched = addedPackages
+    const dispatchedTemplate = templateNames
+    const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
-    lookupNewest(dispatched.map((p) => p.name))
+    lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate])
       .then(({ found, complete, unavailableRepos, stale }) => {
         if (stale) {
           setPinNotice('The target or checked repositories changed while checking, so nothing was updated. Try again.')
@@ -389,13 +414,45 @@ function MergedPane({
           )
           return
         }
-        const pins = useStore
-          .getState()
-          .addedPackages.filter((p) => dispatched.includes(p) && found[p.name])
+        const current = useStore.getState().addedPackages
+        const pins = current
+          .filter((p) => dispatched.includes(p) && found[p.name])
           .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
-        if (pins.length > 0) setPackages(pins)
+        const templatePins = planTemplatePins(dispatchedTemplate, templateKey, current, found)
+        const all = [...pins, ...templatePins]
+        if (all.length > 0) setPackages(all)
       })
       .finally(() => setPinning(false))
+  }
+
+  // The template's share of a completed answer, with pinNotice saying what
+  // it left alone and why.
+  const planTemplatePins = (
+    names: string[],
+    templateKey: string,
+    current: AddedPackage[],
+    found: Record<string, PackageSearchResult>,
+  ): AddedPackage[] => {
+    if (names.length === 0) return []
+    if (latestTemplateKey.current !== templateKey) {
+      setPinNotice("The matched template changed while checking, so its packages weren't updated. Try again.")
+      return []
+    }
+    const taken = new Set(current.map((p) => p.name))
+    const plan = planTemplateUpdates(
+      names.filter((name) => !taken.has(name)),
+      baseLock,
+      found,
+    )
+    const total = current.length + plan.pins.length
+    if (total > MAX_SELECTED_PACKAGES) {
+      setPinNotice(
+        `Pinning the template's packages would add ${plan.pins.length}, ${total} in all, over the ${MAX_SELECTED_PACKAGES} a build accepts, so they weren't updated. Packages you are adding were.`,
+      )
+      return []
+    }
+    setPinNotice(unverifiableNotice(plan.unverifiable))
+    return plan.pins
   }
   // What the pane is actually fetched against — only the one repository
   // currently picked in the dropdown, checked or not. Kept separate from
@@ -662,21 +719,22 @@ function MergedPane({
               : `Resolve versions (${unresolvedNames.length})`}
           </button>
         )}
-        {/* Acts on everything added, not just this repo or page, so it sits
-            apart toward the end of the row, before the pager. Disabled rather than hidden until
-            something is added, so it can be found before it's needed. */}
+        {/* Acts on everything added and the template's own packages, not just
+            this repo or page, so it sits apart toward the end of the row,
+            before the pager. Disabled rather than hidden until there is
+            something to pin, so it can be found before it's needed. */}
         <button
           type="button"
           onClick={pinAllToNewest}
-          disabled={pinning || addedPackages.length === 0}
+          disabled={pinning || pinCount === 0}
           title={
-            addedPackages.length === 0
-              ? 'Add packages first: this pins every package you are adding to its newest version'
-              : 'Pin every package you are adding, from any repository, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time'
+            pinCount === 0
+              ? 'Add packages first: this pins every package you are adding, and the template’s own, to its newest version'
+              : 'Pin every package you are adding and every package the template lists, from any repository, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time. A template pin is only replaced by a newer version'
           }
           className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
         >
-          {pinning ? 'Updating…' : `Update to latest version (${addedPackages.length})`}
+          {pinning ? 'Updating…' : `Update to latest version (${pinCount})`}
         </button>
         {/* Sits on the controls row rather than a line of its own, so the
             vertical space goes to package rows instead. */}
