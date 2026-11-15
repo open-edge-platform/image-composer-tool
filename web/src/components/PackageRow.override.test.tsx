@@ -70,3 +70,42 @@ describe('PackageRow — returning to the template’s own choice', () => {
     expect(onChooseVersion).not.toHaveBeenCalled()
   })
 })
+
+describe('PackageRow — which chip reads as selected', () => {
+  // apt-transport-https as the NVL BKC template lists it: unpinned, with no
+  // known current version yet (as in "Show only selected").
+  const renderFloating = (selection?: AddedPackage) =>
+    render(
+      <PackageRow
+        name="apt-transport-https"
+        version="3.2.1ubuntu0.1"
+        versions={[
+          { version: '3.2.1ubuntu0.1', repository: 'base' },
+          { version: '3.2.0', repository: 'base' },
+        ]}
+        repoLabelFor={(id) => id}
+        selection={selection}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        locked
+        currentIsFloating
+      />,
+    )
+  const pressed = () =>
+    screen.getAllByRole('button').filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)
+
+  it('marks only the picked version over an unpinned template entry, not Latest too', () => {
+    renderFloating({ name: 'apt-transport-https', version: '3.2.0', repo: 'base' })
+    expect(pressed()).toEqual(['3.2.0'])
+  })
+
+  it('marks Latest when nothing is picked over an unpinned template entry', () => {
+    renderFloating()
+    expect(pressed()).toEqual(['Latest'])
+  })
+
+  it('marks Latest when Latest itself is the pick', () => {
+    renderFloating({ name: 'apt-transport-https', version: '', repo: 'base' })
+    expect(pressed()).toEqual(['Latest'])
+  })
+})

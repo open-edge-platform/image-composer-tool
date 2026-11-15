@@ -294,11 +294,13 @@ function VersionChips({
   // own empty-versions fallback synthesizing a single entry with a real
   // version but no repository.
   const noRepoKnown = versions.every((v) => !v.repository)
-  // Floating and not yet known to differ from a specific version (either
-  // there's no currentVersion to compare against, or nothing's pinned at
-  // all) reads as "Latest" being the row's actual current state, not just
-  // its default — worth highlighting the same way an explicit pin would be.
-  const latestIsCurrent = pinned === '' || (currentIsFloating === true && currentVersion === undefined)
+  // Latest is the row's current state when it's the pick, or when nothing is
+  // picked and the template's own entry floats with no known version to
+  // mark instead — worth highlighting the same way an explicit pin would be.
+  // A version picked over a floating template entry is the current state
+  // then, so Latest isn't.
+  const latestIsCurrent =
+    pinned === '' || (pinned === undefined && currentIsFloating === true && currentVersion === undefined)
   // Latest is the template's own choice for an unpinned template entry, so
   // it changes nothing — unless an override is in place, which it drops.
   const latestIsTemplates = currentIsFloating === true && !overridden
@@ -326,6 +328,7 @@ function VersionChips({
           }
           onChoose({ version: '', repository: versions[0]?.repository ?? '' })
         }}
+        aria-pressed={latestIsCurrent}
         className={chipClass({
           active: latestIsCurrent,
           disabled: disabled || latestIsTemplates || noRepoKnown,
@@ -370,6 +373,7 @@ function VersionChips({
               }
               onChoose(v)
             }}
+            aria-pressed={pinned === v.version && pinnedRepo === v.repository}
             className={chipClass({
               active: pinned === v.version && pinnedRepo === v.repository,
               disabled: disabled || isRedundant,
