@@ -59,3 +59,53 @@ export function planTemplateUpdates(
 function sameVersion(published: string, pinned: string): boolean {
   return published === pinned || published.replace(/^\d+:/, '') === pinned.replace(/^\d+:/, '')
 }
+
+// pinSources groups template pins by the repository that publishes the
+// pinned version, given a lookup across the other repositories. A name whose
+// pinned version none of them publishes is grouped under ''.
+export function pinSources(
+  names: string[],
+  baseLock: BaseLock,
+  found: Record<string, PackageSearchResult>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const name of names) {
+    const pinned = baseLock.info(name).currentVersion
+    const hit = found[name]
+    const versions = hit?.versions ?? (hit ? [{ version: hit.version, repository: hit.repository }] : [])
+    const source = pinned === undefined ? undefined : versions.find((v) => sameVersion(v.version, pinned))
+    const repo = source?.repository ?? ''
+    out.set(repo, [...(out.get(repo) ?? []), name])
+  }
+  return out
+}
+
+// keptPinsNotice says which template pins "Update to latest version" kept
+// while browsing `browsed`, where their pinned versions come from, and so
+// where to go to update them.
+export function keptPinsNotice(
+  names: string[],
+  sources: Map<string, string[]>,
+  browsed: string,
+  repoLabelFor: (id: string) => string,
+): string {
+  const one = names.length === 1
+  const list = names.slice(0, 5).join(', ') + (names.length > 5 ? ` and ${names.length - 5} more` : '')
+  const kept = `Kept ${names.length} template ${one ? 'pin' : 'pins'} (${list})`
+  const known = [...sources].filter(([repo]) => repo !== '')
+  const unknown = sources.get('')?.length ?? 0
+  if (known.length === 0) {
+    return `${kept}: no listed repository publishes ${one ? 'its pinned version' : 'their pinned versions'}, so ${one ? 'it' : 'they'} can't be updated here.`
+  }
+  const from =
+    known.length === 1
+      ? repoLabelFor(known[0][0])
+      : known.map(([repo, n]) => `${repoLabelFor(repo)} (${n.length})`).join(' and ')
+  const where = known.length === 1 ? from : 'those repositories'
+  const subject = one ? 'its pinned version comes' : 'their pinned versions come'
+  let msg = `${kept}: ${subject} from ${from}, not ${repoLabelFor(browsed)}. Browse ${where} to update ${one ? 'it' : 'them'}.`
+  if (unknown > 0) {
+    msg += ` ${unknown} of them ${unknown === 1 ? 'pins a version' : 'pin versions'} no listed repository publishes, so ${unknown === 1 ? 'it' : 'they'} can't be updated here.`
+  }
+  return msg
+}

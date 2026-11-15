@@ -5,7 +5,7 @@ import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 import { ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import type { VersionResolver } from '../lib/useVersionResolver'
-import { MAX_SELECTED_PACKAGES, planTemplateUpdates } from '../lib/templateUpdates'
+import { MAX_SELECTED_PACKAGES, keptPinsNotice, pinSources, planTemplateUpdates } from '../lib/templateUpdates'
 
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
@@ -410,6 +410,7 @@ function MergedPane({
     const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
+    keptNoticeSeq.current++
     // The newest version in the browsed repo, so every pin this sets is one
     // of the chips on screen.
     lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate], [repoId])
@@ -439,6 +440,27 @@ function MergedPane({
       .finally(() => setPinning(false))
   }
 
+  // Says which template pins the last update kept, and where their pinned
+  // versions come from, so the notice can point at the repository to browse
+  // to update them. That takes one more lookup, across the other repos; until
+  // it lands, or if it fails, the notice says only that they were kept.
+  const keptNoticeSeq = useRef(0)
+  const explainKeptPins = (names: string[]) => {
+    const seq = ++keptNoticeSeq.current
+    const repoId = selectedRepo?.id ?? ''
+    setPinNotice(unverifiableNotice(names, repoLabelFor(repoId)))
+    const others = repos.map((r) => r.id).filter((id) => id !== repoId)
+    if (names.length === 0 || others.length === 0) return
+    api
+      .lookupPackages({ os, repos: others, names })
+      .then((r) => {
+        if (seq !== keptNoticeSeq.current || latestBrowsedRepo.current !== repoId) return
+        const found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
+        setPinNotice(keptPinsNotice(names, pinSources(names, baseLock, found), repoId, repoLabelFor))
+      })
+      .catch(() => {})
+  }
+
   // The template's share of a completed answer, with pinNotice saying what
   // it left alone and why.
   const planTemplatePins = (
@@ -465,7 +487,7 @@ function MergedPane({
       )
       return []
     }
-    setPinNotice(unverifiableNotice(plan.unverifiable, repoLabelFor(selectedRepo?.id ?? '')))
+    explainKeptPins(plan.unverifiable)
     return plan.pins
   }
   // What the pane is actually fetched against — only the one repository

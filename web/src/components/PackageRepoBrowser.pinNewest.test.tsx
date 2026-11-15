@@ -314,13 +314,23 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     expect(pinButton().disabled).toBe(false)
   })
 
-  it("keeps a template pin no checked repo publishes, and says so", async () => {
-    mockApi.lookupPackages.mockResolvedValue({ packages: [versioned('curl', '8.3.0-1')], unavailableRepos: [] })
+  it("keeps a template pin the browsed repo doesn't publish, and says where it comes from", async () => {
+    // Base has curl 8.3.0-1; the template's 8.4.0-1ppa1 is Intel ECI's.
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('base')
+          ? [versioned('curl', '8.3.0-1')]
+          : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
+        unavailableRepos: [],
+      }),
+    )
     await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
     await act(async () => fireEvent.click(pinButton()))
 
     expect(useStore.getState().addedPackages).toEqual([])
-    expect(screen.getByRole('status').textContent).toMatch(/Kept the template's own pinned version of curl/)
+    expect(screen.getByRole('status').textContent).toBe(
+      'Kept 1 template pin (curl): its pinned version comes from Intel ECI, not Ubuntu Base. Browse Intel ECI to update it.',
+    )
   })
 
   it("doesn't pin template packages past the build's package limit", async () => {

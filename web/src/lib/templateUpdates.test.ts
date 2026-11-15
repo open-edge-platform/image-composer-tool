@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest'
-import { planTemplateUpdates } from './templateUpdates'
+import { keptPinsNotice, pinSources, planTemplateUpdates } from './templateUpdates'
 import type { BaseLock } from './baseLock'
 import type { PackageSearchResult } from '../api/types'
 
@@ -56,5 +56,44 @@ describe('planTemplateUpdates', () => {
   it('skips a template package no checked repo has, and a name the template does not list', () => {
     const plan = planTemplateUpdates(['vim', 'htop'], lock, { htop: hit('htop', '3.3.0-4') })
     expect(plan).toEqual({ pins: [], unverifiable: [] })
+  })
+})
+
+describe('pinSources', () => {
+  it('groups template pins by the repo publishing the pinned version, unknown under ""', () => {
+    const found = {
+      ffmpeg: { ...hit('ffmpeg', '7:9.1.0-2'), versions: [{ version: '7:9.0.1-1ppa1', repository: 'snapshot' }] },
+      curl: hit('curl', '8.6.0-1'),
+    }
+    const got = pinSources(['ffmpeg', 'curl', 'vim'], lock, found)
+    expect(Object.fromEntries(got)).toEqual({ snapshot: ['ffmpeg'], '': ['curl', 'vim'] })
+  })
+})
+
+describe('keptPinsNotice', () => {
+  const label = (id: string) => ({ base: 'Ubuntu Base', snapshot: 'Snapshot', ppa: 'PPA' })[id] ?? id
+  const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+
+  it('names the one repo the pins come from, and says to browse it', () => {
+    expect(keptPinsNotice(names, new Map([['snapshot', names]]), 'base', label)).toBe(
+      'Kept 7 template pins (a, b, c, d, e and 2 more): their pinned versions come from Snapshot, not Ubuntu Base. Browse Snapshot to update them.',
+    )
+  })
+
+  it('counts per repo when they come from several, and notes those from none', () => {
+    const sources = new Map([
+      ['snapshot', ['a', 'b']],
+      ['ppa', ['c']],
+      ['', ['d']],
+    ])
+    expect(keptPinsNotice(['a', 'b', 'c', 'd'], sources, 'base', label)).toBe(
+      'Kept 4 template pins (a, b, c, d): their pinned versions come from Snapshot (2) and PPA (1), not Ubuntu Base. Browse those repositories to update them. 1 of them pins a version no listed repository publishes, so it can\'t be updated here.',
+    )
+  })
+
+  it('says so when no listed repo publishes the pinned version', () => {
+    expect(keptPinsNotice(['a'], new Map([['', ['a']]]), 'base', label)).toBe(
+      "Kept 1 template pin (a): no listed repository publishes its pinned version, so it can't be updated here.",
+    )
   })
 })
