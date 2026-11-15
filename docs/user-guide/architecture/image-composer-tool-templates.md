@@ -520,7 +520,7 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > the post-install dependency audit permits a bounded cascade: each baseline
 > package that is broken *after* a removal but was
 > whole *before* it is itself removed, transitively, until the package manager's
-> own check (`apt-get check` / `dnf check`) reports no newly introduced failures.
+> own check (`apt-get check` / `rpm -Va`) reports no newly introduced failures.
 > A dependency that an alternative still satisfies is never treated as broken, so
 > nothing is over-removed. The cascade still fails **closed**: if resolving the
 > breakage would require removing a bootloader/kernel-image package or a package

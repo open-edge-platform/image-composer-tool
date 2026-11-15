@@ -6,6 +6,10 @@
 
 **New**:
 
+- Overlay builds now print a planned package-change report after dependency
+  resolution and preflight, before the build begins. It lists resolver-selected
+  dependency upgrades along with additions and approved removals; install-time
+  cascade removals may differ from the plan and appear in the final statistics.
 - Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
 - Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
 - Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
@@ -25,6 +29,11 @@
   Retained-dependency checks treat `Architecture: all` as the native architecture
   before applying qualifiers and `Multi-Arch` rules, so an unannotated `all`
   replacement cannot hide newly broken foreign-architecture dependencies.
+- **Fixed**: Debian overlay dependency audits now ignore apt's changing installed-
+  version explanation when comparing a broken dependency across package transactions.
+  The comparison still distinguishes different requirements and multiarch package
+  instances, avoiding false build failures when an unrelated package upgrade changes
+  the version named in `apt-get check` output.
 - **Fixed**: Ubuntu `linux-main-modules-*` packages are classified as kernel
   companions, not extra bootable kernel images. Old companions are removable
   only under a valid explicit kernel replacement, preserving the replacement

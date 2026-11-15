@@ -961,6 +961,8 @@ func hasUnmetDependencyMarker(out string) bool {
 //     DIFFERENT requirement after the removal (identity unchanged, new pair);
 //   - deb multiarch, where libc6:amd64 and libc6:i386 are distinct instances (the
 //     apt token already carries :arch, so it is kept, NOT trimmed);
+//   - apt's "but <version> is installed" explanation can change after an upgrade,
+//     so only the Depends/Pre-Depends requirement itself is retained;
 //   - rpm version churn, where an upgraded package's NEVRA changes between audits —
 //     so an rpm token (NAME-VERSION-RELEASE.ARCH) is reduced to a version-independent
 //     name.arch identity (see rpmNameArch) that stays equal across the upgrade.
@@ -998,9 +1000,10 @@ func parseUnmetDependencyFailures(out string) []string {
 		fields := strings.Fields(line)
 		switch {
 		case len(fields) >= 2 && fields[1] == ":":
-			// apt-get: "<pkg> : <requirement...>". The apt token is name or name:arch
-			// (no version), so it is a stable identity as-is — keep the arch qualifier.
-			add(fields[0], strings.Join(fields[2:], " "))
+			// apt-get: "<pkg> : <requirement...>". Keep the arch qualifier in the
+			// package identity, but discard apt's version-sensitive explanation after
+			// the dependency clause.
+			add(fields[0], normalizeDebDependencyRequirement(strings.Join(fields[2:], " ")))
 		case len(fields) >= 4 && fields[0] == "package" && fields[2] == "requires":
 			// dnf: "package <nevra> requires <dep>, but none of the providers ..."
 			add(rpmNameArch(fields[1]), strings.Join(fields[3:], " "))
@@ -1019,6 +1022,13 @@ func parseUnmetDependencyFailures(out string) []string {
 	}
 	sort.Strings(failures)
 	return failures
+}
+
+func normalizeDebDependencyRequirement(requirement string) string {
+	if i := strings.Index(requirement, " but "); i != -1 {
+		requirement = requirement[:i]
+	}
+	return strings.TrimSpace(requirement)
 }
 
 // brokenDescriptorIdentity returns the package IDENTITY from an audit failure
