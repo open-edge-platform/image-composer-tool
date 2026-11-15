@@ -28,7 +28,29 @@ export interface NewestLookup {
   stale: boolean
 }
 
-export function useVersionResolver(os: string, repoIds: string[]) {
+// Repository priority a build applies to a repo that declares none (see
+// defaultRepoPriority in internal/api/service/repos.go).
+const DEFAULT_REPO_PRIORITY = 500
+
+// buildResolution is what a build installs for an unpinned name, given every
+// version the checked repos publish: like apt, the highest-priority
+// repository wins, and the newest version within it. `versions` is ordered
+// newest first, so the first entry at the highest priority is the answer. A
+// repo missing from `priorities` counts as the default.
+export function buildResolution(hit: PackageSearchResult, priorities: Record<string, number>): PackageSearchResult {
+  const versions = hit.versions?.length ? hit.versions : [{ version: hit.version, repository: hit.repository }]
+  const priorityOf = (repo: string) => priorities[repo] ?? DEFAULT_REPO_PRIORITY
+  let best = versions[0]
+  for (const v of versions) {
+    if (priorityOf(v.repository) > priorityOf(best.repository)) best = v
+  }
+  return { ...hit, version: best.version, repository: best.repository }
+}
+
+// priorities maps each checked repo id to its priority, so what a name
+// "resolves to" is what a build would install (see buildResolution), not
+// merely the newest version any checked repo offers.
+export function useVersionResolver(os: string, repoIds: string[], priorities: Record<string, number> = {}) {
   const [liveResolved, setLiveResolved] = useState<Record<string, PackageSearchResult>>({})
   const [resolvingNames, setResolvingNames] = useState<Set<string>>(new Set())
   const [bulkResolving, setBulkResolving] = useState(false)
@@ -85,7 +107,7 @@ export function useVersionResolver(os: string, repoIds: string[]) {
         // same name under the new scope.
         if (scopeRef.current !== scope) return
         const exact = r.packages.find((p) => p.name === name)
-        if (exact) setLiveResolved((prev) => ({ ...prev, [name]: exact }))
+        if (exact) setLiveResolved((prev) => ({ ...prev, [name]: buildResolution(exact, priorities) }))
       })
       .catch(() => {
         // Leave it unresolved on failure — resolveVersion's own in-progress
@@ -136,7 +158,10 @@ export function useVersionResolver(os: string, repoIds: string[]) {
         for (const hit of packages) found[hit.name] = hit
         const stale = scopeRef.current !== scope
         const complete = !failed && unavailableRepos.length === 0
-        if (complete && !stale && !within) setLiveResolved((prev) => ({ ...prev, ...found }))
+        if (complete && !stale && !within) {
+          const resolved = Object.fromEntries(Object.entries(found).map(([n, hit]) => [n, buildResolution(hit, priorities)]))
+          setLiveResolved((prev) => ({ ...prev, ...resolved }))
+        }
         return { found, complete, unavailableRepos, stale }
       })
   }

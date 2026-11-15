@@ -186,7 +186,13 @@ export function PackagesStep({
   const enabledRepoIds = (repos ?? [])
     .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id) || lockedRepoIds.has(r.id))
     .map((r) => r.id)
-  const resolver = useVersionResolver(os, enabledRepoIds)
+  // Each repo's priority, so "resolves to" follows the build's own rule: the
+  // highest-priority repo first, then the newest version in it.
+  const repoPriorities = useMemo(
+    () => Object.fromEntries((repos ?? []).filter((r) => r.priority != null).map((r) => [r.id, r.priority!])),
+    [repos],
+  )
+  const resolver = useVersionResolver(os, enabledRepoIds, repoPriorities)
 
   return (
     <div>
