@@ -118,11 +118,15 @@ export function useVersionResolver(os: string, repoIds: string[]) {
   // liveResolved, which is a display snapshot that can be arbitrarily old,
   // and the shared cache is refreshed only from an answer that is complete
   // and still in scope. A name with no exact match is absent from `found`.
-  const lookupNewest = (names: string[]): Promise<NewestLookup> => {
+  //
+  // `within` narrows the lookup to those repos, for "the newest version this
+  // one repo offers"; that answer isn't what a name resolves to across the
+  // checked repos, so it never refreshes the shared cache.
+  const lookupNewest = (names: string[], within?: string[]): Promise<NewestLookup> => {
     const scope = repoIdsKey
     // One request for the whole list (see api.lookupPackages), not one per name.
     return api
-      .lookupPackages({ os, repos: repoIds, names })
+      .lookupPackages({ os, repos: within ?? repoIds, names })
       .then(
         (r) => ({ packages: r.packages, unavailableRepos: r.unavailableRepos, failed: false }),
         () => ({ packages: [] as PackageSearchResult[], unavailableRepos: [] as string[], failed: true }),
@@ -132,7 +136,7 @@ export function useVersionResolver(os: string, repoIds: string[]) {
         for (const hit of packages) found[hit.name] = hit
         const stale = scopeRef.current !== scope
         const complete = !failed && unavailableRepos.length === 0
-        if (complete && !stale) setLiveResolved((prev) => ({ ...prev, ...found }))
+        if (complete && !stale && !within) setLiveResolved((prev) => ({ ...prev, ...found }))
         return { found, complete, unavailableRepos, stale }
       })
   }

@@ -11,10 +11,10 @@ import { MAX_SELECTED_PACKAGES, planTemplateUpdates } from '../lib/templateUpdat
 const PAGE_SIZE = 100
 
 // Names the template pins that "Update to latest version" left alone, and why.
-function unverifiableNotice(names: string[]): string | null {
+function unverifiableNotice(names: string[], repoLabel: string): string | null {
   if (names.length === 0) return null
   const more = names.length > 5 ? ` and ${names.length - 5} more` : ''
-  return `Kept the template's own pinned version of ${names.slice(0, 5).join(', ')}${more}: no checked repository publishes that version, so it can't be told whether the newest one found is newer or older.`
+  return `Kept the template's own pinned version of ${names.slice(0, 5).join(', ')}${more}: ${repoLabel} doesn't publish that version, so it can't be told whether its newest one is newer or older.`
 }
 
 // Height cap for the package list. It tracks the viewport so the step's
@@ -376,6 +376,11 @@ function MergedPane({
   useEffect(() => {
     latestTemplateKey.current = templateNamesKey
   }, [templateNamesKey])
+  // Likewise the browsed repo, which an answer is only about.
+  const latestBrowsedRepo = useRef(selectedRepo?.id)
+  useEffect(() => {
+    latestBrowsedRepo.current = selectedRepo?.id
+  }, [selectedRepo?.id])
 
   // "Latest" ('') is written to the template unpinned and resolved only at
   // build time, so the image can differ from what was reviewed here. This
@@ -398,15 +403,21 @@ function MergedPane({
   const pinAllToNewest = () => {
     // What "Show only selected" lists for the browsed repo, so the button
     // updates exactly what its count says (see pinCount below).
-    const dispatched = addedPackages.filter((p) => p.repo === selectedRepo?.id)
+    const repoId = selectedRepo?.id
+    if (!repoId) return
+    const dispatched = addedPackages.filter((p) => p.repo === repoId)
     const dispatchedTemplate = lockedRows.map((r) => r.name)
     const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
-    lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate])
+    // The newest version in the browsed repo, so every pin this sets is one
+    // of the chips on screen.
+    lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate], [repoId])
       .then(({ found, complete, unavailableRepos, stale }) => {
-        if (stale) {
-          setPinNotice('The target or checked repositories changed while checking, so nothing was updated. Try again.')
+        if (stale || latestBrowsedRepo.current !== repoId) {
+          setPinNotice(
+            'The target, checked repositories or browsed repository changed while checking, so nothing was updated. Try again.',
+          )
           return
         }
         if (!complete) {
@@ -454,7 +465,7 @@ function MergedPane({
       )
       return []
     }
-    setPinNotice(unverifiableNotice(plan.unverifiable))
+    setPinNotice(unverifiableNotice(plan.unverifiable, repoLabelFor(selectedRepo?.id ?? '')))
     return plan.pins
   }
   // What the pane is actually fetched against — only the one repository
@@ -728,7 +739,7 @@ function MergedPane({
           title={
             pinCount === 0
               ? 'Nothing is selected from this repository: this pins each package selected from it to its newest version'
-              : 'Pin every package selected from this repository, added or from the template, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time. A template pin is only replaced by a newer version'
+              : 'Pin every package selected from this repository, added or from the template, to the newest version this repository offers, so the template records that exact version instead of resolving it at build time. A template pin is only replaced by a newer version from this repository'
           }
           className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
         >

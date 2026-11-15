@@ -210,9 +210,9 @@ const advanced: GuideTopic = {
         <Tip>
           Leave a package on <Ui>Latest</Ui> unless you need one exact version. <Ui>Latest</Ui> is
           looked up when the image is built, so a later build can get a newer version. To fix each
-          package selected from a repository, added or from the template, to today's newest version
-          instead, browse that repository and click <Ui>Update to latest version</Ui> above the
-          package list in the <Ui>Repositories</Ui> tab.
+          package selected from a repository, added or from the template, to the newest version that
+          repository offers today instead, browse that repository and click{' '}
+          <Ui>Update to latest version</Ui> above the package list in the <Ui>Repositories</Ui> tab.
         </Tip>
       </Section>
 

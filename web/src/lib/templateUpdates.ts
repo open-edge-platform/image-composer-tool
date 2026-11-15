@@ -13,16 +13,16 @@ export interface TemplateUpdatePlan {
   // Overrides to add, each pinning a template package to its newest version.
   pins: AddedPackage[]
   // Template pins kept as they are: the pinned version isn't among the
-  // versions the checked repositories publish (it comes from a repository the
-  // catalog doesn't list), so whether the newest found is newer or older than
-  // it can't be told here.
+  // versions the looked-up repositories publish (it comes from another
+  // repository), so whether the newest found is newer or older than it can't
+  // be told here.
   unverifiable: string[]
 }
 
 // planTemplateUpdates decides which of the matched template's own packages
 // "Update to latest version" pins, given the newest-version lookup `found`.
 // An unpinned entry is pinned to the newest version, as an added "Latest"
-// pick is. A pinned entry is overridden only when the checked repositories
+// pick is. A pinned entry is overridden only when the looked-up repositories
 // publish its pinned version and something newer: `versions` is ordered
 // newest first by the server's own version rules, so the pin being listed
 // means the first entry is not older than it.
