@@ -6,6 +6,10 @@
 
 **New**:
 
+- Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
+- Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
+- Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
+- Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
 - **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
   constraints and alternatives. With `packageOperation: additive-and-upgrade`,
   library upgrades that break previously satisfied requirements automatically
