@@ -110,7 +110,7 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 		offset = 0
 	}
 
-	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	repos := s.searchableRepos(osID, repoFilter)
 	lookups := s.planLookups(osID, repos)
 	results := runLookups(ctx, s.pkgindexCache, lookups)
 
@@ -148,7 +148,7 @@ func (s *Service) LookupPackages(ctx context.Context, osID string, names, repoFi
 		want[n] = true
 	}
 
-	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	repos := s.searchableRepos(osID, repoFilter)
 	lookups := s.planLookups(osID, repos)
 	results := runLookups(ctx, s.pkgindexCache, lookups)
 	// Narrowed to the wanted names before dedupAndFilter, which would
@@ -229,7 +229,7 @@ func (s *Service) SearchPackagesStream(ctx context.Context, osID, query string,
 		limit = maxSearchLimit
 	}
 
-	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	repos := s.searchableRepos(osID, repoFilter)
 	groups := groupByRepo(s.planLookups(osID, repos))
 
 	// One goroutine per repository, all drawing their index lookups from a

@@ -196,6 +196,10 @@ export interface ComposeResponse {
   // (its packageRepositories through extends and the default config), before
   // this request's overrides. The Packages step shows them as in use.
   templateRepos?: string[]
+  // Entries for those of templateRepos GET /package-repos doesn't list, such
+  // as a vendor snapshot only this template uses. Their ids work in package
+  // searches like a catalog id.
+  templateOnlyRepos?: PackageRepo[]
   // Present when the resolved template downloads OEP Installer files, which
   // may need a GitHub token for a private repository.
   oepInstaller?: OEPInstallerInfo

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, confirmRepoRelease } from '../store'
 import { api } from '../api/client'
 import type { EdgePack, PackageRepo, PackageSearchResult, PackageVersion } from '../api/types'
@@ -25,6 +25,9 @@ interface PackagesStepProps {
   // Ids of the repositories the matched template itself installs from
   // (ComposeResponse.templateRepos), through extends and the default config.
   templateRepos?: string[]
+  // Entries for those of templateRepos the catalog doesn't list
+  // (ComposeResponse.templateOnlyRepos), shown and searched like its own.
+  templateOnlyRepos?: PackageRepo[]
   // True for an overlay-mode template. Edge Pack packages turn on DKMS module
   // builds, which an overlay cannot run, so the Edge Packs tab is not offered
   // and any Edge Pack package added some other way is flagged.
@@ -53,8 +56,27 @@ const EDGE_PACK_RETRY_LIMIT = 24
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
 // running list of added packages.
-export function PackagesStep({ os, active, basePackages, templateRepos = [], overlay = false }: PackagesStepProps) {
-  const [repos, setRepos] = useState<PackageRepo[] | null>(null)
+// noRepos is the default templateOnlyRepos, hoisted so it is one stable array.
+const noRepos: PackageRepo[] = []
+
+export function PackagesStep({
+  os,
+  active,
+  basePackages,
+  templateRepos = [],
+  templateOnlyRepos = noRepos,
+  overlay = false,
+}: PackagesStepProps) {
+  const [catalogRepos, setRepos] = useState<PackageRepo[] | null>(null)
+  // The catalog plus the repositories only the matched template declares,
+  // which GET /package-repos doesn't list. Everything below treats the two
+  // alike; templateInUseRepos below shows the latter as already included.
+  const templateOnlyKey = templateOnlyRepos.map((r) => r.id).join(',')
+  const repos = useMemo(
+    () => catalogRepos && [...catalogRepos, ...templateOnlyRepos.filter((r) => !catalogRepos.some((c) => c.id === r.id))],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- templateOnlyKey stands in for templateOnlyRepos
+    [catalogRepos, templateOnlyKey],
+  )
   const [error, setError] = useState<string | null>(null)
   // undefined while in flight, null once it is known there is no Edge Pack to
   // show. The two are kept apart so the tab can say "loading" rather than
@@ -486,7 +508,11 @@ function PackageSearch({
       // doesn't jump around as later repositories report.
       const byRepo = new Map<string, PackageSearchResult[]>()
       const priorityOf = (repoId: string) => repos.find((r) => r.id === repoId)?.priority ?? 0
-      es = new EventSource(api.searchStreamUrl({ q, os, limit: SEARCH_LIMIT }))
+      // Named rather than left to default to the whole catalog: the server
+      // only searches a repository just the matched template declares when
+      // asked for it by id.
+      const repoIds = repos.map((r) => r.id)
+      es = new EventSource(api.searchStreamUrl({ q, os, repos: repoIds, limit: SEARCH_LIMIT }))
 
       es.addEventListener('hits', (e) => {
         const data = JSON.parse((e as MessageEvent).data) as {
