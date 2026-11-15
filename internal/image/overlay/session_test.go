@@ -318,6 +318,43 @@ func TestBuilder_ProxyWritesBaselineFiles(t *testing.T) {
 	}
 }
 
+func TestBuilder_NoProxyOnlyRemovesExistingAPTProxy(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	builder := installOverlayTestBuilder(t, &builderRecorder{})
+	builder.template.SystemConfig.Proxy = config.ProxyConfig{NoProxy: "localhost"}
+	root := t.TempDir()
+	aptDir := filepath.Join(root, "etc/apt/apt.conf.d")
+	if err := os.MkdirAll(aptDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ownedAPT := filepath.Join(aptDir, "95ict-proxy")
+	if err := os.WriteFile(ownedAPT, []byte("Acquire::http::Proxy \"http://old:3128\";\n"+
+		`Acquire::http::Proxy::localhost "DIRECT";`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	otherAPT := filepath.Join(aptDir, "90other-proxy")
+	if err := os.WriteFile(otherAPT, []byte(`Acquire::http::Proxy "http://other:3128";`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	builder.layout.RootMount = root
+
+	if err := builder.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := os.Stat(ownedAPT); !os.IsNotExist(err) {
+		t.Errorf("ICT-owned APT proxy fragment should be removed, stat error = %v", err)
+	}
+	if got, err := os.ReadFile(otherAPT); err != nil {
+		t.Fatalf("reading unrelated APT proxy fragment: %v", err)
+	} else if string(got) != `Acquire::http::Proxy "http://other:3128";` {
+		t.Errorf("unrelated APT proxy fragment = %q, want it unchanged", got)
+	}
+}
+
 func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	defer saveBuilderSeams().restore()
 	r := &builderRecorder{}
