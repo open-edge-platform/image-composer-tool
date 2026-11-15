@@ -35,6 +35,17 @@ combinations. The table below lists the OS and architecture combinations that ar
 >
 > The container runs privileged, which makes it root-equivalent on the host.
 
+The Debian Package workflow also builds the ICT container image on pull
+requests and `ict-*` tags. It checks the CLI and web UI, smoke-builds an OS
+image, scans the image, and generates an SPDX SBOM. On `ict-*` tags, it
+publishes the tested image as `YYYYMMDD-<12-character-source-SHA>`.
+
+To enable tag publishing, configure the repository variables
+`HARBOR_REGISTRY` and `HARBOR_PROJECT`, and the repository secrets
+`HARBOR_USERNAME` and `HARBOR_PASSWORD`. Use a least-privilege registry account
+and restrict who can create `ict-*` tags. Pull requests and manual runs do not
+receive registry credentials or publish images.
+
 ### 1. Build the Tool
 
 Requires Go 1.24+.

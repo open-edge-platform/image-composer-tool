@@ -179,6 +179,161 @@ jobs:
               test ! -e /etc/image-composer-tool/config.yml
             '
 
+  image:
+    name: Build, scan and publish ICT container
+    needs: [security, lint, tests, codeql, build, install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve image tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(date -u +%Y%m%d)-${GITHUB_SHA:0:12}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 #v4.4.0
+      - name: Build ICT image
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --target ict \
+            --load \
+            --build-arg VERSION="${IMAGE_TAG}" \
+            --build-arg COMMIT_SHA="${GITHUB_SHA}" \
+            --tag "ict:${IMAGE_TAG}" \
+            --file build/ict/Dockerfile \
+            .
+      - name: Verify CLI and web UI
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ict:${IMAGE_TAG}"
+          docker run --rm "${image}" image-composer-tool version
+          docker run --rm "${image}" image-composer-tool --help
+
+          name="ict-webui-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "${name}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "${name}" \
+            -p 127.0.0.1:18080:8080 \
+            "${image}" image-composer-tool serve --host 0.0.0.0
+          for _ in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:18080/ \
+              --output "${RUNNER_TEMP}/ict-webui.html"; then
+              break
+            fi
+            sleep 2
+          done
+          if [[ ! -s "${RUNNER_TEMP}/ict-webui.html" ]]; then
+            docker logs "${name}"
+            echo "::error::ICT web UI did not return its page"
+            exit 1
+          fi
+          grep -q '<title>Image Composer Tool</title>' "${RUNNER_TEMP}/ict-webui.html"
+          grep -q 'id="root"' "${RUNNER_TEMP}/ict-webui.html"
+      - name: Smoke-build an OS image
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          scripts/build-in-container.sh \
+            --image "ict:${IMAGE_TAG}" \
+            image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml \
+            "${RUNNER_TEMP}/ict-image-smoke"
+          find "${RUNNER_TEMP}/ict-image-smoke" -type f -name '*.raw*' -print -quit | grep .
+      - name: Scan image and generate SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 #0.36.0
+        with:
+          scan-type: image
+          image-ref: ict:${{ steps.meta.outputs.tag }}
+          vuln-type: os,library
+          format: sarif
+          output: image-trivy.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+      - name: Generate image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 #0.36.0
+        with:
+          scan-type: image
+          image-ref: ict:${{ steps.meta.outputs.tag }}
+          format: spdx-json
+          output: image-sbom.spdx.json
+          exit-code: '0'
+      - name: Block publishing on HIGH or CRITICAL vulnerabilities
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "ict:${IMAGE_TAG}"
+      - name: Publish image to Harbor
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ict-')
+        env:
+          HARBOR_REGISTRY: ${{ vars.HARBOR_REGISTRY }}
+          HARBOR_PROJECT: ${{ vars.HARBOR_PROJECT }}
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${HARBOR_REGISTRY:?Configure the HARBOR_REGISTRY repository variable}"
+          : "${HARBOR_PROJECT:?Configure the HARBOR_PROJECT repository variable}"
+          : "${HARBOR_USERNAME:?Configure the HARBOR_USERNAME repository secret}"
+          : "${HARBOR_PASSWORD:?Configure the HARBOR_PASSWORD repository secret}"
+          if [[ ! "${HARBOR_REGISTRY}" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+            echo "::error::HARBOR_REGISTRY must be a registry hostname, without a URL scheme"
+            exit 1
+          fi
+          if [[ ! "${HARBOR_PROJECT}" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "::error::HARBOR_PROJECT is not a valid Harbor project name"
+            exit 1
+          fi
+          image="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/ict-builder:${IMAGE_TAG}"
+          printf '%s' "${HARBOR_PASSWORD}" |
+            docker login "${HARBOR_REGISTRY}" \
+              --username "${HARBOR_USERNAME}" \
+              --password-stdin
+          trap 'docker logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true' EXIT
+          docker tag "ict:${IMAGE_TAG}" "${image}"
+          docker push "${image}"
+          {
+            echo "## ICT container image published"
+            echo
+            echo "- Image: \`${image}\`"
+            echo "- Source commit: \`${GITHUB_SHA}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload image scan reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 #v7.0.2
+        with:
+          name: ict-container-image-reports
+          path: |
+            image-trivy.sarif
+            image-sbom.spdx.json
+          if-no-files-found: warn
+          retention-days: 30
+
   publish:
     needs: [build, install]
     runs-on: ubuntu-latest
@@ -211,7 +366,7 @@ jobs:
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ict-')
-    needs: [build, install, publish]
+    needs: [build, install, image, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
