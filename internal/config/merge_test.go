@@ -2078,3 +2078,32 @@ func TestRedactSensitiveData_RedactsUserAndSecureBootFields(t *testing.T) {
 		t.Errorf("original password mutated: %q", tmpl.SystemConfig.Users[0].Password)
 	}
 }
+
+func TestMergePackagesSamePackage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		defaults []string
+		user     []string
+		want     []string
+	}{
+		{"user pin replaces default bare in place", []string{"base", "curl", "vim"}, []string{"curl_8.5.0-2"}, []string{"base", "curl_8.5.0-2", "vim"}},
+		{"user pin replaces default pin", []string{"ffmpeg_7:9.0.1-1ppa1"}, []string{"ffmpeg_7:9.1.0-2"}, []string{"ffmpeg_7:9.1.0-2"}},
+		{"same pin is kept once", []string{"curl_8.5.0-2"}, []string{"curl_8.5.0-2"}, []string{"curl_8.5.0-2"}},
+		{"user bare keeps default pin", []string{"curl_8.4.0-1"}, []string{"curl"}, []string{"curl_8.4.0-1"}},
+		{"version prefix pin replaces default", []string{"kernel"}, []string{"kernel_6.12*"}, []string{"kernel_6.12*"}},
+		{"underscore in a name is not a version", []string{"createrepo_c"}, []string{"createrepo"}, []string{"createrepo_c", "createrepo"}},
+		{"trailing or leading underscore is part of the name", []string{"curl_", "_curl"}, []string{"curl"}, []string{"curl_", "_curl", "curl"}},
+		{"glob entries only dedup by string", []string{"libva*"}, []string{"libva2_2.20", "libva*"}, []string{"libva*", "libva2_2.20"}},
+		{"new user packages are appended", []string{"base"}, []string{"vim", "htop_3.3.0-4"}, []string{"base", "vim", "htop_3.3.0-4"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mergePackages(tc.defaults, tc.user)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("mergePackages(%v, %v) = %v, want %v", tc.defaults, tc.user, got, tc.want)
+			}
+		})
+	}
+}

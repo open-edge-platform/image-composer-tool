@@ -1200,9 +1200,9 @@ components:
             repository publishes. The pattern matches the template schema's own
             constraint on `systemConfig.packages` items.
 
-            Because the extends merge unions package lists, a pinned entry whose
-            name the matched template already lists unpinned leaves both entries
-            in the resolved template — see `pinConflicts` on the response.
+            A pinned entry for a package the matched template already lists
+            replaces the template's entry; a bare one leaves the template's
+            entry, pinned or not, to decide.
           maxItems: 256
           uniqueItems: true
           items:
@@ -1720,16 +1720,6 @@ components:
             i.e. what `yaml` would have been had nothing been overridden. Lets a
             client show the curated baseline beside the delta that modifies it,
             so the difference is attributable to the user's own choices.
-        pinConflicts:
-          type: array
-          description: |
-            Packages requested at a pinned version whose name the matched
-            template already lists unpinned. The extends merge unions package
-            lists and cannot remove the parent's entry, so both end up in the
-            resolved template and the resolver may install either. Advisory
-            only: the compose still succeeds.
-          items:
-            type: string
         basePackages:
           type: array
           description: |

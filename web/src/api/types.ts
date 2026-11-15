@@ -179,10 +179,6 @@ export interface ComposeResponse {
   // baseline can be shown beside the delta that modifies it. Absent when there
   // are no overrides, because `yaml` already is the base.
   baseYaml?: string
-  // Packages requested at a pinned version whose name the curated template
-  // already lists unpinned. The extends merge unions package lists and cannot
-  // drop the parent's entry, so both survive into `yaml`. Advisory only.
-  pinConflicts?: string[]
   // The matched template's own package list, before this request's overrides
   // are applied. Present even when the request carries no overrides, so the
   // Packages step can show "already included" packages alongside whatever

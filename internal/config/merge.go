@@ -617,29 +617,63 @@ func mergeBootloader(defaultBootloader, userBootloader Bootloader) Bootloader {
 	return merged
 }
 
-// mergePackages combines default and user packages, removing duplicates
+// mergePackages combines default and user packages, removing duplicates. Where
+// both list the same package, one entry survives rather than both, since the
+// resolvers keep only one of two entries for a name and which one depends on
+// list order: a user entry pinning a version (name_version) replaces the
+// default's entry in place, and a bare user entry adds nothing over the
+// default's own. Glob entries are only deduplicated by exact string.
 func mergePackages(defaultPackages, userPackages []string) []string {
-	// Create a set to track unique packages
+	userPins := make(map[string]string)
+	for _, pkg := range userPackages {
+		if name, ok := packageEntryName(pkg); ok && name != pkg {
+			if _, seen := userPins[name]; !seen {
+				userPins[name] = pkg
+			}
+		}
+	}
+	defaultNames := make(map[string]bool)
+
 	packageSet := make(map[string]bool)
 	var mergedPackages []string
-
-	// Add default packages first
-	for _, pkg := range defaultPackages {
+	add := func(pkg string) {
 		if !packageSet[pkg] {
 			packageSet[pkg] = true
 			mergedPackages = append(mergedPackages, pkg)
 		}
 	}
 
-	// Add user packages, avoiding duplicates
-	for _, pkg := range userPackages {
-		if !packageSet[pkg] {
-			packageSet[pkg] = true
-			mergedPackages = append(mergedPackages, pkg)
+	for _, pkg := range defaultPackages {
+		if name, ok := packageEntryName(pkg); ok {
+			defaultNames[name] = true
+			if pin, overridden := userPins[name]; overridden {
+				add(pin)
+				continue
+			}
 		}
+		add(pkg)
+	}
+
+	for _, pkg := range userPackages {
+		if name, ok := packageEntryName(pkg); ok && name == pkg && defaultNames[name] {
+			continue
+		}
+		add(pkg)
 	}
 
 	return mergedPackages
+}
+
+// packageEntryName returns the package name of a systemConfig.packages entry,
+// dropping a "_version" suffix (an underscore followed by a digit, so a name
+// that itself contains an underscore is kept whole). ok is false for a glob
+// entry, whose name part matches many packages rather than naming one.
+func packageEntryName(entry string) (name string, ok bool) {
+	name = entry
+	if i := strings.Index(entry, "_"); i > 0 && i < len(entry)-1 && entry[i+1] >= '0' && entry[i+1] <= '9' {
+		name = entry[:i]
+	}
+	return name, !strings.ContainsAny(name, "*?[")
 }
 
 // mergeKernelConfig merges kernel configurations

@@ -80,7 +80,8 @@ func ValidatePackages(packages []string) error {
 // numeric too), so a suffix that doesn't is part of the name itself —
 // createrepo_c is one package, not createrepo pinned to version "c".
 //
-// Used only to report pin collisions; nothing here rewrites what the user chose.
+// Used only to match entries by package name; nothing here rewrites what the
+// user chose.
 func packageName(entry string) string {
 	i := strings.Index(entry, "_")
 	if i <= 0 || i == len(entry)-1 {
@@ -91,9 +92,6 @@ func packageName(entry string) string {
 	}
 	return entry[:i]
 }
-
-// isPinned reports whether an entry carries an explicit version.
-func isPinned(entry string) bool { return packageName(entry) != entry }
 
 // ValidateImageName reports whether name is a legal image.name override, or ""
 // (not overridden).
