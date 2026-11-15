@@ -1531,15 +1531,16 @@ func TestParseUnmetDependencyFailures(t *testing.T) {
 		t.Errorf("apt parse = %v, want %v", got, want)
 	}
 	aptBeforeUpgrade := parseUnmetDependencyFailures(
-		"The following packages have unmet dependencies:\n foo : Depends: libbar (>= 2) but 1.8 is installed")
+		"The following packages have unmet dependencies:\n consumer : Depends: library (>= 3) but 1 is installed")
 	aptAfterUpgrade := parseUnmetDependencyFailures(
-		"The following packages have unmet dependencies:\n foo : Depends: libbar (>= 2) but 1.9 is installed")
-	if !reflect.DeepEqual(aptBeforeUpgrade, aptAfterUpgrade) {
-		t.Errorf("installed-version change must not alter the Debian failure descriptor: before=%v after=%v",
-			aptBeforeUpgrade, aptAfterUpgrade)
+		"The following packages have unmet dependencies:\n consumer : Depends: library (>= 3) but 2 is installed")
+	wantUpgradeFailure := []string{"consumer | Depends: library (>= 3)"}
+	if !reflect.DeepEqual(aptBeforeUpgrade, wantUpgradeFailure) || !reflect.DeepEqual(aptAfterUpgrade, wantUpgradeFailure) {
+		t.Errorf("installed-version change: before=%v after=%v, want %v",
+			aptBeforeUpgrade, aptAfterUpgrade, wantUpgradeFailure)
 	}
 	aptDifferentRequirement := parseUnmetDependencyFailures(
-		"The following packages have unmet dependencies:\n foo : Depends: libbaz (>= 2) but it is not installable")
+		"The following packages have unmet dependencies:\n consumer : Depends: library (>= 4) but 2 is installed")
 	if reflect.DeepEqual(aptAfterUpgrade, aptDifferentRequirement) {
 		t.Errorf("a different Debian dependency must remain a distinct failure: got %v", aptDifferentRequirement)
 	}
