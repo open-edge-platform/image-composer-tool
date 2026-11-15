@@ -60,6 +60,8 @@
   writer for login, APT and systemd settings after build-time configuration
   commands. Add site-specific settings in a local or internal template. Build
   downloads still use the host proxy environment.
+- **Fixed**: a `systemConfig.proxy` with only `noProxy` now removes a stale
+  ICT-managed APT proxy file from the base image. Other APT files are unchanged.
 - **Changed**: platform-enablement templates requiring private repositories are
   maintained in the internal template repository, not the public template catalog.
   The workspace `cbkc-to-overlay-template` skill covers repeatable script migration.

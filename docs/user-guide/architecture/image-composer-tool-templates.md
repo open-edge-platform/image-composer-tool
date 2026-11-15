@@ -1204,7 +1204,9 @@ The values are written to:
   existing proxy lines are replaced, other lines (such as `PATH`) are kept
 - `/etc/apt/apt.conf.d/95ict-proxy` — `Acquire::{http,https,ftp}::Proxy`;
   plain host names in `noProxy` become `DIRECT` entries for http, https, and
-  (when `ftpProxy` is set) ftp; apt cannot express domain suffixes or CIDRs
+  (when `ftpProxy` is set) ftp; apt cannot express domain suffixes or CIDRs.
+  A `noProxy`-only configuration removes an existing ICT proxy file; other apt
+  configuration files are unchanged and can still configure a proxy.
 - `/etc/systemd/system.conf.d/90-ict-proxy.conf` — `DefaultEnvironment=` for
   every systemd service, including cloud-init and the provisioning units
 
