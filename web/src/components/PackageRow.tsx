@@ -216,6 +216,8 @@ export function PackageRow({
             repoLabelFor={repoLabelFor}
             currentVersion={locked ? currentVersion : undefined}
             currentIsFloating={locked ? currentIsFloating : undefined}
+            overridden={overridden}
+            onRevert={() => onToggle(false)}
             disabled={disabled}
           />
         </span>
@@ -242,6 +244,8 @@ function VersionChips({
   repoLabelFor,
   currentVersion,
   currentIsFloating,
+  overridden = false,
+  onRevert,
   disabled,
 }: {
   versions: PackageVersion[]
@@ -254,6 +258,11 @@ function VersionChips({
   repoLabelFor: (repoId: string) => string
   currentVersion?: string
   currentIsFloating?: boolean
+  // A locked row the user has picked a version for. The template's own
+  // choice is then no longer redundant: choosing it drops the override
+  // (onRevert), so the template's entry applies again.
+  overridden?: boolean
+  onRevert?: () => void
   disabled: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -290,27 +299,36 @@ function VersionChips({
   // all) reads as "Latest" being the row's actual current state, not just
   // its default — worth highlighting the same way an explicit pin would be.
   const latestIsCurrent = pinned === '' || (currentIsFloating === true && currentVersion === undefined)
+  // Latest is the template's own choice for an unpinned template entry, so
+  // it changes nothing — unless an override is in place, which it drops.
+  const latestIsTemplates = currentIsFloating === true && !overridden
 
   return (
     <span className="mt-1.5 flex flex-wrap items-center gap-1.5 @2xl:mt-0 @2xl:max-w-[50%] @2xl:shrink-0 @2xl:justify-end">
       <button
         type="button"
-        disabled={disabled || currentIsFloating || noRepoKnown}
+        disabled={disabled || latestIsTemplates || noRepoKnown}
         title={
           noRepoKnown
             ? 'Resolve this package to enable picking a version'
-            : currentIsFloating
+            : latestIsTemplates
               ? "Already the template's own (unpinned) choice"
-              : undefined
+              : currentIsFloating
+                ? "The template's own (unpinned) choice — choose it to drop your override"
+                : undefined
         }
         onClick={(e) => {
           stop(e)
-          if (disabled || currentIsFloating || noRepoKnown) return
+          if (disabled || latestIsTemplates || noRepoKnown) return
+          if (currentIsFloating && overridden) {
+            onRevert?.()
+            return
+          }
           onChoose({ version: '', repository: versions[0]?.repository ?? '' })
         }}
         className={chipClass({
           active: latestIsCurrent,
-          disabled: disabled || currentIsFloating || noRepoKnown,
+          disabled: disabled || latestIsTemplates || noRepoKnown,
         })}
       >
         Latest
@@ -324,7 +342,11 @@ function VersionChips({
         // is a real, different action: it freezes today's resolution
         // against drift from a future repo update or newly-enabled repo,
         // where leaving it alone would keep following whatever's newest.
-        const isRedundant = isCurrent && !currentIsFloating
+        //
+        // With an override in place it is the way back to the template's own
+        // pin instead, so it drops the override rather than being disabled.
+        const isRedundant = isCurrent && !currentIsFloating && !overridden
+        const revertsToTemplate = isCurrent && !currentIsFloating && overridden
         return (
           <button
             key={`${v.repository} ${v.version}`}
@@ -333,13 +355,19 @@ function VersionChips({
             title={
               isRedundant
                 ? `${v.version} from ${repoLabelFor(v.repository)} — already pinned by the template`
-                : isCurrent
+                : revertsToTemplate
+                  ? `${v.version} from ${repoLabelFor(v.repository)} — the template's own pin; choose it to drop your override`
+                  : isCurrent
                   ? `${v.version} from ${repoLabelFor(v.repository)} — what the template currently resolves to; pin it to freeze that against future changes`
                   : `${v.version} from ${repoLabelFor(v.repository)}`
             }
             onClick={(e) => {
               stop(e)
               if (disabled || isRedundant) return
+              if (revertsToTemplate) {
+                onRevert?.()
+                return
+              }
               onChoose(v)
             }}
             className={chipClass({
