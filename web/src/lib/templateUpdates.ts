@@ -61,19 +61,27 @@ function sameVersion(published: string, pinned: string): boolean {
 }
 
 // pinSources groups template pins by the repository that publishes the
-// pinned version, given a lookup across the other repositories. A name whose
-// pinned version none of them publishes is grouped under ''.
+// pinned version, given a lookup across the other repositories. Where several
+// publish it, the one with the highest priority (as `priorities` gives them,
+// a build's own tie-break) is credited. A name whose pinned version none of
+// them publishes is grouped under ''.
 export function pinSources(
   names: string[],
   baseLock: BaseLock,
   found: Record<string, PackageSearchResult>,
+  priorities: Record<string, number> = {},
 ): Map<string, string[]> {
+  const priorityOf = (repo: string) => priorities[repo] ?? 500
   const out = new Map<string, string[]>()
   for (const name of names) {
     const pinned = baseLock.info(name).currentVersion
     const hit = found[name]
     const versions = hit?.versions ?? (hit ? [{ version: hit.version, repository: hit.repository }] : [])
-    const source = pinned === undefined ? undefined : versions.find((v) => sameVersion(v.version, pinned))
+    const matches = pinned === undefined ? [] : versions.filter((v) => sameVersion(v.version, pinned))
+    const source = matches.reduce<(typeof matches)[number] | undefined>(
+      (best, v) => (!best || priorityOf(v.repository) > priorityOf(best.repository) ? v : best),
+      undefined,
+    )
     const repo = source?.repository ?? ''
     out.set(repo, [...(out.get(repo) ?? []), name])
   }
@@ -95,7 +103,7 @@ export function keptPinsNotice(
   const known = [...sources].filter(([repo]) => repo !== '')
   const unknown = sources.get('')?.length ?? 0
   if (known.length === 0) {
-    return `${kept}: no listed repository publishes ${one ? 'its pinned version' : 'their pinned versions'}, so ${one ? 'it' : 'they'} can't be updated here.`
+    return `${kept}: no repository in use publishes ${one ? 'its pinned version' : 'their pinned versions'}, so ${one ? 'it' : 'they'} can't be updated here.`
   }
   const from =
     known.length === 1
@@ -105,7 +113,7 @@ export function keptPinsNotice(
   const subject = one ? 'its pinned version comes' : 'their pinned versions come'
   let msg = `${kept}: ${subject} from ${from}, not ${repoLabelFor(browsed)}. Browse ${where} to update ${one ? 'it' : 'them'}.`
   if (unknown > 0) {
-    msg += ` ${unknown} of them ${unknown === 1 ? 'pins a version' : 'pin versions'} no listed repository publishes, so ${unknown === 1 ? 'it' : 'they'} can't be updated here.`
+    msg += ` ${unknown} of them ${unknown === 1 ? 'pins a version' : 'pin versions'} no repository in use publishes, so ${unknown === 1 ? 'it' : 'they'} can't be updated here.`
   }
   return msg
 }

@@ -70,6 +70,23 @@ describe('pinSources', () => {
   })
 })
 
+describe('pinSources — the same build in several repos', () => {
+  it('credits the highest-priority repo publishing the pinned version', () => {
+    // GStreamer at the template's pin, in both the snapshot and Intel EdgePack.
+    const both = {
+      ffmpeg: {
+        ...hit('ffmpeg', '7:9.0.1-1ppa1'),
+        versions: [
+          { version: '7:9.0.1-1ppa1', repository: 'edgepack' },
+          { version: '7:9.0.1-1ppa1', repository: 'snapshot' },
+        ],
+      },
+    }
+    const got = pinSources(['ffmpeg'], lock, both, { edgepack: 500, snapshot: 1001 })
+    expect(Object.fromEntries(got)).toEqual({ snapshot: ['ffmpeg'] })
+  })
+})
+
 describe('keptPinsNotice', () => {
   const label = (id: string) => ({ base: 'Ubuntu Base', snapshot: 'Snapshot', ppa: 'PPA' })[id] ?? id
   const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
@@ -87,13 +104,13 @@ describe('keptPinsNotice', () => {
       ['', ['d']],
     ])
     expect(keptPinsNotice(['a', 'b', 'c', 'd'], sources, 'base', label)).toBe(
-      'Kept 4 template pins (a, b, c, d): their pinned versions come from Snapshot (2) and PPA (1), not Ubuntu Base. Browse those repositories to update them. 1 of them pins a version no listed repository publishes, so it can\'t be updated here.',
+      'Kept 4 template pins (a, b, c, d): their pinned versions come from Snapshot (2) and PPA (1), not Ubuntu Base. Browse those repositories to update them. 1 of them pins a version no repository in use publishes, so it can\'t be updated here.',
     )
   })
 
   it('says so when no listed repo publishes the pinned version', () => {
     expect(keptPinsNotice(['a'], new Map([['', ['a']]]), 'base', label)).toBe(
-      "Kept 1 template pin (a): no listed repository publishes its pinned version, so it can't be updated here.",
+      "Kept 1 template pin (a): no repository in use publishes its pinned version, so it can't be updated here.",
     )
   })
 })

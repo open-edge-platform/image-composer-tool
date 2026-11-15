@@ -333,6 +333,25 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     )
   })
 
+  it("doesn't name a repo the build doesn't read, even one publishing the pinned version", async () => {
+    useStore.setState({ enabledRepos: [] })
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('intel-eci')
+          ? [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }]
+          : asked?.includes('base')
+            ? [versioned('curl', '8.3.0-1')]
+            : [],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(mockApi.lookupPackages).not.toHaveBeenCalledWith(expect.objectContaining({ repos: ['intel-eci'] }))
+    expect(screen.getByRole('status').textContent).not.toMatch(/Intel ECI/)
+  })
+
   it("doesn't pin template packages past the build's package limit", async () => {
     const bare = Array.from({ length: 300 }, (_, i) => `pkg${i}`)
     mockApi.lookupPackages.mockResolvedValue({ packages: bare.map((n) => versioned(n, '1.0')), unavailableRepos: [] })

@@ -442,21 +442,24 @@ function MergedPane({
 
   // Says which template pins the last update kept, and where their pinned
   // versions come from, so the notice can point at the repository to browse
-  // to update them. That takes one more lookup, across the other repos; until
-  // it lands, or if it fails, the notice says only that they were kept.
+  // to update them. That takes one more lookup, across the other repos the
+  // build reads (an unchecked one may publish the same build, but the build
+  // never takes it from there); until it lands, or if it fails, the notice
+  // says only that they were kept.
   const keptNoticeSeq = useRef(0)
   const explainKeptPins = (names: string[]) => {
     const seq = ++keptNoticeSeq.current
     const repoId = selectedRepo?.id ?? ''
     setPinNotice(unverifiableNotice(names, repoLabelFor(repoId)))
-    const others = repos.map((r) => r.id).filter((id) => id !== repoId)
+    const others = enabledRepoIds.filter((id) => id !== repoId)
     if (names.length === 0 || others.length === 0) return
     api
       .lookupPackages({ os, repos: others, names })
       .then((r) => {
         if (seq !== keptNoticeSeq.current || latestBrowsedRepo.current !== repoId) return
         const found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
-        setPinNotice(keptPinsNotice(names, pinSources(names, baseLock, found), repoId, repoLabelFor))
+        const priorities = Object.fromEntries(repos.map((r) => [r.id, r.priority ?? 500]))
+        setPinNotice(keptPinsNotice(names, pinSources(names, baseLock, found, priorities), repoId, repoLabelFor))
       })
       .catch(() => {})
   }
