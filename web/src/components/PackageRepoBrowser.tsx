@@ -303,6 +303,12 @@ function MergedPane({
   // repo again clears it and retries.
   const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
   const templateNamesKey = baseLock.concreteNames.join(',')
+  const addedPackages = useStore((s) => s.addedPackages)
+  // Packages under "You are adding" picked from the browsed repo. Looked up
+  // with the template's names, so "Show only selected" can offer every
+  // version the repo has for them too, not just the one picked.
+  const browsedAddedNames = addedPackages.filter((p) => p.repo === selectedRepo?.id).map((p) => p.name)
+  const browsedAddedKey = browsedAddedNames.join(',')
   useEffect(() => {
     setTemplateHits({})
     setTemplateLookupFailed(null)
@@ -314,7 +320,8 @@ function MergedPane({
     const repoId = selectedRepo?.id
     if (!repoId || templateLookupFailed === repoId) return
     const known = templateHits[repoId] ?? {}
-    const missing = baseLock.concreteNames.filter((name) => !(name in known))
+    const names = [...new Set([...baseLock.concreteNames, ...browsedAddedNames])]
+    const missing = names.filter((name) => !(name in known))
     if (missing.length === 0) return
     let cancelled = false
     // One request for the whole list: one search per name queued the
@@ -341,10 +348,9 @@ function MergedPane({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- templateNamesKey stands in for baseLock.concreteNames
-  }, [selectedRepo?.id, os, templateNamesKey, templateHits, templateLookupFailed])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the keys stand in for baseLock.concreteNames and browsedAddedNames
+  }, [selectedRepo?.id, os, templateNamesKey, browsedAddedKey, templateHits, templateLookupFailed])
 
-  const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
   const setPackages = useStore((s) => s.setPackages)
@@ -364,11 +370,6 @@ function MergedPane({
   // Why the last "Update to latest version" changed nothing, or left some
   // packages as they were.
   const [pinNotice, setPinNotice] = useState<string | null>(null)
-  // The matched template's own packages the button covers: those not already
-  // overridden under "You are adding".
-  const addedNames = new Set(addedPackages.map((p) => p.name))
-  const templateNames = baseLock.concreteNames.filter((name) => !addedNames.has(name))
-  const pinCount = addedPackages.length + templateNames.length
   // The template as of the latest render, for an answer to check it against
   // once it settles: a different template means a different package list.
   const latestTemplateKey = useRef(templateNamesKey)
@@ -395,8 +396,10 @@ function MergedPane({
   // overwriting a newer choice (or another OS's package) with this answer.
   // A template package added by hand meanwhile is skipped the same way.
   const pinAllToNewest = () => {
-    const dispatched = addedPackages
-    const dispatchedTemplate = templateNames
+    // What "Show only selected" lists for the browsed repo, so the button
+    // updates exactly what its count says (see pinCount below).
+    const dispatched = addedPackages.filter((p) => p.repo === selectedRepo?.id)
+    const dispatchedTemplate = lockedRows.map((r) => r.name)
     const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
@@ -548,14 +551,17 @@ function MergedPane({
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  // Already-picked packages from the browsed repo, synthesized straight from
-  // the store rather than fetched — addedPackages only carries name/version/
-  // repo, not description or sibling versions, which is fine for a short
-  // review list. A floating pick (version === '') uses whatever was
-  // live-resolved for it.
+  // Already-picked packages from the browsed repo. The repo's own entry for
+  // each, looked up with the template's names above, carries every version
+  // it publishes, so the row offers the same chips the catalog does; the
+  // store's pick decides which one is selected. Until that lookup lands, a
+  // row is synthesized from the store: a floating pick (version === '') uses
+  // whatever was live-resolved for it, a pinned one its own version.
   const addedRows: PackageSearchResult[] = addedPackages
     .filter((p) => p.repo === selectedRepo?.id)
     .map((p) => {
+      const own = selectedRepo ? templateHits[selectedRepo.id]?.[p.name] : undefined
+      if (own) return own
       if (p.version === '' && liveResolved[p.name]) return liveResolved[p.name]
       return {
         name: p.name,
@@ -587,6 +593,9 @@ function MergedPane({
   const selectedRows: PackageSearchResult[] = [...addedRows, ...lockedRows].sort((a, b) =>
     a.name.localeCompare(b.name),
   )
+  // "Update to latest version" acts on the browsed repo's selection, the same
+  // rows "Show only selected" lists and counts.
+  const pinCount = selectedRows.length
 
   const selectedCountLabel = checkingTemplate
     ? 'checking…'
@@ -667,17 +676,6 @@ function MergedPane({
   return (
     <>
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-slate-600">
-        {onFrequentOnlyChange && (
-          <label className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={frequentOnly}
-              onChange={(e) => onFrequentOnlyChange(e.target.checked)}
-              className="h-[13px] w-[13px] accent-[#0071c5]"
-            />
-            Show frequently used
-          </label>
-        )}
         <label className="flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -719,18 +717,18 @@ function MergedPane({
               : `Resolve versions (${unresolvedNames.length})`}
           </button>
         )}
-        {/* Acts on everything added and the template's own packages, not just
-            this repo or page, so it sits apart toward the end of the row,
-            before the pager. Disabled rather than hidden until there is
-            something to pin, so it can be found before it's needed. */}
+        {/* Acts on everything selected from this repo, not just this page, so
+            it sits apart toward the end of the row, before the pager.
+            Disabled rather than hidden until there is something to pin, so it
+            can be found before it's needed. */}
         <button
           type="button"
           onClick={pinAllToNewest}
-          disabled={pinning || pinCount === 0}
+          disabled={pinning || checkingTemplate || pinCount === 0}
           title={
             pinCount === 0
-              ? 'Add packages first: this pins every package you are adding, and the template’s own, to its newest version'
-              : 'Pin every package you are adding and every package the template lists, from any repository, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time. A template pin is only replaced by a newer version'
+              ? 'Nothing is selected from this repository: this pins each package selected from it to its newest version'
+              : 'Pin every package selected from this repository, added or from the template, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time. A template pin is only replaced by a newer version'
           }
           className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
         >
@@ -751,6 +749,20 @@ function MergedPane({
             onJump={jumpToPage}
             compact
           />
+        )}
+        {/* Last on the row: only repos with a curated subset offer it, so
+            anywhere earlier it would shift the other controls as repos are
+            switched. */}
+        {onFrequentOnlyChange && (
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={frequentOnly}
+              onChange={(e) => onFrequentOnlyChange(e.target.checked)}
+              className="h-[13px] w-[13px] accent-[#0071c5]"
+            />
+            Show frequently used
+          </label>
         )}
       </div>
       {pinNotice && (

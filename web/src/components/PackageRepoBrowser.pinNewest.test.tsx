@@ -111,6 +111,9 @@ describe('PackageRepoBrowser — Update to latest version', () => {
       ],
     })
     await renderBrowser()
+    // Opening the repo looks its picks up in that repo alone; only the
+    // button's own request is under test here.
+    mockApi.lookupPackages.mockClear()
     await act(async () => fireEvent.click(pinButton()))
 
     expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
@@ -337,5 +340,66 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
 
     expect(useStore.getState().addedPackages).toEqual([{ name: 'htop', version: '3.3.0-4', repo: 'base' }])
     expect(screen.getByRole('status').textContent).toMatch(/over the 256 a build accepts/)
+  })
+})
+
+describe('PackageRepoBrowser — Update to latest version, per repository', () => {
+  it("counts and pins only what's selected from the browsed repo", async () => {
+    useStore.setState({
+      addedPackages: [
+        { name: 'vim', version: '', repo: 'base' },
+        { name: 'curl', version: '7.88.1-10', repo: 'intel-eci' },
+      ],
+    })
+    await renderBrowser()
+    // Browsing base: vim is selected from here, curl from Intel ECI.
+    expect(screen.getByText(/\(1 selected\)/)).toBeTruthy()
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+    mockApi.lookupPackages.mockClear()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith(expect.objectContaining({ names: ['vim'] }))
+    const byName = Object.fromEntries(useStore.getState().addedPackages.map((p) => [p.name, p]))
+    expect(byName.vim.version).toBe('2:9.1.0016-1')
+    expect(byName.curl.version).toBe('7.88.1-10')
+  })
+})
+
+describe('PackageRepoBrowser — Show only selected', () => {
+  it("offers every version the browsed repo has for a pinned pick, not just the pinned one", async () => {
+    mockApi.lookupPackages.mockResolvedValue({
+      packages: [
+        {
+          name: 'vim',
+          version: '2:9.1.0016-1',
+          repository: 'base',
+          versions: [
+            { version: '2:9.1.0016-1', repository: 'base' },
+            { version: '2:9.1.0000-1', repository: 'base' },
+          ],
+        },
+      ],
+      unavailableRepos: [],
+    })
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }] })
+    await renderBrowser()
+    await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
+
+    expect(screen.getByRole('button', { name: /9\.1\.0000-1/ })).toBeTruthy()
+  })
+
+  it('puts Show frequently used last on the controls row', async () => {
+    const curated = repos.map((r) => (r.id === 'base' ? { ...r, hasCuratedPackages: true } : r))
+    function CuratedBrowser() {
+      const resolver = useVersionResolver('ubuntu24', ['base'])
+      return <PackageRepoBrowser repos={curated} os="ubuntu24" baseLock={noLock} resolver={resolver} />
+    }
+    await act(async () => {
+      render(<CuratedBrowser />)
+    })
+    const frequent = screen.getByRole('checkbox', { name: /Show frequently used/ })
+    const row = frequent.closest('div')!
+    const labels = Array.from(row.querySelectorAll('label, button')).map((el) => el.textContent ?? '')
+    expect(labels[labels.length - 1]).toMatch(/Show frequently used/)
   })
 })
