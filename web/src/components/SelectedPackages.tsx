@@ -27,6 +27,7 @@ const noResolver: VersionResolver = {
   resolveAll: () => {},
   bulkResolving: false,
   attemptedNames: new Set(),
+  lookupNewest: () => Promise.resolve({ found: {}, complete: true, unavailableRepos: [], stale: false }),
 }
 
 const noLockedRepos = new Set<string>()

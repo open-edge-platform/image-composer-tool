@@ -14,6 +14,8 @@ interface InputProps {
   // Hint read out with the field, for a value whose rules aren't obvious from
   // the label alone.
   hint?: string
+  // Passed to the input; 'off' keeps the browser from offering to save a secret.
+  autoComplete?: string
   onChange: (value: string) => void
 }
 
@@ -25,6 +27,7 @@ export function Input({
   disabled,
   type = 'text',
   hint,
+  autoComplete,
   onChange,
 }: InputProps) {
   const id = `input-${label.toLowerCase().replace(/\s+/g, '-')}`
@@ -38,6 +41,7 @@ export function Input({
       <input
         id={id}
         type={type}
+        autoComplete={autoComplete}
         aria-describedby={hintId}
         className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-[#00285a] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 focus:border-[#0071c5] focus:outline-none focus:ring-1 focus:ring-[#0071c5]"
         value={value}

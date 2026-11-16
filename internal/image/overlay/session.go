@@ -119,6 +119,7 @@ var (
 	builderValidateUsersFn = ValidateOverlayUsers
 	builderResolveFn       = ResolveOverlayPackages
 	builderPreflightFn     = Preflight
+	builderPrintPlanFn     = PrintPackagePlan
 	builderInstallFn       = InstallOverlayPackages
 	builderCreateUsersFn   = RunOverlayUsers
 	builderProxyFn         = imageprovision.WriteProxyConfig
@@ -240,6 +241,7 @@ func (b *Builder) Preprocess() (err error) {
 		return err
 	}
 
+	builderPrintPlanFn(ComputePackageStats(b.baseline, b.plan, b.report))
 	b.preprocessed = true
 	return nil
 }

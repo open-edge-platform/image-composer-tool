@@ -180,7 +180,8 @@ func (t *ImageTemplate) SortedProvisioningScripts() []ProvisioningScript {
 
 func hasProvisioningSections(sc SystemConfig) bool {
 	return sc.Proxy.wasProvided || !sc.Proxy.IsEmpty() || len(sc.Provisioning.Scripts) > 0 ||
-		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
+		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty() ||
+		!sc.OEPInstaller.IsEmpty()
 }
 
 // mergeProvisioningSections applies child-wins merging: a section set by the
@@ -202,6 +203,9 @@ func mergeProvisioningSections(merged *SystemConfig, defaultConfig, userConfig S
 	}
 	if !userConfig.AptPolicy.isEmpty() {
 		merged.AptPolicy = userConfig.AptPolicy
+	}
+	if !userConfig.OEPInstaller.IsEmpty() {
+		merged.OEPInstaller = userConfig.OEPInstaller
 	}
 }
 
@@ -654,6 +658,9 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 	if err := checkRebootAfterIsLast(t.SortedProvisioningScripts()); err != nil {
 		return err
 	}
+	if err := t.validateOEPInstaller(); err != nil {
+		return err
+	}
 	if t.SystemConfig.Provisioning.RunsBeforeLogin() &&
 		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool {
 			return s.Stage == ProvisioningStageEveryBoot
@@ -767,6 +774,33 @@ func (t *ImageTemplate) lowerProvisioningInputs() error {
 		}
 	}
 	return t.lowerCloudInit()
+}
+
+// AddGeneratedProvisioningScript appends a provisioning script that a build
+// step generates after the template was merged, such as the OEP Installer's
+// first-boot script. It is validated together with the template's scripts, and
+// its file is copied into the image like theirs.
+func (t *ImageTemplate) AddGeneratedProvisioningScript(s ProvisioningScript) error {
+	scripts := append(slices.Clone(t.SystemConfig.Provisioning.Scripts), s)
+	if err := validateProvisioningScripts(scripts); err != nil {
+		return err
+	}
+	ordered := slices.Clone(scripts)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Order < ordered[j].Order })
+	if err := checkRebootAfterIsLast(ordered); err != nil {
+		return err
+	}
+	if err := t.addLoweredFile(s.Local, s.Final, "generated provisioning script "+s.Name); err != nil {
+		return err
+	}
+	t.SystemConfig.Provisioning.Scripts = scripts
+	return nil
+}
+
+// AddGeneratedFile copies the host file local (an absolute path) into the
+// image at final. final must not collide with another additional file.
+func (t *ImageTemplate) AddGeneratedFile(local, final string) error {
+	return t.addLoweredFile(local, final, "generated file "+final)
 }
 
 func (t *ImageTemplate) lowerCloudInit() error {

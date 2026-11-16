@@ -159,6 +159,7 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--http-proxy URL`, `--https-proxy URL`, `--ftp-proxy URL` | Override `systemConfig.proxy.httpProxy`, `.httpsProxy`, `.ftpProxy`: the proxy persisted into the deployed system. A flag given an empty value (for example `--http-proxy ''`) clears the template's setting. Create mode only. |
 | `--no-proxy LIST` | Override `systemConfig.proxy.noProxy` (comma-separated, no spaces); `--no-proxy ''` clears it. Create mode only. |
 | `--ssh-authorized-key USER=FILE` | Add the public keys in `FILE` to `USER`'s `authorized_keys`. `USER` must be defined in `systemConfig.users`. Repeatable. |
+| `--oep-installer-token-file FILE` | Read the GitHub token for downloading `systemConfig.oepInstaller` files from a private repository from `FILE`, for this build only. Takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`. The file is read like a `token_file`: a regular file (or a symlink to one), trimmed, not empty. |
 
 The composition override flags change only the fields they name; an unset flag
 leaves the template untouched. Overridden values are validated exactly like
@@ -690,7 +691,10 @@ image-composer-tool serve [flags]
 **Description:**
 
 `serve` resolves `--templates-dir`, `--work-dir`, and the global configuration
-file relative to its working directory. Start it from the repository root;
+file relative to its working directory. Every build it starts gets the configuration file the
+server loaded, as an absolute `--config` path, so builds use the server's
+settings (such as `oep_installer.token_file`) and not a file found from root's
+home directory under `sudo`. Start it from the repository root;
 started from elsewhere, template selections fail with
 `matched template file not found on disk`.
 
@@ -925,6 +929,7 @@ logging:
 | `config_dir` | string | Directory for configuration files. Default: "./config" |
 | `temp_dir` | string | Temporary directory. Default: system temp directory |
 | `logging.level` | string | Log level (debug/info/warn/error). Default: "info" |
+| `oep_installer.token_file` | string | File holding a GitHub token with read access, for templates whose `systemConfig.oepInstaller` files are in a private repository. The `ICT_OEP_INSTALLER_TOKEN` and `ICT_OEP_INSTALLER_TOKEN_FILE` environment variables take precedence. Keep the file owned by root with mode 0600. Not set by default |
 
 ### Image Template File
 

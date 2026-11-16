@@ -1401,7 +1401,7 @@ func TestAuditDependencies_DistinguishesBrokenFromToolFailure(t *testing.T) {
 			backend:    &debInstallerBackend{},
 			out:        "The following packages have unmet dependencies:\n libfoo : Depends: libbar but it is not installed",
 			err:        errors.New("exit status 100"),
-			wantBroken: []string{"libfoo | Depends: libbar but it is not installed"},
+			wantBroken: []string{"libfoo | Depends: libbar"},
 		},
 		{name: "deb tool absent", backend: &debInstallerBackend{}, out: "bash: apt-get: command not found", err: errors.New("exit status 127"), wantErr: true},
 		{
@@ -1529,11 +1529,25 @@ func TestParseUnmetDependencyFailures(t *testing.T) {
 		" libc6:amd64 : Depends: libqux but it is not installed\n"
 	got := parseUnmetDependencyFailures(apt)
 	want := []string{
-		"libc6:amd64 | Depends: libqux but it is not installed",
-		"libfoo | Depends: libbar (>= 2) but it is not installable",
+		"libc6:amd64 | Depends: libqux",
+		"libfoo | Depends: libbar (>= 2)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("apt parse = %v, want %v", got, want)
+	}
+	aptBeforeUpgrade := parseUnmetDependencyFailures(
+		"The following packages have unmet dependencies:\n consumer : Depends: library (>= 3) but 1 is installed")
+	aptAfterUpgrade := parseUnmetDependencyFailures(
+		"The following packages have unmet dependencies:\n consumer : Depends: library (>= 3) but 2 is installed")
+	wantUpgradeFailure := []string{"consumer | Depends: library (>= 3)"}
+	if !reflect.DeepEqual(aptBeforeUpgrade, wantUpgradeFailure) || !reflect.DeepEqual(aptAfterUpgrade, wantUpgradeFailure) {
+		t.Errorf("installed-version change: before=%v after=%v, want %v",
+			aptBeforeUpgrade, aptAfterUpgrade, wantUpgradeFailure)
+	}
+	aptDifferentRequirement := parseUnmetDependencyFailures(
+		"The following packages have unmet dependencies:\n consumer : Depends: library (>= 4) but 2 is installed")
+	if reflect.DeepEqual(aptAfterUpgrade, aptDifferentRequirement) {
+		t.Errorf("a different Debian dependency must remain a distinct failure: got %v", aptDifferentRequirement)
 	}
 
 	// dnf: NEVRA reduced to name.arch so an upgrade's version churn does not look new;
