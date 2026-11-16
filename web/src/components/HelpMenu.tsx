@@ -173,12 +173,14 @@ function VersionFooter({ version }: { version: VersionInfo }) {
       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Version</p>
       <div className="flex items-center gap-2">
         {/* Focusable so a keyboard user can reach the commit and date too: a
-            native title tooltip shows only on mouse hover. */}
-        <span className="group relative">
+            native title tooltip shows only on mouse hover. On a screen too
+            narrow for a long tag, the badge scrolls sideways (min-w-0 lets it
+            shrink) rather than pushing the copy button out of the menu. */}
+        <span className="group relative min-w-0">
           <span
             tabIndex={details ? 0 : undefined}
             aria-describedby={details ? tooltipId : undefined}
-            className="select-all whitespace-nowrap rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a] outline-none focus-visible:ring-2 focus-visible:ring-[#0071c5]"
+            className="block select-all overflow-x-auto whitespace-nowrap rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a] outline-none focus-visible:ring-2 focus-visible:ring-[#0071c5]"
           >
             {versionLabel(version)}
           </span>
@@ -200,7 +202,7 @@ function VersionFooter({ version }: { version: VersionInfo }) {
             onClick={copy}
             title="Copy version details"
             aria-label="Copy version details"
-            className="flex items-center gap-1 rounded p-1 text-xs text-slate-500 hover:bg-slate-200 hover:text-[#00285a]"
+            className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-slate-500 hover:bg-slate-200 hover:text-[#00285a]"
           >
             <CopyIcon className="h-3.5 w-3.5" />
             {copied && <span className="text-[#00285a]">Copied</span>}
