@@ -1,6 +1,7 @@
 package imageos
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
@@ -42,6 +44,8 @@ type ImageOs struct {
 	template    *config.ImageTemplate
 	chrootEnv   chroot.ChrootEnvInterface
 	imageBoot   imageboot.ImageBootInterface
+	// resolvedRepoDir is the staged resolved-only repository while in use, else empty.
+	resolvedRepoDir string
 }
 
 var log = logger.Logger()
@@ -83,6 +87,20 @@ func (imageOs *ImageOs) InstallRootfs() (installRoot, versionInfo string, err er
 
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
 	if pkgType == "deb" {
+		restoreRepo, repoErr := imageOs.useResolvedDebRepo()
+		if repoErr != nil {
+			err = fmt.Errorf("failed to prepare resolved package repository: %w", repoErr)
+			return
+		}
+		defer func() {
+			if restoreErr := restoreRepo(); restoreErr != nil {
+				if err != nil {
+					err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, restoreErr)
+				} else {
+					err = fmt.Errorf("failed to restore package repository: %w", restoreErr)
+				}
+			}
+		}()
 		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
 			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
 			return
@@ -229,6 +247,20 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 		}
 		mounted = true
 		mountPointInfoList = append(mountPointInfoList, map[string]string{"MountPoint": imageOs.installRoot})
+		restoreRepo, repoErr := imageOs.useResolvedDebRepo()
+		if repoErr != nil {
+			err = fmt.Errorf("failed to prepare resolved package repository: %w", repoErr)
+			return
+		}
+		defer func() {
+			if restoreErr := restoreRepo(); restoreErr != nil {
+				if err != nil {
+					err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, restoreErr)
+				} else {
+					err = fmt.Errorf("failed to restore package repository: %w", restoreErr)
+				}
+			}
+		}()
 		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
 			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
 			return
@@ -703,10 +735,13 @@ func (imageOs *ImageOs) initDebLocalRepoWithinInstallRoot(installRoot string) er
 
 	// from local.list
 	repoPath := filepath.Join(chrootInstallRoot, "cdrom", "cache-repo")
-	chrootPkgCacheDir := imageOs.chrootEnv.GetChrootPkgCacheDir()
-	if err := imageOs.chrootEnv.MountChrootPath(chrootPkgCacheDir, repoPath, "--bind"); err != nil {
-		return fmt.Errorf("failed to mount package cache directory %s to chroot repo directory %s: %w",
-			chrootPkgCacheDir, repoPath, err)
+	repoSrcDir := imageOs.resolvedRepoDir
+	if repoSrcDir == "" {
+		repoSrcDir = imageOs.chrootEnv.GetChrootPkgCacheDir()
+	}
+	if err := imageOs.chrootEnv.MountChrootPath(repoSrcDir, repoPath, "--bind"); err != nil {
+		return fmt.Errorf("failed to mount package repository directory %s to chroot repo directory %s: %w",
+			repoSrcDir, repoPath, err)
 	}
 
 	if err := imageOs.chrootEnv.UpdateChrootLocalRepoMetadata(
@@ -757,11 +792,162 @@ func (imageOs *ImageOs) initDebLocalRepoWithinInstallRoot(installRoot string) er
 	return nil
 }
 
-func (imageOs *ImageOs) deInitDebLocalRepoWithinInstallRoot(installRoot string) error {
-	// from local.list
-	repoPath := filepath.Join(installRoot, "/cdrom/cache-repo")
+// useResolvedDebRepo makes the image's local APT repository hold only the
+// packages this build resolved (template.FullPkgList): the cache can hold other
+// versions from earlier builds and APT installs the highest it sees, in the
+// bootstrap and the installation. They are staged in a new directory swapped in
+// at the chroot environment's repository mount; the returned function restores
+// the cache mount and removes it. Without a resolved list, or in an installer
+// ISO whose repository already holds only those packages, the cache is used.
+func (imageOs *ImageOs) useResolvedDebRepo() (restore func() error, err error) {
+	if system.IsLiveInstallerExecution() || len(imageOs.template.FullPkgList) == 0 {
+		return func() error { return nil }, nil
+	}
+	cacheDir := imageOs.chrootEnv.GetChrootPkgCacheDir()
+	stageDir, err := os.MkdirTemp(imageOs.chrootEnv.GetChrootImageBuildDir(), "cache-repo-resolved-")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create staging directory for the resolved packages: %w", err)
+	}
+	if err := os.Chmod(stageDir, 0o755); err != nil { // MkdirTemp makes it 0700; apt's _apt user must read it
+		_ = os.RemoveAll(stageDir)
+		return nil, fmt.Errorf("failed to set permissions on staging directory: %w", err)
+	}
+	unregister := func() {}
+	restore = func() error {
+		imageOs.resolvedRepoDir = ""
+		// Release the install-root repository too, which installImagePkgs skips if its setup
+		// failed after mounting. Unmount only: customization may have added files to keep.
+		if err := imageOs.umountDebLocalRepoWithinInstallRoot(imageOs.installRoot); err != nil {
+			return fmt.Errorf("failed to release install root repository: %w", err)
+		}
+		if err := imageOs.chrootEnv.UmountChrootPath(chroot.ChrootRepoDir); err != nil {
+			return fmt.Errorf("failed to unmount resolved package repository: %w", err)
+		}
+		if err := imageOs.chrootEnv.MountChrootPath(cacheDir, chroot.ChrootRepoDir, "--bind"); err != nil {
+			return fmt.Errorf("failed to restore package cache mount: %w", err)
+		}
+		if err := os.RemoveAll(stageDir); err != nil {
+			return err
+		}
+		unregister()
+		return nil
+	}
+
+	if err := stageResolvedDebs(cacheDir, stageDir, imageOs.template.FullPkgList); err != nil {
+		_ = os.RemoveAll(stageDir)
+		return nil, err
+	}
+	unregister = imageOs.registerResolvedRepoCleanup(stageDir)
+	if err := imageOs.chrootEnv.UmountChrootPath(chroot.ChrootRepoDir); err != nil {
+		unregister()
+		_ = os.RemoveAll(stageDir)
+		return nil, fmt.Errorf("failed to unmount package cache repository: %w", err)
+	}
+	if err := imageOs.chrootEnv.MountChrootPath(stageDir, chroot.ChrootRepoDir, "--bind"); err != nil {
+		if rerr := restore(); rerr != nil {
+			err = fmt.Errorf("%w; restore failed: %v", err, rerr)
+		}
+		return nil, fmt.Errorf("failed to mount resolved package repository: %w", err)
+	}
+	if err := imageOs.chrootEnv.UpdateChrootLocalRepoMetadata(
+		chroot.ChrootRepoDir, imageOs.template.Target.Arch, false); err != nil {
+		if rerr := restore(); rerr != nil {
+			err = fmt.Errorf("%w; restore failed: %v", err, rerr)
+		}
+		return nil, fmt.Errorf("failed to index resolved package repository: %w", err)
+	}
+	imageOs.resolvedRepoDir = stageDir
+	return restore, nil
+}
+
+// registerResolvedRepoCleanup registers the staged repository's teardown with the cancellation
+// coordinator (the deferred restore cannot unmount under the cancelled shell context); the
+// directory goes only once its mounts are released. The result unregisters it after a restore.
+func (imageOs *ImageOs) registerResolvedRepoCleanup(stageDir string) (unregister func()) {
+	c := runctx.Get()
+	if c == nil {
+		return func() {}
+	}
+	return c.Register("resolved-deb-repo:"+stageDir, func(ctx context.Context) error {
+		restoreShell := shell.SetContext(ctx)
+		defer restoreShell()
+		restoreRun := runctx.SetContext(ctx)
+		defer restoreRun()
+		if err := imageOs.umountDebLocalRepoWithinInstallRoot(imageOs.installRoot); err != nil {
+			return fmt.Errorf("failed to release install root repository: %w", err)
+		}
+		if err := imageOs.chrootEnv.UmountChrootPath(chroot.ChrootRepoDir); err != nil {
+			return fmt.Errorf("failed to unmount resolved package repository: %w", err)
+		}
+		return os.RemoveAll(stageDir)
+	})
+}
+
+// stageResolvedDebs links (or, across filesystems, copies) the named .deb files into stageDir.
+func stageResolvedDebs(cacheDir, stageDir string, files []string) error {
+	for _, name := range files {
+		if name == "" || filepath.Base(name) != name {
+			return fmt.Errorf("invalid package file name %q", name)
+		}
+		src := filepath.Join(cacheDir, name)
+		dst := filepath.Join(stageDir, name)
+		if err := os.Link(src, dst); err == nil {
+			continue
+		}
+		if err := copyDebFile(src, dst); err != nil {
+			return fmt.Errorf("failed to stage package %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func copyDebFile(src, dst string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	ctx := runctx.Context() // stop between chunks when the build is cancelled
+	for err == nil && ctx.Err() == nil {
+		_, err = io.CopyN(out, in, 1<<20)
+	}
+	if err == nil {
+		return ctx.Err()
+	}
+	if err == io.EOF {
+		return nil
+	}
+	return err
+}
+
+// umountDebLocalRepoWithinInstallRoot releases the install-root repository mount.
+// UmountChrootPath prefixes the chroot root itself, so convert the host install
+// root as the mount side does; a host path would be doubled and look unmounted.
+func (imageOs *ImageOs) umountDebLocalRepoWithinInstallRoot(installRoot string) error {
+	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
+	if err != nil {
+		return fmt.Errorf("failed to get chroot environment path for install root %s: %w", installRoot, err)
+	}
+	repoPath := filepath.Join(chrootInstallRoot, "cdrom", "cache-repo")
 	if err := imageOs.chrootEnv.UmountChrootPath(repoPath); err != nil {
 		return fmt.Errorf("failed to unmount chroot repo directory %s: %w", repoPath, err)
+	}
+	return nil
+}
+
+func (imageOs *ImageOs) deInitDebLocalRepoWithinInstallRoot(installRoot string) error {
+	// from local.list
+	if err := imageOs.umountDebLocalRepoWithinInstallRoot(installRoot); err != nil {
+		return err
 	}
 
 	repoconfigPath := filepath.Join(installRoot, "/etc/apt/sources.list.d/local.list")

@@ -2786,6 +2786,55 @@ func TestLoadGlobalConfigFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadGlobalConfigOEPInstaller(t *testing.T) {
+	tests := []struct {
+		name, content, wantFile string
+		wantErr                 bool
+	}{
+		{"token file", "oep_installer:\n  token_file: /etc/image-composer-tool/oep-token\n",
+			"/etc/image-composer-tool/oep-token", false},
+		{"not set", "workers: 4\n", "", false},
+		// Like the file's other keys: decoded into the struct, then validated,
+		// so an unknown key is ignored and an empty path means unset.
+		{"unknown key ignored", "oep_installer:\n  token: secret\n", "", false},
+		{"empty path is unset", "oep_installer:\n  token_file: \"\"\n", "", false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "image-composer-tool.yml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadGlobalConfig(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("LoadGlobalConfig err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && cfg.OEPInstaller.TokenFile != tt.wantFile {
+				t.Errorf("token_file = %q, want %q", cfg.OEPInstaller.TokenFile, tt.wantFile)
+			}
+		})
+	}
+}
+
+func TestRenderCommentedYAMLOEPInstaller(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultGlobalConfig()
+	if strings.Contains(cfg.renderCommentedYAML(), "oep_installer") {
+		t.Error("rendered oep_installer without a token file")
+	}
+	cfg.OEPInstaller.TokenFile = "/etc/image-composer-tool/oep-token"
+	path := filepath.Join(t.TempDir(), "image-composer-tool.yml")
+	if err := os.WriteFile(path, []byte(cfg.renderCommentedYAML()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadGlobalConfig(path)
+	if err != nil || loaded.OEPInstaller.TokenFile != cfg.OEPInstaller.TokenFile {
+		t.Fatalf("round trip = %+v, %v", loaded.OEPInstaller, err)
+	}
+}
+
 func TestLoadGlobalConfigWithEmptyPath(t *testing.T) {
 	config, err := LoadGlobalConfig("")
 	if err != nil {

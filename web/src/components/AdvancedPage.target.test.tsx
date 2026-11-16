@@ -17,6 +17,7 @@ const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
   getEdgePack: vi.fn(),
   searchPackages: vi.fn(async () => []),
+  lookupPackages: vi.fn(async () => ({ packages: [], unavailableRepos: [] })),
   searchStreamUrl: () => '',
 }))
 vi.mock('../api/client', () => ({ api: mockApi }))
@@ -99,6 +100,16 @@ describe('AdvancedPage Target step required markers', () => {
     for (const label of ['Use Case', 'SKU', 'Platform', 'Operating System', 'Image Name']) {
       expect(screen.getByText(label, { selector: 'label' }).textContent).toBe(`${label} *`)
     }
+  })
+
+  it('leaves SKU unmarked when the use case offers no SKU', () => {
+    useStore.setState({
+      manifest: { ...manifest, combinations: [{ ...manifest.combinations[0], sku: '' }] },
+      selection: { ...FULL, sku: '' },
+    })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    expect(screen.getByText('SKU', { selector: 'label' }).textContent).toBe('SKU')
+    expect(screen.getByText('Platform', { selector: 'label' }).textContent).toBe('Platform *')
   })
 })
 

@@ -190,6 +190,37 @@ The uppercase forms (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) are passed too.
 Set both forms if your tools disagree about which one they read. Docker does
 not store any of them in the container image.
 
+## Private OEP Installer Files
+
+Templates with a `systemConfig.oepInstaller` section download the OEP Installer
+from GitHub. If those files are in a private repository, a build needs a GitHub
+token with read access. Either enter one for each build, or give the server one
+for every build.
+
+**For one build.** When you select such a template, the **Users and
+credentials** dialog that opens on **Compose Image** has a **GitHub token for
+the OEP Installer** field. The server passes the token to that build only, in a
+file it deletes when the build process ends. It is not saved with the build,
+so **Retry** does not reuse it: start a new build from the Basic or Advanced
+tab instead, and enter the token again. When the server already has a token,
+the field is optional and an entered token takes precedence for that build.
+
+**For every build,** through a Compose secret:
+
+1. Save the token in `oep-installer-token` at the root of the checkout. Git
+   ignores that file.
+
+   ```bash
+   (umask 077; gh config get -h github.com oauth_token > oep-installer-token)
+   ```
+
+2. In `docker-compose.yml`, uncomment the `ICT_OEP_INSTALLER_TOKEN_FILE` line,
+   the service's `secrets` entry, and the top-level `secrets` section.
+3. Run `docker compose up --build`.
+
+Without a token, a build of such a template fails while downloading, with a
+message that the file may be in a private repository.
+
 ## Troubleshooting
 
 | Symptom | Fix |

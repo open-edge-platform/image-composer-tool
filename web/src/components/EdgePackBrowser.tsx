@@ -32,9 +32,6 @@ import { PackageRow } from './PackageRow'
 
 interface EdgePackBrowserProps {
   pack: EdgePack
-  // Display name for the pack's repository, for the "adds to <repo>" note and
-  // the version-chip tooltips — the pack knows the repo id, not its label.
-  repoLabel: string
   // Label lookup for any other repository id, for naming a domain's
   // prerequisite repositories. The pack carries ids; only the step knows labels.
   repoLabelFor: (id: string) => string
@@ -57,7 +54,6 @@ interface EdgePackBrowserProps {
 // package from the right-hand rail and its domain drops to partial immediately.
 export function EdgePackBrowser({
   pack,
-  repoLabel,
   repoLabelFor,
   targetLabel,
   baseLock,
@@ -317,14 +313,6 @@ export function EdgePackBrowser({
             </div>
           ))}
       </div>
-
-      <p className="mt-2 text-sm text-slate-500">
-        Selection is not all-or-none: tick the header checkbox for every domain,
-        a domain&apos;s checkbox for everything in that domain, or click a domain
-        to see its packages and pick them individually. These are the same
-        packages the Repositories tab lists under {repoLabel} — picking one here
-        selects it there too, and it appears once in the list on the right.
-      </p>
     </>
   )
 }
@@ -630,7 +618,7 @@ function IncludedPackages({
         <span aria-hidden className={'inline-block transition-transform ' + (open ? 'rotate-90' : '')}>
           ▸
         </span>
-        Included with {runtime.displayName} ({count} package{count === 1 ? '' : 's'})
+        Included with {runtime.displayName} Edge Pack Profile ({count} package{count === 1 ? '' : 's'})
       </button>
       {open && (
         <>
@@ -646,7 +634,7 @@ function IncludedPackages({
           )}
           <div
             role="list"
-            aria-label={`Packages included with ${runtime.displayName}`}
+            aria-label={`Packages included with the ${runtime.displayName} Edge Pack Profile`}
             className="mt-1.5 max-h-[360px] overflow-y-auto rounded border border-slate-200"
           >
             {includes.map((p) => (

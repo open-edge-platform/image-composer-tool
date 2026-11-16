@@ -1,0 +1,57 @@
+# Starter overlay-mode template for the Nova Lake (NVL) BKC (Best Known
+# Configuration) image: layers packages onto an installed Ubuntu 26.04 RAW
+# image instead of building one from scratch.
+#
+# The full NVL BKC package set (Intel kernel, vendor userspace pins, firmware)
+# is maintained outside this repository and replaces this file, under the same
+# name, wherever it is deployed. This starter keeps the Web UI's
+# Platform Enablement - BKC selection buildable until then.
+#
+# The baseline path below is a placeholder: point baseline.source at an
+# installed Ubuntu 26.04 RAW image on your build host before building.
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Overlay an installed Ubuntu 26.04 RAW image with the Nova Lake (NVL) BKC software stack
+  use_cases:
+    - Enable NVL on an installed Ubuntu 26.04 baseline without rebuilding the OS
+  keywords:
+    - overlay
+    - baseline
+    - bkc
+    - nvl
+    - ubuntu
+    - raw
+
+image:
+  name: ubuntu26-nvl-bkc-overlay
+  version: "26.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: raw
+
+# The source image is copied into the build workspace first and is never
+# modified in place.
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-26.04-base.raw
+    format: raw
+
+overlayPolicy:
+  packageOperation: additive-only
+  conflictPolicy: fail
+
+disk:
+  name: nvl-bkc-overlay
+  artifacts:
+    - type: raw
+
+systemConfig:
+  name: nvl-bkc-overlay
+  description: NVL BKC enablement on an Ubuntu 26.04 baseline
+  packages:
+    - vim

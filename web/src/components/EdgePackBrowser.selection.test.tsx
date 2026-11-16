@@ -61,7 +61,6 @@ const pack: EdgePack = {
 const browser = () => (
   <EdgePackBrowser
     pack={pack}
-    repoLabel="Intel ECI"
     repoLabelFor={(id) => id}
     targetLabel="Ubuntu 24.04"
     baseLock={noLock}
@@ -133,7 +132,6 @@ describe('clearing a group that mixes a template-locked package with an added on
     render(
       <EdgePackBrowser
         pack={mixedPack}
-        repoLabel="Intel ECI"
         repoLabelFor={(id) => id}
         targetLabel="Ubuntu 24.04"
         baseLock={baseLock}

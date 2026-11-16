@@ -7,6 +7,9 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 
+// Marks a dropdown the Compose button stays disabled without, matching Advanced.
+const REQUIRED = <span className="text-red-600"> *</span>
+
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
   buildInProgress: boolean
@@ -42,6 +45,9 @@ export function BasicPage({
   // Accounts the user asked to add on top of the template's own. Transient for
   // the same reason credentials are: each entry carries a password.
   const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
+  // A GitHub token for this build's OEP Installer downloads, transient for the
+  // same reason, and sent with the build but never with a compose.
+  const [oepInstallerToken, setOEPInstallerToken] = useState('')
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -63,6 +69,7 @@ export function BasicPage({
     // the previous one is dropped rather than silently sent with the new build.
     setCredentials([])
     setNewUsers([])
+    setOEPInstallerToken('')
     let cancelled = false
     setLoadingSummary(true)
     api
@@ -110,12 +117,15 @@ export function BasicPage({
       // since the last auto-fetch (or that fetch is still in flight).
       const fresh = await api.compose(req)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
-      const accepted = await api.startBuild(req)
+      // The token goes to the build only, never to compose: it is not part of
+      // the selection.
+      const accepted = await api.startBuild(req, oepInstallerToken.trim() || undefined)
       // The server has them now, and this page stays mounted while the Compose
       // tab is shown, so a plain-text password would otherwise sit in memory
       // and reappear in the dialog after the build.
       setCredentials([])
       setNewUsers([])
+      setOEPInstallerToken('')
       setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
@@ -139,8 +149,9 @@ export function BasicPage({
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
-        Select a use case, SKU, and platform. Pre-configured defaults are
-        applied based on your selection.
+        Select a Use Case to load the default configuration. SKU, Platform, and
+        Operating System selections may be modified as needed. Fields marked{' '}
+        <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -151,6 +162,7 @@ export function BasicPage({
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <Select
               label="Use Case"
+              labelSuffix={REQUIRED}
               placeholder="-- Select Use Case --"
               value={selection.vertical}
               options={opts.verticals}
@@ -158,6 +170,8 @@ export function BasicPage({
             />
             <Select
               label="SKU"
+              // SKU is optional where the manifest offers none for this use case.
+              labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
               placeholder="-- Select SKU --"
               value={selection.sku}
               options={opts.skus}
@@ -166,6 +180,7 @@ export function BasicPage({
             />
             <Select
               label="Platform"
+              labelSuffix={REQUIRED}
               placeholder="-- Select Platform --"
               value={selection.platform}
               options={opts.platforms}
@@ -174,6 +189,7 @@ export function BasicPage({
             />
             <Select
               label="Operating System"
+              labelSuffix={REQUIRED}
               placeholder="-- Select Operating System --"
               value={selection.os}
               options={opts.oses}
@@ -185,6 +201,7 @@ export function BasicPage({
             {opts.kernels.length > 0 && (
               <Select
                 label="Kernel"
+                labelSuffix={REQUIRED}
                 placeholder="-- Select Kernel --"
                 value={selection.kernel}
                 options={opts.kernels}
@@ -229,7 +246,7 @@ export function BasicPage({
         </div>
 
         {/* Image configuration summary — always reflects the current selection
-            (auto-fetched). "Your Selection" is intentionally omitted here since
+            (auto-fetched). "Basic Selection" is intentionally omitted here since
             the dropdowns already show it; the Compose Image tab keeps it. */}
         {complete && review && (
           <div className="flex-1 text-xs">
@@ -276,6 +293,9 @@ export function BasicPage({
         onChange={setCredentials}
         newUsers={newUsers}
         onNewUsersChange={setNewUsers}
+        oepInstaller={review?.oepInstaller}
+        oepInstallerToken={oepInstallerToken}
+        onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}

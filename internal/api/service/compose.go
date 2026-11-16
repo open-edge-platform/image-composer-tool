@@ -441,6 +441,9 @@ type ComposeResult struct {
 	// A caller can use this to prompt for missing credentials rather than
 	// discovering the gap partway through a build.
 	Credentials []CredentialRequirement
+	// OEPInstaller says whether the resolved template downloads OEP Installer
+	// files, so a caller can ask for a GitHub token for the build.
+	OEPInstaller OEPInstallerInfo
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -560,7 +563,8 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		BasePackages: merged.SystemConfig.Packages,
 		// Reported from the resolved template, so a credential supplied in this
 		// same request shows as satisfied and the caller stops prompting.
-		Credentials: credentialRequirements(merged),
+		Credentials:  credentialRequirements(merged),
+		OEPInstaller: s.oepInstallerInfo(merged),
 	}
 
 	// With overrides in play, resolve the curated parent a second time so the

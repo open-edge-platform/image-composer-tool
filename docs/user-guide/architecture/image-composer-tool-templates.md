@@ -45,6 +45,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.provisioning`](#systemconfigprovisioning)
       - [`systemConfig.cloudInit`](#systemconfigcloudinit)
       - [`systemConfig.aptPolicy`](#systemconfigaptpolicy)
+      - [`systemConfig.oepInstaller`](#systemconfigoepinstaller)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Template Extends (Inheritance)](#template-extends-inheritance)
     - [Syntax](#syntax)
@@ -778,6 +779,7 @@ user templates (as defaults already provide a complete base).
 | `provisioning` | object | No | Boot-time provisioning scripts |
 | `cloudInit` | object | No | Install and seed cloud-init |
 | `aptPolicy` | object | No | Restrict which repositories may upgrade packages |
+| `oepInstaller` | object | No | Compose OEP Installer profiles or modules into the image |
 
 Package names must match: `^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$`
 and must be unique within the list.
@@ -1310,6 +1312,102 @@ systemConfig:
 
 Check the result on a deployed system with `apt-cache policy <package>` and
 `apt-get -s upgrade`.
+
+#### `systemConfig.oepInstaller`
+
+Composes OEP Installer (`openedge-cli`) profiles or modules into the image
+(`ubuntu` targets). The OEP Installer publishes, next to the CLI, the
+`openedge-cli list --sbom` output for each supported configuration, generated
+on a host running the target OS and kernel. At build time ICT installs the
+Debian packages and apt repositories that output lists; on first boot
+`openedge-cli install` completes the remaining installation. The interface is
+described in the
+[OEP Installer interface specification](../../architecture-decision-record/oep-installer-sbom-interface.md).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
+| `sha256` | string | Yes | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
+| `sbomUrl` | string | Yes | `https://` URL of the published `list --sbom` output for `modules`, pinned to a commit or tag. The same GitHub rule as for `url` applies |
+| `sbomSha256` | string | Yes | Hex SHA-256 digest of the file at `sbomUrl` |
+| `modules` | string[] | Yes | Profiles or modules to install, as accepted by `openedge-cli install`. Must equal the `module-list` of the `sbomUrl` output |
+| `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install`. They must equal the arguments in the `install-cmdline` of the `sbomUrl` output, since some profiles choose modules based on them; the build fails otherwise (no spaces, quotes, `$` or `;`) |
+
+At build time ICT downloads the file at `sbomUrl`, checks it against
+`sbomSha256`, and then:
+
+- Adds the packages it lists to `systemConfig.packages`. Versions written as
+  `name=version` or `name=version*` (the newest version starting with
+  `version`) are installed at exactly the version selected. Artifacts listed
+  by URL are left to `openedge-cli` on first boot.
+- Adds the apt repositories it lists, writing their sources list, keyring, and
+  preferences files at the paths `openedge-cli` uses. A `packageRepositories`
+  entry with the same URL and suite is replaced by the one from the file.
+- Fails the build when the file's `module-list` differs from `modules`, a
+  listed package conflicts with the template's version of it, a package the
+  file requires not to be installed is in `systemConfig.packages`, or a
+  kernel parameter it lists is missing from `systemConfig.kernel.cmdline`.
+- Fails the build when a kernel package it lists does not match the
+  template's kernel: a kernel image must be one of the template's kernel
+  packages, a meta-package such as `linux-image-generic-7.0` must name the
+  template kernel's series, and headers, modules, or tools must be for the
+  template kernel's release.
+
+On first boot, a generated provisioning script
+(`/usr/local/sbin/ict-oep-installer.sh`, ordered after the template's own
+`provisioning.scripts`) runs as `user`: the CLI's `setup` command, which saves
+it as `~/.local/bin/openedge-cli`, and then `openedge-cli install` with
+`modules` and `args`. The user has passwordless sudo only while the script
+runs; the grant is kept in `/run`, so it is removed when the script exits and is gone after any reboot, even on an immutable image. Like other
+first-boot scripts, it runs again on each boot until it succeeds, including
+after `openedge-cli` reboots the system to finish an installation step. ICT
+copies the CLI to `/usr/local/share/oep-installer/` and adds `sudo` to the
+image's packages. Samples that run on top of a blueprint are not part of the
+image; install them afterwards with `openedge-cli install <sample>`.
+
+To download from a private GitHub repository, provide a GitHub token with
+read access, for example the one the GitHub CLI stores
+(`gh config get -h github.com oauth_token`, or `gh auth token` on newer
+versions). ICT uses the first of these that is set:
+
+1. `build --oep-installer-token-file FILE`: a file holding the token for that
+   build only. The Web UI uses this for a token entered for one build.
+2. `ICT_OEP_INSTALLER_TOKEN`: the token itself, for a build run from a shell.
+3. `ICT_OEP_INSTALLER_TOKEN_FILE`: the path of a file holding the token, such
+   as a mounted Docker or Kubernetes secret.
+4. `oep_installer.token_file` in the global configuration file: the path of a
+   file holding the token. Use this for the Web UI with `serve --sudo`, which
+   does not pass the variables above through `sudo`.
+
+Keep a token file owned by root with mode `0600`; ICT warns when other users
+can read it. ICT sends the token only to GitHub hosts and never logs it.
+Behind a proxy that
+inspects TLS traffic, the build host must trust the proxy's root certificate
+(for example in `/usr/local/share/ca-certificates/`, followed by
+`update-ca-certificates`), or the download fails with a certificate error.
+
+A child template's `oepInstaller` section replaces an inherited one as a
+whole. The section is rejected in overlay mode.
+
+```yaml
+systemConfig:
+  users:
+    - name: edge
+  oepInstaller:
+    url: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace
+    sha256: <sha256 of the CLI>
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/sbom-handheld-blueprint-ubuntu-24.04.5.yaml
+    sbomSha256: <sha256 of the output file>
+    modules:
+      - handheld_blueprint
+    user: edge
+    args: ["--edgepack"]
+```
+
+The output file pins the kernel of the host it was generated on (for example
+`linux-headers-7.0.0-38-generic`), so the template must install that exact
+kernel.
 
 ## Package Repositories
 

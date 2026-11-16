@@ -11,6 +11,7 @@ const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
   getEdgePack: vi.fn(),
   searchPackages: vi.fn(),
+  lookupPackages: vi.fn(async () => ({ packages: [], unavailableRepos: [] })),
 }))
 
 vi.mock('../api/client', () => ({ api: mockApi }))
@@ -130,11 +131,11 @@ describe('PackagesStep Edge Pack', () => {
     render(<PackagesStep os="ubuntu24" active basePackages={[]} />)
     await advance(0)
     // Nothing is listed until the runtime is actually chosen.
-    expect(screen.queryByRole('button', { name: /Included with Standard/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Included with Standard Edge Pack Profile/ })).toBeNull()
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Standard' }))
     // gfx-core appears twice in the tree but is counted once.
-    const toggle = screen.getByRole('button', { name: 'Included with Standard (5 packages)' })
+    const toggle = screen.getByRole('button', { name: 'Included with Standard Edge Pack Profile (5 packages)' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByRole('checkbox', { name: 'gfx-core' })).toBeNull()
 
@@ -160,7 +161,7 @@ describe('PackagesStep Edge Pack', () => {
     act(() => {
       useStore.getState().setPackage({ name: 'base-standard', version: '1.0', repo: 'intel-eci' })
     })
-    fireEvent.click(screen.getByRole('button', { name: /Included with Standard/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Included with Standard Edge Pack Profile/ }))
     expect(screen.getByText(/pinned to 1\.0, which may include a different set/)).toBeTruthy()
 
     // Pinned to the newest version, or unpinned, the list is exact — no note.
@@ -177,5 +178,41 @@ describe('PackagesStep Edge Pack', () => {
     await advance(0)
     expect(screen.getByText(UNAVAILABLE)).toBeTruthy()
     expect(screen.queryByText('Loading Edge Pack…')).toBeNull()
+  })
+})
+
+describe('PackagesStep index warm-up', () => {
+  it('looks the template packages up across every repo once, as soon as the step opens', async () => {
+    mockApi.getEdgePack.mockResolvedValue(pack('1.0'))
+    mockApi.lookupPackages.mockResolvedValue({ packages: [], unavailableRepos: [] })
+    mockApi.listPackageRepos.mockResolvedValue({
+      repos: [
+        { id: 'base', displayName: 'Base', url: 'https://example.com/base', enabledByDefault: true },
+        { id: 'intel-eci', displayName: 'Intel ECI', url: 'https://example.com', enabledByDefault: false },
+      ],
+    })
+
+    const { rerender } = render(<PackagesStep os="ubuntu24" active basePackages={['vim', 'curl_8.5']} />)
+    await advance(0)
+
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith({
+      os: 'ubuntu24',
+      repos: ['base', 'intel-eci'],
+      names: ['curl', 'vim'],
+    })
+
+    // Re-rendering the same target doesn't warm it again.
+    rerender(<PackagesStep os="ubuntu24" active basePackages={['vim', 'curl_8.5']} />)
+    await advance(0)
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not warm anything while the tab is hidden', async () => {
+    mockApi.getEdgePack.mockResolvedValue(pack('1.0'))
+    render(<PackagesStep os="ubuntu24" active={false} basePackages={['vim']} />)
+    await advance(0)
+
+    expect(mockApi.lookupPackages).not.toHaveBeenCalled()
   })
 })
