@@ -6,11 +6,12 @@
 
 **New**:
 
-- **Added**: `overlayPolicy.allowDowngrade` explicitly permits resolved baseline
-  package downgrades with `packageOperation: additive-and-upgrade`. It defaults
-  to false and does not bypass dependency integrity, protected boot packages,
-  or removal policy. RPM uses `--oldpackage` only for approved downgrade
-  transactions; Debian uses its existing local `dpkg -i` path.
+- **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
+  selected by explicit APT `name_version` requests with
+  `packageOperation: additive-and-upgrade`. It defaults to false and does not
+  bypass dependency integrity, protected boot packages, or removal policy.
+  Unpinned packages and dependencies are not automatically selected for
+  downgrade; RPM overlay builds are not supported end-to-end.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time

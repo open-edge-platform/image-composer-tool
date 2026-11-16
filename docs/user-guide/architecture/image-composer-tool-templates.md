@@ -451,7 +451,7 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
 | `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added. `additive-and-upgrade`: also permits upgrading baseline packages. Downgrades and removals require separate opt-ins below |
-| `allowDowngrade` | boolean | No | `false` (default), `true` | Permit resolved baseline package downgrades, including exact APT `name_version` pins. Requires `packageOperation: additive-and-upgrade`. Does not bypass dependency checks, bootloader/kernel protection, or authorize removals |
+| `allowDowngrade` | boolean | No | `false` (default), `true` | Permit downgrades selected by explicit APT `name_version` requests. Requires `packageOperation: additive-and-upgrade`. Does not bypass dependency checks, bootloader/kernel protection, or authorize removals |
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
 | `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
@@ -477,11 +477,11 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > default) to fail the build on any version bump to a baseline package.
 >
 > **Downgrades (`allowDowngrade`).** Opt-in and valid only with
-> `packageOperation: additive-and-upgrade`. This permits downgrades anywhere in
-> the resolved install set, not just explicitly pinned requests. Review the
-> preflight downgrade actions and resulting SBOM: older vendor packages can
-> revert distribution security fixes. Debian uses `dpkg -i`; RPM uses
-> `rpm -U --oldpackage` only when the approved report contains downgrades.
+> `packageOperation: additive-and-upgrade`. The planner selects downgrades for
+> explicitly requested APT `name_version` pins; it does not automatically select
+> older unpinned packages or dependencies. RPM overlay builds are not supported
+> end-to-end. Review the preflight downgrade actions and resulting SBOM: older
+> vendor packages can revert distribution security fixes. Debian uses `dpkg -i`.
 > Retained Debian dependency checks, the post-install dependency audit, and
 > bootloader/kernel protections remain enforced. No removal is authorized by
 > this flag; unresolved dependencies still fail the build.

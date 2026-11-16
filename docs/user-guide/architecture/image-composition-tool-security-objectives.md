@@ -128,9 +128,10 @@ image or corrupt generated configuration:
 
 Overlay package downgrades are denied by default. A template may explicitly set
 `overlayPolicy.allowDowngrade: true` only with
-`packageOperation: additive-and-upgrade`. This applies to the resolved package
-closure and can revert distribution security fixes; review preflight downgrade
-actions and the resulting SBOM before deploying older vendor packages. It does
-not authorize package removal or bypass dependency integrity checks, bootloader
-protection, or the explicit kernel-replacement policy. RPM's `--oldpackage` is
-used only when preflight has approved downgrade actions.
+`packageOperation: additive-and-upgrade`. The planner selects downgrades for
+explicitly requested APT `name_version` pins, not automatically for unpinned
+packages or dependencies. Downgrades can revert distribution security fixes;
+review preflight downgrade actions and the resulting SBOM before deploying older
+vendor packages. This policy does not authorize package removal or bypass
+dependency integrity checks, bootloader protection, or the explicit
+kernel-replacement policy. RPM overlay builds are not supported end-to-end.
