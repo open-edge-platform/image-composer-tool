@@ -94,7 +94,16 @@ export function PackageRow({
   disabledReason,
 }: PackageRowProps) {
   const checked = locked || selection != null
-  const repoNames = [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
+  // Where the version beside the name comes from. A locked row whose
+  // template pin comes from another repository shows that pin, so "via"
+  // names that repository (or nothing until it's known), not the browsed one,
+  // whose own versions are only the chips.
+  const repoNames =
+    locked && pinnedFrom && currentVersion
+      ? pinnedFrom.repoLabel
+        ? [pinnedFrom.repoLabel]
+        : []
+      : [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
   // An override only ever exists on a locked row once the user has
   // explicitly picked a version — the template's own inclusion never
   // becomes a real addedPackages entry on its own.
