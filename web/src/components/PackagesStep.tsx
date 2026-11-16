@@ -274,7 +274,7 @@ export function PackagesStep({
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+            <SelectedPackages repos={repos} os={os} lockedRepoIds={lockedRepoIds} resolver={resolver} />
           </div>
         </div>
       )}

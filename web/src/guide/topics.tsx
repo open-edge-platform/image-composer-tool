@@ -202,9 +202,9 @@ const advanced: GuideTopic = {
           </li>
           <li>Tick a package, or pick a version, to add it.</li>
           <li>
-            Everything you added shows in the <Ui>Selected</Ui> panel on the right, under{' '}
-            <Ui>You are adding</Ui>. Packages the image already has are listed under{' '}
-            <Ui>Already in template</Ui>.
+            Everything you added or changed shows in the <Ui>Selected</Ui> panel on the right, under{' '}
+            <Ui>You are adding</Ui>. Packages the image already has show ticked in the{' '}
+            <Ui>Repositories</Ui> tab.
           </li>
         </Steps>
         <Tip>
