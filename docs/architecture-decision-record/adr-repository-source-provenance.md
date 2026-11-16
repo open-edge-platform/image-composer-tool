@@ -89,6 +89,13 @@ Source discovery is separate from source artifact downloads, source unpacking,
 build dependency installation, and rebuilding. Normal builds must not install
 source trees or development dependencies into production images.
 
+Phase 1 establishes the canonical binary-to-source provenance records and corrects
+the existing SPDX generation issues necessary to publish them reliably. Phase 2
+builds directly on these records to retrieve, verify, and retain source artifacts
+and additional evidence. Neither phase requires ICT to reproduce package builds
+or independently establish that published binaries were built from the identified
+sources.
+
 ### Proposed Repository Configuration
 
 The following is proposed syntax, not currently supported template configuration:
@@ -159,6 +166,14 @@ packageRepositories:
    Bind the build-side manifest to the final image digest; the embedded copy must
    not require a self-referential image digest. Distinguish full-inventory and
    delta coverage in both outputs.
+8. **Correct and validate SPDX generation.** Address existing SPDX generation
+   defects as part of Phase 1, including the non-standard singular checksum field,
+   preservation of package relationships during overlay merges, and stable SPDX
+   identifiers for binary and source packages. Ensure generated SBOMs conform to
+   the selected SPDX specification and that source-package relationships
+   accurately reflect the available evidence. These corrections are prerequisites
+   for publishing source provenance through SPDX, not separate follow-on work.
+   Maintain backward compatibility when consuming existing ICT-generated SBOMs.
 
 ### Manifest and SPDX Contract
 
@@ -183,19 +198,19 @@ an enabled repository cannot be verified. Neither mode accepts failed signature
 or checksum verification as a successful mapping. Record stale-cache use and
 metadata expiry; strict mode must not silently treat expired evidence as fresh.
 
-SPDX uses separate source-package entries with the `.dsc` download location and
-binary `GENERATED_FROM` source relationships representing repository-declared
-mappings, not attested build execution. Describe the evidence basis in
-`sourceInfo` and reference the companion manifest through standard SPDX fields.
-Do not assert a generated-from relationship for uncertain candidate matches.
-Represent additional source artifacts using standard SPDX constructs, with the
-complete URL/hash list always available in the companion manifest.
+SPDX represents source packages as separate package entries, including the .dsc
+download location and available checksums. Binary-to-source associations must use
+relationship types supported by the selected SPDX specification, without implying
+verified build execution. In particular, GENERATED_FROM must only be used where
+its semantics are justified by the available evidence. Repository-declared source
+mappings and their verification status are documented through standard SPDX
+annotations or comments and the companion provenance manifest. Uncertain candidate
+mappings must not be represented as verified relationships.
 
-Emit standard `checksums`, not the current singular `checksum`, and validate the
-whole document against the SPDX schema. Continue accepting legacy checksum input
-when reading existing SBOMs. Overlay merges must preserve source records and
-relationships, remove obsolete relationships, and use IDs that distinguish
-versions, architectures, and source identities.
+The existing SPDX generation must also be corrected to emit standard checksums
+rather than the current singular checksum field. Generated documents must pass
+schema validation, including after overlay merges. Existing SBOMs containing the
+legacy field remain readable for backward compatibility.
 
 ### Phase 1 Exit Criteria and Accomplishments
 
@@ -263,12 +278,13 @@ versions, architectures, and source identities.
    matching debug symbols, and publisher attestations with verified artifacts.
    These can be published separately from `Sources`; their absence must be
    explicit and must not prevent a verified source bundle from being useful.
-6. **Provide a separate, opt-in rebuild check.** Use an isolated build environment,
-   record exact inputs and commands, and compare output binary digests with the
-   captured DEBs. Report attempted, unavailable-input, failed, non-identical,
-   or identical results per artifact. A successful compilation is not an
-   identical rebuild, and an identical rebuild is not proof of historical build
-   execution. Capture publisher-signed source-to-binary attestations separately.
+6. **Enable downstream reproducibility verification.** Preserve available source
+  artifacts, build metadata, toolchain and dependency information, and publisher
+  attestations in a form consumable by external build-verification workflows. ICT
+  is responsible for collecting, verifying, and retaining available provenance
+  evidence, but does not execute package rebuilds or perform binary reproducibility
+  comparisons as part of this ADR. Such capabilities may be addressed independently
+  in the future.
 
 ### Phase 2 Exit Criteria and Accomplishments
 
@@ -281,13 +297,15 @@ versions, architectures, and source identities.
   published kernel/DKMS, media, FFmpeg, and camera sources and patch evidence;
   unavailable sources, tuning assets, debug symbols, and build evidence remain
   explicit gaps rather than inferred provenance.
-- Records distinguish links resolved, bytes verified, artifacts retained,
-  sources unpacked, revision evidence found, build evidence available, and rebuild
-  comparison outcomes. Full coverage is claimed only for a stated inventory and
-  policy whose required checks actually pass.
+- Records distinguish links resolved, bytes verified, artifacts retained, sources
+unpacked, revision evidence found, and build evidence available. Source availability,
+integrity, and build provenance are reported independently. No reproducibility or
+build-execution claims are made without corresponding external verification or
+publisher attestations.
 - Tests exercise corrupted downloads, descriptor/index disagreement, interrupted
   transfers, deduplication, offline retrieval, archive safety, missing evidence,
-  patch application, and honest rebuild/attestation result reporting.
+  patch application, and accurate reporting of available or missing build evidence
+  and publisher attestations.
 
 ### Phase 2 Limitations
 
@@ -314,7 +332,8 @@ service or support for every package ecosystem.
 Update the template schema and reference, repository configuration guide, SBOM
 documentation, cache documentation, security objectives, and release notes with
 Phase 1. Phase 2 additionally updates the CLI specification and usage guide for
-retrieval/unpacking, retention, and optional rebuild checks. Examples use public
+source retrieval, unpacking, retention, provenance evidence collection, and
+integration with external build-verification workflows. Examples use public
 placeholder repositories and never embed private endpoints or credentials.
 
 ## Alternatives and Consequences
