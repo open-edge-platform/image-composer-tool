@@ -178,6 +178,8 @@ type PreferenceFile struct {
 type Output struct {
 	CLIVersion      string           // header cli-version
 	CLIURL          string           // header cli-url, may be empty
+	CLISHA256       string           // header cli-sha256, the digest of the file at CLIURL; may be empty
+	SHA256          string           // digest of the output file itself
 	Modules         []string         // header module-list
 	InstallCmdline  []string         // header install-cmdline, nil when absent
 	Arguments       []string         // arguments of InstallCmdline after the modules, nil when absent

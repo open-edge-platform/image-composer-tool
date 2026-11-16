@@ -17,6 +17,7 @@
   dependency upgrades along with additions and approved removals; install-time
   cascade removals may differ from the plan and appear in the final statistics.
 - Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
+- Follow an OEP Installer development branch from a template. In `systemConfig.oepInstaller`, only `sbomUrl` and `user` are now required: without `url`, ICT installs the CLI the package list names in its `cli-url` header, verified against its `cli-sha256` header when present; without `modules` or `args`, it uses the list's own; without `sbomSha256`, the list is not verified. A template can point `sbomUrl` at a branch and pick up OEP Installer fixes without changing. The template the image carries records the CLI and digests that were used.
 - **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
   constraints and alternatives. With `packageOperation: additive-and-upgrade`,
   library upgrades that break previously satisfied requirements automatically
