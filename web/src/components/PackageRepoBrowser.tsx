@@ -408,7 +408,13 @@ function MergedPane({
           .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
         const templatePins = planTemplatePins(dispatchedTemplate, templateKey, current, found)
         const all = [...pins, ...templatePins]
-        if (all.length > 0) setPackages(all)
+        if (all.length > 0) {
+          setPackages(all)
+          // Every pin is from the browsed repo (the lookup was in it alone),
+          // and a build only reads repos in use, so pinning from it puts it
+          // in use, as picking a version chip does.
+          ensureRepoEnabled(repoId)
+        }
       })
       .finally(() => setPinning(false))
   }

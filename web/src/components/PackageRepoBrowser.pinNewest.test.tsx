@@ -94,6 +94,15 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }])
   })
 
+  it("doesn't put the always-on base repo into enabledRepos when pinning from it", async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }], enabledRepos: [] })
+    await renderBrowser()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }])
+    expect(useStore.getState().enabledRepos).toEqual([])
+  })
+
   it("doesn't pin a newer version another checked repo offers", async () => {
     // curl's newest, 8.5.0-2, is in Intel ECI; browsing base, it stays put.
     useStore.setState({ addedPackages: [{ name: 'curl', version: '7.88.1-10', repo: 'base' }] })
@@ -474,5 +483,36 @@ describe('PackageRepoBrowser — Show only selected', () => {
     })
     expect(screen.queryByRole('checkbox', { name: /Show frequently used/ })).toBeNull()
     expect(mockApi.searchPackages).not.toHaveBeenCalledWith(expect.objectContaining({ curated: true }))
+  })
+})
+
+describe('PackageRepoBrowser — Update to latest version puts the browsed repo in use', () => {
+  const browseEci = async (baseLock: BaseLock) => {
+    await act(async () => {
+      render(<Browser baseLock={baseLock} />)
+    })
+    await act(async () => fireEvent.change(screen.getByRole('combobox'), { target: { value: 'intel-eci' } }))
+    await act(async () => {})
+  }
+
+  it('turns on an optional repo it pins packages from', async () => {
+    // curl is unpinned in the template; Intel ECI, not yet in use, has 8.5.0-2.
+    useStore.setState({ addedPackages: [], enabledRepos: [] })
+    await browseEci(templateLock({}, ['curl']))
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'curl', version: '8.5.0-2', repo: 'intel-eci' }])
+    expect(useStore.getState().enabledRepos).toEqual(['intel-eci'])
+  })
+
+  it('leaves the repo off when nothing is pinned from it', async () => {
+    // The template's pin is already Intel ECI's newest, so nothing changes.
+    useStore.setState({ addedPackages: [], enabledRepos: [] })
+    await browseEci(templateLock({ curl: '8.5.0-2' }, []))
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([])
+    expect(useStore.getState().enabledRepos).toEqual([])
   })
 })
