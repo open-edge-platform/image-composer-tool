@@ -14,6 +14,10 @@ ICT container image carries the tool and every program a build runs, such as
 > host's `/dev` mounted. Build only templates, and files they reference, that
 > you trust.
 
+On the Intel network, you can skip the checkout and the image build: the
+[CLI Quick Start (Prebuilt Container Image)](./cli-prebuilt-image-quick-start.md)
+runs a prebuilt ICT container image and fetches this script on demand.
+
 ## How It Works
 
 `scripts/build-in-container.sh` runs on your host. It starts the container
@@ -331,6 +335,9 @@ scripts/build-in-container.sh \
 
 ## Next Steps
 
+- [CLI Quick Start (Prebuilt Container Image)](./cli-prebuilt-image-quick-start.md)
+  runs this script and every other CLI command with a prebuilt image, without
+  a checkout.
 - [Building an Image in a Docker Container](./usage-guide.md#building-an-image-in-a-docker-container)
   shows the `docker run` the script wraps, to run a build without it.
 - [Web UI Quick Start](./web-ui-quick-start.md) builds OS images from a browser,
