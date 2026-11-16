@@ -71,6 +71,19 @@
 			],
 			"additionalProperties": false
 		},
+		"oep_installer": {
+			"type": "object",
+			"description": "Settings for downloading the OEP Installer files that templates' systemConfig.oepInstaller sections name",
+			"properties": {
+				"token_file": {
+					"type": "string",
+					"description": "Path of a file holding a GitHub token with read access, for files in private repositories",
+					"minLength": 1,
+					"maxLength": 4096
+				}
+			},
+			"additionalProperties": false
+		},
 		"ai": {
 			"type": "object",
 			"description": "AI-powered template generation configuration",

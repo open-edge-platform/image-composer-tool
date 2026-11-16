@@ -47,12 +47,12 @@ func fetchDeb(ctx context.Context, client *http.Client, r Repo) ([]Entry, error)
 		if err == nil {
 			return entries, nil
 		}
-		if !errors.Is(err, errNotFound) {
+		if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
 		missing = append(missing, name)
 	}
-	return nil, fmt.Errorf("no package index under %s (tried %s)", dir, strings.Join(missing, ", "))
+	return nil, fmt.Errorf("no package index under %s (tried %s): %w", dir, strings.Join(missing, ", "), ErrNotFound)
 }
 
 // readDebIndex fetches one candidate index and parses it. The raw

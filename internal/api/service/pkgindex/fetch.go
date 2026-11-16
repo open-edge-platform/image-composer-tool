@@ -16,9 +16,11 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// errNotFound marks a 404, which callers probing several candidate index names
-// treat as "try the next one" rather than as a failure.
-var errNotFound = errors.New("not found")
+// ErrNotFound marks a 404, which callers probing several candidate index names
+// treat as "try the next one" rather than as a failure. Lookup's error wraps it
+// when the repository publishes no index at all for the requested
+// suite/component/arch, which is a property of the repository, not an outage.
+var ErrNotFound = errors.New("not found")
 
 // maxIndexBytes caps a single compressed index read. Ubuntu's amd64 main index
 // is ~13 MB gzipped, so this leaves generous headroom while stopping a
@@ -37,7 +39,7 @@ func get(ctx context.Context, client *http.Client, url string) (io.ReadCloser, e
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		resp.Body.Close()
-		return nil, fmt.Errorf("%s: %w", url, errNotFound)
+		return nil, fmt.Errorf("%s: %w", url, ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

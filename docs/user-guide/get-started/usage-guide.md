@@ -152,7 +152,9 @@ sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`. Composition overrides: `--disk-strategy`,
 `--hostname`, `--http-proxy`, `--https-proxy`, `--ftp-proxy`,
-`--no-proxy`, `--ssh-authorized-key`.
+`--no-proxy`, `--ssh-authorized-key`. For `systemConfig.oepInstaller` files in a
+private repository, `--oep-installer-token-file FILE` reads the GitHub token
+for that build from `FILE`.
 See the full
 [build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
 for descriptions and additional flags like `--system-packages-only`.
@@ -443,6 +445,26 @@ scripts/install-sudoers.sh
 ./image-composer-tool serve --sudo
 ```
 
+Templates with a `systemConfig.oepInstaller` section whose files are in a
+private GitHub repository need a token at build time. `sudo` does not pass
+`ICT_OEP_INSTALLER_TOKEN` to the builds, so put the token in a file only root
+can read and name it in the configuration file the server runs with:
+
+```bash
+sudo install -d -m 0755 /etc/image-composer-tool
+gh config get -h github.com oauth_token | sudo install -m 0600 /dev/stdin /etc/image-composer-tool/oep-installer-token
+```
+
+```yaml
+# image-composer-tool.yml
+oep_installer:
+  token_file: "/etc/image-composer-tool/oep-installer-token"
+```
+
+Without a server token, each user can instead enter their own token in the
+**Users and credentials** dialog when they compose such a template; it is used
+for that build only.
+
 The server binds to localhost by default and has no authentication of its own.
 Because the API can start privileged builds, exposing it with
 `--host 0.0.0.0` should be a deliberate decision, not a convenience.
@@ -517,6 +539,12 @@ What `docker-compose.yml` sets up:
 - **Your proxy.** If your shell sets `http_proxy`, `https_proxy`, or
   `no_proxy` (or their uppercase forms), Compose passes them to the container
   image build and to the server, which passes them on to every build.
+- **A GitHub token, if you need one.** For templates that download the OEP
+  Installer from a private repository, `docker-compose.yml` has a commented
+  Compose secret: put the token in `./oep-installer-token` (ignored by git),
+  and uncomment the secret lines. The server reads it from
+  `/run/secrets/oep_installer_token` through `ICT_OEP_INSTALLER_TOKEN_FILE`,
+  so it does not appear in `docker inspect`.
 
 The container also has the `image-composer-tool` CLI. Its working directory,
 `/opt/ict`, is laid out like a checkout of this repository, so paths such as
