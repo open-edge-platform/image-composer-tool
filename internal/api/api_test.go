@@ -18,6 +18,7 @@ import (
 
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/version"
 )
 
 // minimalTemplate is a schema-valid user template; see the service tests for the
@@ -147,6 +148,34 @@ func TestHandleGetManifest(t *testing.T) {
 	// Wire-format check: optional sku present, required camelCase fields.
 	if m.Combinations[0].Sku == nil || *m.Combinations[0].Sku != "amr" {
 		t.Errorf("combination sku not serialized: %+v", m.Combinations[0])
+	}
+}
+
+// --- version ---
+
+// Not parallel: it overrides the package-level build metadata, which is what
+// -ldflags stamps at release time.
+func TestHandleGetVersion(t *testing.T) {
+	saved := []string{version.Version, version.CommitSHA, version.BuildDate}
+	t.Cleanup(func() { version.Version, version.CommitSHA, version.BuildDate = saved[0], saved[1], saved[2] })
+	version.Version, version.CommitSHA, version.BuildDate = "2026.3.0", "a1b2c3d", "2026-11-02"
+
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	// Decode into a map, not httpapi.VersionInfo, so the camelCase wire names
+	// the UI reads are checked too.
+	var got map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := map[string]string{"version": "2026.3.0", "commit": "a1b2c3d", "buildDate": "2026-11-02"}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
 	}
 }
 

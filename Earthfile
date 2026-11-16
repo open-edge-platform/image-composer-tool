@@ -62,12 +62,16 @@ version-info:
     ARG version="__auto__"
     # Copy .git directory to inspect tags for versioning metadata
     COPY .git .git
+    # The default version is the nearest release tag reachable from the built
+    # commit, so it names the source the binary came from. Release tags start with
+    # the release version, "ict-<year>.<n>" (e.g. ict-2026.3-rc2-oep-integration);
+    # other tags, such as validation snapshots, are never used as a version.
     RUN --no-cache RAW_VERSION="$VERSION" && \
         if [ -n "$version" ] && [ "$version" != "__auto__" ]; then \
             RAW_VERSION="$version"; \
         fi && \
         if [ -z "$RAW_VERSION" ] || [ "$RAW_VERSION" = "__auto__" ]; then \
-            RAW_VERSION=$(git tag --sort=-creatordate | head -n1 2>/dev/null || echo "dev"); \
+            RAW_VERSION=$(git describe --tags --abbrev=0 --match 'ict-20[0-9][0-9].[0-9]*' 2>/dev/null || echo "dev"); \
         fi && \
         ./scripts/sanitize-version.sh "$RAW_VERSION" > /tmp/version.txt
     SAVE ARTIFACT /tmp/version.txt

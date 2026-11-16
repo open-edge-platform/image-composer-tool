@@ -11,6 +11,7 @@ import (
 
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/version"
 )
 
 // Server implements the generated httpapi.ServerInterface. Each method decodes
@@ -21,6 +22,16 @@ var _ httpapi.ServerInterface = (*Server)(nil)
 // GetManifest handles GET /manifest.
 func (s *Server) GetManifest(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, fromManifest(s.svc.Manifest()))
+}
+
+// GetVersion handles GET /version. It reports the build metadata stamped into
+// this binary, the same values the `version` subcommand prints.
+func (s *Server) GetVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, httpapi.VersionInfo{
+		Version:   version.Version,
+		Commit:    version.CommitSHA,
+		BuildDate: version.BuildDate,
+	})
 }
 
 // ComposeTemplate handles POST /templates/compose.

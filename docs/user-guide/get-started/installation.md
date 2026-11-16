@@ -56,7 +56,7 @@ go run ./cmd/image-composer-tool --help
 To embed version metadata via ldflags:
 
 ```bash
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION=$(git describe --tags --match 'ict-20[0-9][0-9].[0-9]*' --always --dirty 2>/dev/null || echo "dev")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 
@@ -110,6 +110,15 @@ earthly +build
 earthly +build --VERSION=1.2.0
 ```
 
+Unless `--VERSION` is given, the version is the nearest release tag reachable
+from the commit being built. Release tags start with the release version,
+`ict-<year>.<n>`, followed by what the tag marks, for example
+`ict-2026.3-rc2-oep-integration`; tags that do not start that way are never used
+as a version. The tag is reported verbatim — by `image-composer-tool version`
+and in the Web UI's **?** (Help) menu — so it names both the release and the
+exact source the binary was built from. A checkout with no such tag reports
+`dev`.
+
 ## Install via Debian Package
 
 For Ubuntu and Debian systems, ICT can be installed as a `.deb`
@@ -118,7 +127,7 @@ package with proper package management.
 ### Build the Debian Package
 
 ```bash
-# Build with default parameters (latest git tag, amd64)
+# Build with default parameters (nearest release tag, amd64)
 earthly +deb
 
 # Build with custom version

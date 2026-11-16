@@ -9,7 +9,11 @@ import { guideHref, guideTopics } from './guide/topics'
 // The manifest never arrives, so no tab page renders: these tests cover only
 // how the address and history move between the tabs and the guide.
 vi.mock('./api/client', () => ({
-  api: { getManifest: () => new Promise(() => {}), listBuilds: () => new Promise(() => {}) },
+  api: {
+    getManifest: () => new Promise(() => {}),
+    listBuilds: () => new Promise(() => {}),
+    getVersion: () => new Promise(() => {}),
+  },
 }))
 
 // history.back() in jsdom fires popstate/hashchange asynchronously; wait for it.
