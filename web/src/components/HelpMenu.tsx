@@ -122,7 +122,7 @@ export function HelpMenu({ active }: HelpMenuProps) {
         <nav
           id={listId}
           aria-label="Help"
-          className="absolute right-0 z-40 mt-2 w-60 rounded-lg border border-slate-200 bg-white pt-1 shadow-lg"
+          className="absolute right-0 z-40 mt-2 w-max min-w-60 max-w-[calc(100vw-1rem)] rounded-lg border border-slate-200 bg-white pt-1 shadow-lg"
         >
           <ul>
             {links.map((link) => (
@@ -178,7 +178,7 @@ function VersionFooter({ version }: { version: VersionInfo }) {
           <span
             tabIndex={details ? 0 : undefined}
             aria-describedby={details ? tooltipId : undefined}
-            className="select-all rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a] outline-none focus-visible:ring-2 focus-visible:ring-[#0071c5]"
+            className="select-all whitespace-nowrap rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-xs text-[#00285a] outline-none focus-visible:ring-2 focus-visible:ring-[#0071c5]"
           >
             {versionLabel(version)}
           </span>
