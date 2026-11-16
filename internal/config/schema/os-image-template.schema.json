@@ -335,7 +335,7 @@
     },
     "Proxy": {
       "type": "object",
-      "description": "Proxy settings persisted into the deployed system (/etc/environment, apt, systemd services)",
+      "description": "Proxy settings persisted into create-mode and overlay images (/etc/environment, apt, systemd services); build downloads use the host proxy environment",
       "properties": {
         "httpProxy": { "type": "string", "description": "HTTP_PROXY URL, e.g. http://proxy.example.com:3128" },
         "httpsProxy": { "type": "string", "description": "HTTPS_PROXY URL" },

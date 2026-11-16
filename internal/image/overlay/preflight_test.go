@@ -571,6 +571,7 @@ func TestIsKernelFamilyPackage(t *testing.T) {
 	family := []string{
 		"linux-image-generic", "linux-image-6.8.0-40-generic",
 		"linux-modules-6.8.0-40-generic", "linux-modules-extra-6.8.0-40-generic",
+		"linux-main-modules-zfs-7.0.0-14-generic",
 		"linux-headers-6.8.0-40-generic", "linux-headers-generic",
 		"linux-generic", "linux-generic-hwe-24.04", "linux-oem-24.04", "linux-lowlatency",
 		"kernel", "kernel-core", "kernel-modules", "kernel-modules-extra", "kernel-5.14.0-427",
@@ -583,11 +584,37 @@ func TestIsKernelFamilyPackage(t *testing.T) {
 	for _, n := range []string{
 		"linux-libc-dev", "linux-tools-common", "linux-tools-6.8.0-40",
 		"kernel-headers", "kernel-devel", "kernel-tools", "kernelshark",
+		"linux-main-moduleshelper", "zfs-dkms", "zfsutils-linux",
 		"curl", "vim", "",
 	} {
 		if isKernelFamilyPackage(n) {
 			t.Errorf("isKernelFamilyPackage(%q) = true, want false", n)
 		}
+	}
+}
+
+func TestKernelReplacementMainModules(t *testing.T) {
+	t.Parallel()
+	oldModules := "linux-main-modules-zfs-7.0.0-14-generic"
+	newModules := "linux-main-modules-zfs-7.3-intel"
+	baseline := baselineVersionIndex([]BaselinePackage{
+		installedDeb("linux-image-7.0.0-14-generic", "7.0.0-14"),
+		installedDeb(oldModules, "7.0.0-14"),
+		installedDeb(newModules, "7.3"),
+		installedDeb("zfs-dkms", "2.4"),
+	})
+	resolved := []ResolvedPackage{{Name: "linux-image-7.3-intel", Version: "7.3"}}
+	closure := append([]ResolvedPackage{{Name: newModules, Version: "7.3"}}, resolved...)
+	policy := config.OverlayPolicy{ReplaceKernel: &config.ReplaceKernel{Package: "linux-image-7.3-intel"}}
+
+	actions := classifyKernelReplacementRemovals(baseline, resolved, closure, policy)
+
+	removed := map[string]bool{}
+	for _, action := range actions {
+		removed[action.Package] = true
+	}
+	if !removed[oldModules] || !removed["linux-image-7.0.0-14-generic"] || len(removed) != 2 {
+		t.Fatalf("removals = %v, want only old image and old main modules", removed)
 	}
 }
 
@@ -823,6 +850,26 @@ func TestEvaluatePreflight_KernelReplacementNonKernelWithForeignKernel(t *testin
 // image, the rejection of a non-kernel replacement even with a foreign kernel, and the
 // glob cases — a wildcard matched to a single concrete kernel, an over-broad wildcard
 // matching several (ambiguous), and a wildcard that matches only a userspace package.
+func TestReplacementKernelImages_DebVersionPin(t *testing.T) {
+	t.Parallel()
+	resolved := []ResolvedPackage{{Name: "linux-image-7.3-intel", Version: "261014t080608z-resolute1"}}
+
+	got := replacementKernelImages("linux-image-7.3-intel_261014t080608z-resolute1", resolved, nil, nil)
+
+	if len(got) != 1 || got[0] != "linux-image-7.3-intel" {
+		t.Fatalf("replacementKernelImages(version-pinned request) = %v, want [linux-image-7.3-intel]", got)
+	}
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT, Resolved: resolved, ResolvedClosure: resolved,
+		Policy: config.OverlayPolicy{
+			ReplaceKernel: &config.ReplaceKernel{Package: "linux-image-7.3-intel_261014t080608z-resolute1"},
+		},
+	})
+	if report.Blocked {
+		t.Fatalf("single pinned kernel was blocked: %+v", report.Violations)
+	}
+}
+
 func TestReplacementKernelImages(t *testing.T) {
 	kimg := []ResolvedPackage{{Name: "linux-image-6.11.0-1004-oem"}}
 	twoKernels := []ResolvedPackage{

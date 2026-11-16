@@ -6,7 +6,65 @@
 
 **New**:
 
+- Overlay builds now print a planned package-change report after dependency
+  resolution and preflight, before the build begins. It lists resolver-selected
+  dependency upgrades along with additions and approved removals; install-time
+  cascade removals may differ from the plan and appear in the final statistics.
 - Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
+- Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
+- Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
+- Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
+- **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
+  constraints and alternatives. With `packageOperation: additive-and-upgrade`,
+  library upgrades that break previously satisfied requirements automatically
+  seed affected retained native-architecture baseline packages as internal
+  upgrade targets, using the existing `Breaks` repair loop (at most four extra
+  resolves). `Requested` is unchanged; `CompatibilityUpgrades` tracks actual
+  forced installs. Preflight blocks unresolved newly unsatisfied retained
+  dependencies, including unavailable or unchanged candidates and blocking pins.
+  Explicit pins are not relaxed; no blanket upgrades, removals or downgrades are
+  authorized. RPM baseline reverse-dependency auto-repair is not implemented.
+  Upgraded versioned `Provides` and `Multi-Arch` metadata are preserved, and the
+  parsed metadata cache version is bumped to re-parse older entries.
+  Retained-dependency checks treat `Architecture: all` as the native architecture
+  before applying qualifiers and `Multi-Arch` rules, so an unannotated `all`
+  replacement cannot hide newly broken foreign-architecture dependencies.
+- **Fixed**: Debian overlay dependency audits now ignore apt's changing installed-
+  version explanation when comparing a broken dependency across package transactions.
+  The comparison still distinguishes different requirements and multiarch package
+  instances, avoiding false build failures when an unrelated package upgrade changes
+  the version named in `apt-get check` output.
+- **Fixed**: Ubuntu `linux-main-modules-*` packages are classified as kernel
+  companions, not extra bootable kernel images. Old companions are removable
+  only under a valid explicit kernel replacement, preserving the replacement
+  dependency-closure keep-set.
+- **Changed**: the overlay installer dependency audit compares failure
+  descriptors before and after every nonempty install or removal transaction,
+  including upgrade-only transactions, ignoring pre-existing failures. Newly
+  introduced upgrade-only failures fail closed without cascade removal, even
+  with `allowPackageRemoval: true`. Existing explicitly authorized removal
+  cascades retain their bounds and protected-package guards.
+- **Fixed**: overlay kernel replacement now treats a Debian `name_version`
+  request as the canonical package name when its name and version match resolved
+  or dependency-closure metadata, avoiding false extra-kernel-image ambiguity.
+- **Fixed**: under `packageOperation: additive-and-upgrade`, an exact APT
+  `name_version` pin differing from the baseline now enters the install set even
+  when older. The existing preflight downgrade gate rejects it instead of
+  silently ignoring the pin and later reporting unsatisfied dependencies. The
+  downgrade gate is unchanged.
+  Matching follows the Debian resolver for omitted epochs and artifact-style
+  requests, so these downgrade pins also reach preflight instead of being skipped.
+  Pins that compare equal under Debian version rules (for example, `2.12-1` and
+  `0:2.12-1`) remain no-ops, preventing an unclassified bootloader reinstall.
+- Overlay templates now support `systemConfig.proxy`, reusing the create-mode
+  writer for login, APT and systemd settings after build-time configuration
+  commands. Add site-specific settings in a local or internal template. Build
+  downloads still use the host proxy environment.
+- **Fixed**: a `systemConfig.proxy` with only `noProxy` now removes a stale
+  ICT-managed APT proxy file from the base image. Other APT files are unchanged.
+- **Changed**: platform-enablement templates requiring private repositories are
+  maintained in the internal template repository, not the public template catalog.
+  The workspace `cbkc-to-overlay-template` skill covers repeatable script migration.
 - Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
 - Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
 - Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
