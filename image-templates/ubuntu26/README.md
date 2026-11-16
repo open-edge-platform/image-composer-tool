@@ -19,10 +19,6 @@
 Platform-enablement templates requiring private repositories are maintained in
 the internal template repository and are not included in this public catalog.
 
-For the complete ISO download, baseline installation, local parent/child setup,
-build, and artifact handoff procedure, see
-[Reproduce the Ubuntu 26.04 NVL Overlay Build](../../docs/user-guide/get-started/nvl-overlay-reproduction.md).
-
 ---
 
 See [../README.md](../README.md) for the full catalog, [../COMPOSITION.md](../COMPOSITION.md) for `extends:` and overlay mode, and [../CONVENTIONS.md](../CONVENTIONS.md) for naming rules.
