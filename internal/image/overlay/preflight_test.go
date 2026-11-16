@@ -14,6 +14,31 @@ func installedDeb(name, version string) BaselinePackage {
 	return BaselinePackage{Name: name, Version: version, Arch: "amd64", Installed: true}
 }
 
+func TestAllowDowngradePreservesSafetyGates(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"grub-efi-amd64", "linux-image-7.3-intel"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			report := EvaluatePreflight(PreflightInput{Family: PackageManagerAPT,
+				Baseline: []BaselinePackage{installedDeb(name, "2")},
+				Resolved: []ResolvedPackage{{Name: name, Version: "1", Arch: "amd64"}},
+				Policy:   config.OverlayPolicy{AllowUpgrade: true, AllowDowngrade: true}})
+			if !report.Blocked {
+				t.Fatalf("downgrade opt-in bypassed protection for %s", name)
+			}
+		})
+	}
+	consumer := installedDeb("consumer", "1")
+	consumer.Requirements = parseDebDependsField("consumer", "library (>= 2)")
+	report := EvaluatePreflight(PreflightInput{Family: PackageManagerAPT, NativeArch: "amd64",
+		Baseline: []BaselinePackage{consumer, installedDeb("library", "2")},
+		Resolved: []ResolvedPackage{{Name: "library", Version: "1", Arch: "amd64"}},
+		Policy:   config.OverlayPolicy{AllowUpgrade: true, AllowDowngrade: true, AllowPackageRemoval: true}})
+	if !report.Blocked || report.Downgrades != 1 {
+		t.Fatalf("broken retained dependency must block approved downgrade: %+v", report)
+	}
+}
+
 // TestEvaluatePreflight_PolicyPaths is the table-driven core: each row drives one
 // classified action through the policy gate and asserts whether it is blocked,
 // the action class, and the rule cited on a block.

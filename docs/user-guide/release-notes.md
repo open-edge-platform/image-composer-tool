@@ -6,14 +6,17 @@
 
 **New**:
 
+- **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
+  selected by explicit APT `name_version` requests with
+  `packageOperation: additive-and-upgrade`. It defaults to false and does not
+  bypass dependency integrity, protected boot packages, or removal policy.
+  Unpinned packages and dependencies are not automatically selected for
+  downgrade; RPM overlay builds are not supported end-to-end.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time
   cascade removals may differ from the plan and appear in the final statistics.
 - Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
-- Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
-- Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
-- Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
 - **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
   constraints and alternatives. With `packageOperation: additive-and-upgrade`,
   library upgrades that break previously satisfied requirements automatically
@@ -49,9 +52,8 @@
   or dependency-closure metadata, avoiding false extra-kernel-image ambiguity.
 - **Fixed**: under `packageOperation: additive-and-upgrade`, an exact APT
   `name_version` pin differing from the baseline now enters the install set even
-  when older. The existing preflight downgrade gate rejects it instead of
-  silently ignoring the pin and later reporting unsatisfied dependencies. The
-  downgrade gate is unchanged.
+  when older. Preflight rejects it unless `allowDowngrade` is explicitly enabled,
+  instead of silently ignoring the pin and later reporting unsatisfied dependencies.
   Matching follows the Debian resolver for omitted epochs and artifact-style
   requests, so these downgrade pins also reach preflight instead of being skipped.
   Pins that compare equal under Debian version rules (for example, `2.12-1` and
