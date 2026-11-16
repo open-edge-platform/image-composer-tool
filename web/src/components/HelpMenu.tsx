@@ -28,20 +28,22 @@ function stamped(v: VersionInfo): string[] {
   return [v.commit, v.buildDate].filter((p) => p && p !== unstamped)
 }
 
-// versionLabel is the version badge's text, e.g. "v2026.3-rc1.1". Release tags
-// carry the repo's "ict-" prefix, which only repeats the product name, so it is
-// dropped. A build stamped with neither a commit nor a date never came from a
+// versionLabel is the version badge's text: the release tag the build was
+// stamped with, verbatim, e.g. "ict-2026.3-rc2-oep-integration". Every release
+// tag starts with the release version ("ict-<year>.<n>"), so the tag alone names
+// both the release and the exact source it was built from, and can be checked
+// out as is. A build stamped with neither a commit nor a date never came from a
 // release, so it says so rather than passing its placeholder version off as one.
 export function versionLabel(v: VersionInfo): string {
   if (stamped(v).length === 0) return 'Development build'
-  return `v${v.version.replace(/^ict-/i, '').replace(/^v/i, '')}`
+  return v.version
 }
 
 // versionReport is what the copy button copies, for pasting into a bug report:
-// "Image Composer Tool v2026.3-rc1.1 (a1b2c3d, 2026-11-02)".
+// "Image Composer Tool ict-2026.3-rc2-oep-integration (a1b2c3d, 2026-11-02)".
 export function versionReport(v: VersionInfo): string {
   const extra = stamped(v)
-  if (extra.length === 0) return `${productName} v${v.version} (development build)`
+  if (extra.length === 0) return `${productName} ${v.version} (development build)`
   return `${productName} ${versionLabel(v)} (${extra.join(', ')})`
 }
 

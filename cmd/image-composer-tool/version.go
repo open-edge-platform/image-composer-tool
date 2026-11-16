@@ -20,7 +20,7 @@ func createVersionCommand() *cobra.Command {
 
 // executeVersion handles the version command logic
 func executeVersion(cmd *cobra.Command, args []string) {
-	fmt.Printf("%s v%s\n", version.Toolname, version.Version)
+	fmt.Printf("%s %s\n", version.Toolname, version.Version)
 	fmt.Printf("Build Date: %s\n", version.BuildDate)
 	fmt.Printf("Commit: %s\n", version.CommitSHA)
 	fmt.Printf("Organization: %s\n", version.Organization)
