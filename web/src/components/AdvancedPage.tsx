@@ -747,13 +747,12 @@ function TargetStep({
       />
       <Select
         label="SKU"
-        // SKU is optional, and disabled, where the manifest offers none for this
-        // use case.
+        // SKU is optional where the manifest offers none for this use case.
         labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
         placeholder="-- Select SKU --"
         value={selection.sku}
         options={opts.skus}
-        disabled={!selection.vertical || opts.skus.length === 0}
+        disabled={!selection.vertical}
         onChange={(v) => setSel('sku', v)}
       />
       <Select
