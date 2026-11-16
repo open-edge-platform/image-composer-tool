@@ -101,9 +101,11 @@ export function PackageRepoBrowser({
   }, [pickerRepoIdsKey, selectedRepoId])
   const selectedRepo = pickerRepos.find((r) => r.id === selectedRepoId)
 
-  // The curated-subset toggle only makes sense against whichever repo is
-  // currently browsed, so switching repos resets it rather than carrying a
-  // filter over that might not even apply to the new one.
+  // The curated-subset filter ("Show frequently used"). Its checkbox isn't
+  // offered for now, to keep the controls row short, so this stays off; the
+  // filtering behind it is kept so the checkbox can come back. It only makes
+  // sense against whichever repo is currently browsed, so switching repos
+  // resets it rather than carrying a filter over that might not apply.
   const [frequentOnly, setFrequentOnly] = useState(false)
   useEffect(() => {
     setFrequentOnly(false)
@@ -135,7 +137,6 @@ export function PackageRepoBrowser({
           resolver={resolver}
           lockedRepoIds={lockedRepoIds}
           frequentOnly={frequentOnly}
-          onFrequentOnlyChange={selectedRepo?.hasCuratedPackages ? setFrequentOnly : undefined}
         />
       </div>
     </div>
@@ -254,7 +255,6 @@ function MergedPane({
   resolver,
   lockedRepoIds,
   frequentOnly,
-  onFrequentOnlyChange,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
@@ -264,8 +264,6 @@ function MergedPane({
   resolver: VersionResolver
   lockedRepoIds: Set<string>
   frequentOnly: boolean
-  // Set only when the browsed repo has a curated subset to filter down to.
-  onFrequentOnlyChange?: (on: boolean) => void
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -804,20 +802,6 @@ function MergedPane({
             onJump={jumpToPage}
             compact
           />
-        )}
-        {/* Last on the row: only repos with a curated subset offer it, so
-            anywhere earlier it would shift the other controls as repos are
-            switched. */}
-        {onFrequentOnlyChange && (
-          <label className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={frequentOnly}
-              onChange={(e) => onFrequentOnlyChange(e.target.checked)}
-              className="h-[13px] w-[13px] accent-[#0071c5]"
-            />
-            Show frequently used
-          </label>
         )}
       </div>
       {pinNotice && (

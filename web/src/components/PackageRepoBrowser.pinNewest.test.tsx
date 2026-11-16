@@ -422,7 +422,7 @@ describe('PackageRepoBrowser — Show only selected', () => {
     expect(screen.getByRole('button', { name: /9\.1\.0000-1/ })).toBeTruthy()
   })
 
-  it('puts Show frequently used last on the controls row', async () => {
+  it("doesn't offer Show frequently used, even for a repo with a curated list", async () => {
     const curated = repos.map((r) => (r.id === 'base' ? { ...r, hasCuratedPackages: true } : r))
     function CuratedBrowser() {
       const resolver = useVersionResolver('ubuntu24', ['base'])
@@ -431,9 +431,7 @@ describe('PackageRepoBrowser — Show only selected', () => {
     await act(async () => {
       render(<CuratedBrowser />)
     })
-    const frequent = screen.getByRole('checkbox', { name: /Show frequently used/ })
-    const row = frequent.closest('div')!
-    const labels = Array.from(row.querySelectorAll('label, button')).map((el) => el.textContent ?? '')
-    expect(labels[labels.length - 1]).toMatch(/Show frequently used/)
+    expect(screen.queryByRole('checkbox', { name: /Show frequently used/ })).toBeNull()
+    expect(mockApi.searchPackages).not.toHaveBeenCalledWith(expect.objectContaining({ curated: true }))
   })
 })
