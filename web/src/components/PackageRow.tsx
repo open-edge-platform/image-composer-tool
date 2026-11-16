@@ -36,6 +36,12 @@ interface PackageRowProps {
   // just as redundant a pick as currentVersion's chip — the template
   // already floats to whatever's newest.
   currentIsFloating?: boolean
+  // For a locked row whose template pin is a version this row's repository
+  // doesn't publish: where the pinned version comes from (`repoLabel`, or
+  // undefined while that is still looked up), and how to go and browse it.
+  // The row says so, and this repository's chips warn that choosing one
+  // replaces the template's build.
+  pinnedFrom?: { repoLabel?: string; onBrowse?: () => void }
   // Offered only by the Selected rail, for a row that's unpinned (a
   // locked-but-floating template entry, or a floating user pick) and hasn't
   // been checked against the currently-checked repos yet. Fires a real
@@ -79,6 +85,7 @@ export function PackageRow({
   locked,
   currentVersion,
   currentIsFloating,
+  pinnedFrom,
   onResolve,
   resolving,
   resolvedVersion,
@@ -180,12 +187,28 @@ export function PackageRow({
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                 <span className="font-medium text-slate-500">
                   Already in template
-                  {currentVersion
-                    ? currentIsFloating
-                      ? ` — currently resolves to ${currentVersion} (unpinned; pin a chip to freeze it)`
-                      : ` (${currentVersion})`
-                    : ' (version resolved at build time)'}
+                  {pinnedFrom && currentVersion
+                    ? ` — pinned to ${currentVersion} from ${pinnedFrom.repoLabel ?? 'another repository'}`
+                    : currentVersion
+                      ? currentIsFloating
+                        ? ` — currently resolves to ${currentVersion} (unpinned; pin a chip to freeze it)`
+                        : ` (${currentVersion})`
+                      : ' (version resolved at build time)'}
                 </span>
+                {pinnedFrom?.onBrowse && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      // Inside the row's <label>: don't toggle the checkbox.
+                      e.preventDefault()
+                      e.stopPropagation()
+                      pinnedFrom.onBrowse!()
+                    }}
+                    className="font-medium text-[#0071c5] hover:underline"
+                  >
+                    Browse it
+                  </button>
+                )}
                 {overridden && (
                   <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
                     Overrides with {selection?.version || 'latest'}
@@ -216,6 +239,11 @@ export function PackageRow({
             repoLabelFor={repoLabelFor}
             currentVersion={locked ? currentVersion : undefined}
             currentIsFloating={locked ? currentIsFloating : undefined}
+            replaces={
+              locked && pinnedFrom && currentVersion
+                ? `${currentVersion} from ${pinnedFrom.repoLabel ?? 'another repository'}`
+                : undefined
+            }
             overridden={overridden}
             onRevert={() => onToggle(false)}
             disabled={disabled}
@@ -246,6 +274,7 @@ function VersionChips({
   currentIsFloating,
   overridden = false,
   onRevert,
+  replaces,
   disabled,
 }: {
   versions: PackageVersion[]
@@ -263,6 +292,9 @@ function VersionChips({
   // (onRevert), so the template's entry applies again.
   overridden?: boolean
   onRevert?: () => void
+  // The template's own build, when its pinned version comes from another
+  // repository: each chip here would replace it, so says so.
+  replaces?: string
   disabled: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -361,8 +393,10 @@ function VersionChips({
                 : revertsToTemplate
                   ? `${v.version} from ${repoLabelFor(v.repository)} — the template's own pin; choose it to drop your override`
                   : isCurrent
-                  ? `${v.version} from ${repoLabelFor(v.repository)} — what the template currently resolves to; pin it to freeze that against future changes`
-                  : `${v.version} from ${repoLabelFor(v.repository)}`
+                    ? `${v.version} from ${repoLabelFor(v.repository)} — what the template currently resolves to; pin it to freeze that against future changes`
+                    : replaces
+                      ? `${v.version} from ${repoLabelFor(v.repository)} — replaces the template's own build, ${replaces}`
+                      : `${v.version} from ${repoLabelFor(v.repository)}`
             }
             onClick={(e) => {
               stop(e)

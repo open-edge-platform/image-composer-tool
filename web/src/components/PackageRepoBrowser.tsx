@@ -137,6 +137,7 @@ export function PackageRepoBrowser({
           resolver={resolver}
           lockedRepoIds={lockedRepoIds}
           frequentOnly={frequentOnly}
+          onBrowseRepo={setSelectedRepoId}
         />
       </div>
     </div>
@@ -255,6 +256,7 @@ function MergedPane({
   resolver,
   lockedRepoIds,
   frequentOnly,
+  onBrowseRepo,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
@@ -264,6 +266,8 @@ function MergedPane({
   resolver: VersionResolver
   lockedRepoIds: Set<string>
   frequentOnly: boolean
+  // Switches the Repository dropdown, to go and browse another repository.
+  onBrowseRepo: (repoId: string) => void
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -641,6 +645,15 @@ function MergedPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- elsewhereKey stands in for its parts
   }, [elsewhereKey])
   const sourcesNow = elsewhereSources?.key === elsewhereKey ? elsewhereSources.sources : undefined
+  const sourceOf = new Map<string, string>()
+  for (const [repo, names] of sourcesNow ?? []) for (const name of names) if (repo) sourceOf.set(name, repo)
+  const onlySource = sourcesNow && sourcesNow.size === 1 && !sourcesNow.has('') ? [...sourcesNow.keys()][0] : undefined
+  // What a row whose template pin comes from elsewhere says about it.
+  const pinnedFromFor = (name: string) => {
+    if (!elsewhere.includes(name)) return undefined
+    const repo = sourceOf.get(name)
+    return repo ? { repoLabel: repoLabelFor(repo), onBrowse: () => onBrowseRepo(repo) } : {}
+  }
 
   const selectedCountLabel = checkingTemplate
     ? 'checking…'
@@ -779,14 +792,27 @@ function MergedPane({
         >
           {pinning ? 'Updating…' : `Update to latest version (${pinCount})`}
         </button>
-        {elsewhere.length > 0 && !checkingTemplate && (
-          <span
-            className="text-slate-500"
-            title={pinnedElsewhereNotice(elsewhere, sourcesNow, selectedRepo?.id ?? '', repoLabelFor)}
-          >
-            {pinnedElsewhereLabel(elsewhere.length, sourcesNow, repoLabelFor)}
-          </span>
-        )}
+        {elsewhere.length > 0 &&
+          !checkingTemplate &&
+          (onlySource ? (
+            // One source: the note is a link there, where these pins can be
+            // updated.
+            <button
+              type="button"
+              onClick={() => onBrowseRepo(onlySource)}
+              className="text-slate-500 underline decoration-dotted hover:text-[#0071c5]"
+              title={pinnedElsewhereNotice(elsewhere, sourcesNow, selectedRepo?.id ?? '', repoLabelFor)}
+            >
+              {pinnedElsewhereLabel(elsewhere.length, sourcesNow, repoLabelFor)}
+            </button>
+          ) : (
+            <span
+              className="text-slate-500"
+              title={pinnedElsewhereNotice(elsewhere, sourcesNow, selectedRepo?.id ?? '', repoLabelFor)}
+            >
+              {pinnedElsewhereLabel(elsewhere.length, sourcesNow, repoLabelFor)}
+            </span>
+          ))}
         {/* Sits on the controls row rather than a line of its own, so the
             vertical space goes to package rows instead. */}
         {!selectedOnly && pageCount > 1 && displayRows.length > 0 && !error && (
@@ -853,6 +879,7 @@ function MergedPane({
                   locked={lock.locked}
                   currentVersion={currentVersion}
                   currentIsFloating={lock.currentIsFloating}
+                  pinnedFrom={pinnedFromFor(h.name)}
                   resolvedVersion={liveResolved[h.name]?.version}
                   resolvedRepo={liveResolved[h.name]?.repository}
                   onToggle={(checked) => {

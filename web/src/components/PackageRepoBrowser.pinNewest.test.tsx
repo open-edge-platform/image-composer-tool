@@ -337,6 +337,44 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['vim'])
   })
 
+  it('says on the row where a template pin comes from, warns on its chips, and links there', async () => {
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('base')
+          ? [versioned('curl', '8.3.0-1')]
+          : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => {})
+    await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
+
+    expect(screen.getByText(/Already in template — pinned to 8\.4\.0-1ppa1 from Intel ECI/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '8.3.0-1' }).getAttribute('title')).toBe(
+      "8.3.0-1 from Ubuntu Base — replaces the template's own build, 8.4.0-1ppa1 from Intel ECI",
+    )
+    const repoPicker = () => (screen.getByRole('combobox') as HTMLSelectElement).value
+    expect(repoPicker()).toBe('base')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Browse it' })))
+    expect(repoPicker()).toBe('intel-eci')
+  })
+
+  it('makes the note a link to the one repo the pins come from', async () => {
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('base')
+          ? [versioned('curl', '8.3.0-1')]
+          : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => {})
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '1 pinned from Intel ECI' })))
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('intel-eci')
+  })
+
   it("doesn't name a repo the build doesn't read, even one publishing the pinned version", async () => {
     useStore.setState({ enabledRepos: [] })
     mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
