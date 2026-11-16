@@ -337,7 +337,7 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['vim'])
   })
 
-  it('says on the row where a template pin comes from, warns on its chips, and links there', async () => {
+  it('links the row’s “via” to where a template pin comes from, and warns on its chips', async () => {
     mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
       Promise.resolve({
         packages: asked?.includes('base')
@@ -350,17 +350,16 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     await act(async () => {})
     await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
 
-    expect(screen.getByText(/Already in template — pinned to 8\.4\.0-1ppa1 from Intel ECI/)).toBeTruthy()
-    // The header's version is that pin, so its "via" names where the pin is
-    // from, not the repo being browsed.
-    expect(screen.getByText('via Intel ECI')).toBeTruthy()
-    expect(screen.queryByText('via Ubuntu Base')).toBeNull()
+    // The header's version is the template's pin, so its "via" links to
+    // where that pin is from, not the repo being browsed.
+    expect(screen.getByText('Already in template')).toBeTruthy()
+    expect(screen.queryByText(/via Ubuntu Base/)).toBeNull()
     expect(screen.getByRole('button', { name: '8.3.0-1' }).getAttribute('title')).toBe(
       "8.3.0-1 from Ubuntu Base — replaces the template's own build, 8.4.0-1ppa1 from Intel ECI",
     )
     const repoPicker = () => (screen.getByRole('combobox') as HTMLSelectElement).value
     expect(repoPicker()).toBe('base')
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Browse it' })))
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Intel ECI' })))
     expect(repoPicker()).toBe('intel-eci')
   })
 

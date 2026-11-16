@@ -98,9 +98,9 @@ export function PackageRow({
   // template pin comes from another repository shows that pin, so "via"
   // names that repository (or nothing until it's known), not the browsed one,
   // whose own versions are only the chips.
-  const repoNames =
-    locked && pinnedFrom && currentVersion
-      ? pinnedFrom.repoLabel
+  const templatePinElsewhere = !!(locked && pinnedFrom && currentVersion)
+  const repoNames = templatePinElsewhere
+    ? pinnedFrom!.repoLabel
         ? [pinnedFrom.repoLabel]
         : []
       : [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
@@ -171,8 +171,29 @@ export function PackageRow({
               <span className="font-mono text-[11px] text-slate-500">
                 {locked && currentVersion ? currentVersion : version || 'latest'}
               </span>
-              {repoNames.length > 0 && (
-                <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
+              {templatePinElsewhere && pinnedFrom?.repoLabel && pinnedFrom.onBrowse ? (
+                // The template's pin comes from another repository: "via"
+                // links there, where that version is one of the chips.
+                <span className="text-[11px] text-slate-400">
+                  via{' '}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      // Inside the row's <label>: don't toggle the checkbox.
+                      e.preventDefault()
+                      e.stopPropagation()
+                      pinnedFrom.onBrowse!()
+                    }}
+                    title={`Browse ${pinnedFrom.repoLabel}, where the template's pinned version comes from`}
+                    className="text-[#0071c5] hover:underline"
+                  >
+                    {pinnedFrom.repoLabel}
+                  </button>
+                </span>
+              ) : (
+                repoNames.length > 0 && (
+                  <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
+                )
               )}
             </span>
             {description && (
@@ -196,28 +217,14 @@ export function PackageRow({
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                 <span className="font-medium text-slate-500">
                   Already in template
-                  {pinnedFrom && currentVersion
-                    ? ` — pinned to ${currentVersion} from ${pinnedFrom.repoLabel ?? 'another repository'}`
+                  {templatePinElsewhere
+                    ? ''
                     : currentVersion
                       ? currentIsFloating
                         ? ` — currently resolves to ${currentVersion} (unpinned; pin a chip to freeze it)`
                         : ` (${currentVersion})`
                       : ' (version resolved at build time)'}
                 </span>
-                {pinnedFrom?.onBrowse && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      // Inside the row's <label>: don't toggle the checkbox.
-                      e.preventDefault()
-                      e.stopPropagation()
-                      pinnedFrom.onBrowse!()
-                    }}
-                    className="font-medium text-[#0071c5] hover:underline"
-                  >
-                    Browse it
-                  </button>
-                )}
                 {overridden && (
                   <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
                     Overrides with {selection?.version || 'latest'}
