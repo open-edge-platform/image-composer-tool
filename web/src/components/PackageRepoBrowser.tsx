@@ -43,16 +43,9 @@ const noLockedRepos = new Set<string>()
 
 // PackageRepoBrowser is the repository browser: a toolbar whose dropdown picks
 // which repository's catalog is listed, above a full-width pane listing it.
-// Using a repository for the build (the toolbar's "Use in builds" checkbox) is
-// a separate action from browsing it — the checkbox controls whether a build
-// resolves packages from it at all, while the dropdown only controls which
-// catalog is shown. Keeping these apart is what lets a repo with tens of
-// thousands of packages (Ubuntu's base repo, say) be checked for the build
-// without flooding the browse list the moment it is.
-//
-// A repo can be in use either because the user checked it directly or
-// because adding a package (from here or from search) enabled it on their
-// behalf — the store doesn't distinguish the two. Every package mutation
+// Browsing a repository never puts it in use for the build — the dropdown only
+// controls which catalog is shown. A repo comes into use when adding a package
+// (from here or from search) enables it. Every package mutation
 // here therefore runs through confirmRepoRelease before it could uncheck a
 // repo as a side effect, the same as the search dropdown does.
 export function PackageRepoBrowser({
@@ -63,7 +56,6 @@ export function PackageRepoBrowser({
   lockedRepoIds = noLockedRepos,
 }: PackageRepoBrowserProps) {
   const enabledRepos = useStore((s) => s.enabledRepos)
-  const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   // A base repo or a template-locked one is always enabled and can't be
   // turned off, so either belongs at the top of the dropdown rather than
@@ -115,7 +107,6 @@ export function PackageRepoBrowser({
           locked={lockedRepoIds.has(selectedRepo.id)}
           inUseCount={inUseCount}
           onSelect={setSelectedRepoId}
-          onToggle={(on) => setRepoEnabled(selectedRepo.id, on)}
         />
       )}
       <div role="region" aria-label="Repository packages" className="bg-[#d6ecf8] px-3 py-2">
@@ -135,14 +126,12 @@ export function PackageRepoBrowser({
   )
 }
 
-// RepoToolbar picks which repository's catalog is browsed (the dropdown) and,
-// as a separate control, whether that repository is used by the build (the
-// "Use in builds" checkbox). The dropdown alone never enables anything, so a
-// repo with tens of thousands of packages can be looked through without
-// changing what an unpinned pick resolves to.
+// RepoToolbar picks which repository's catalog is browsed (the dropdown). The
+// dropdown never enables anything, so a repo with tens of thousands of
+// packages can be looked through without changing what an unpinned pick
+// resolves to.
 //
-// Only the browsed repo's checkbox is on screen, so the dropdown's own option
-// labels carry every repo's state ("✓" for an optional repo in use) and the
+// The dropdown's own option labels carry every repo's state ("✓" for an optional repo in use) and the
 // "N of M in use" count keeps the overall picture a list of every repo would give.
 function RepoToolbar({
   repos,
@@ -152,7 +141,6 @@ function RepoToolbar({
   locked,
   inUseCount,
   onSelect,
-  onToggle,
 }: {
   repos: PackageRepo[]
   selectedRepo: PackageRepo
@@ -161,16 +149,10 @@ function RepoToolbar({
   locked: boolean
   inUseCount: number
   onSelect: (repoId: string) => void
-  onToggle: (on: boolean) => void
 }) {
   const alwaysOnRepos = repos.filter(isAlwaysOn)
   const optionalRepos = repos.filter((r) => !isAlwaysOn(r))
   const badge = selectedRepo.enabledByDefault ? 'Base — already included' : locked ? 'In template — already included' : null
-  const title = selectedRepo.enabledByDefault
-    ? 'Base repository — always enabled'
-    : locked
-      ? "Already in template — can't be unchecked"
-      : 'Only repositories in use are read when resolving packages at build time'
   return (
     <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -204,28 +186,11 @@ function RepoToolbar({
             )}
           </select>
         </label>
-        <label
-          title={title}
-          className={
-            'flex items-center gap-1.5 text-[12px] font-medium text-slate-700 ' +
-            (badge ? 'cursor-not-allowed' : 'cursor-pointer')
-          }
-        >
-          <input
-            type="checkbox"
-            aria-label={`Use ${selectedRepo.displayName} in builds`}
-            checked={isEnabled(selectedRepo)}
-            disabled={badge != null}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="h-[14px] w-[14px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
-          />
-          Use in builds
-          {badge && (
-            <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
-              {badge}
-            </span>
-          )}
-        </label>
+        {badge && (
+          <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+            {badge}
+          </span>
+        )}
         <span className="ml-auto text-[11px] text-slate-500">
           {inUseCount} of {repos.length} repositories in use
         </span>
