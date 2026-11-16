@@ -39,6 +39,29 @@ The Mesa bundle includes the ANV Vulkan driver, Iris OpenGL driver, Intel shader
 compiler, and shared NIR compiler sources. Kernel graphics drivers and GPU
 firmware are separate components and require their own provenance.
 
+### NVL Platform BKC Debugging Scope
+
+Use an Ubuntu NVL platform BKC overlay template and its final installed
+inventory as the initial integration scenario. The following domains are
+coverage targets, not claims that a particular template installs every component
+or that its sources are available:
+
+| Domain | Debugging use | Provenance to identify when present |
+| --- | --- | --- |
+| Kernel and DKMS | Out-of-tree i915/Xe driver bugs and custom kernel patches | Installed kernel and header packages, separately packaged DKMS sources, and their exact source versions and patch evidence. |
+| Mesa (3D/Vulkan) | Mesa compiler and Intel graphics driver issues | Mesa binary packages and their shared source bundle, including ANV, Iris, and compiler sources when published. |
+| Media (OpenVPL and Media Driver) | Encode/decode pipeline failures | Installed OpenVPL and Intel Media Driver packages and their respective source bundles and revisions when available. |
+| FFmpeg | Custom video integration and cartwheel patch issues | Installed FFmpeg packages and their exact source bundle, including vendor packaging and patch evidence when published. |
+| Camera HAL (IPU6/7) | Sensor tuning and camera pipeline hangs | Installed camera HAL and IPU-related packages and their source bundles, plus available tuning and configuration evidence. |
+
+Resolve the actual binary-to-source mappings from package metadata, not domain
+names or assumed package names. Report missing, proprietary, locally installed,
+or otherwise untraceable components explicitly. DKMS modules built on the image
+or at boot, kernel build configuration, camera tuning assets, firmware, and
+debug symbols may require evidence beyond source-package metadata; do not infer
+their origin or exact running version from a source package alone. Runtime and
+hardware debugging remain outside this ADR's provenance guarantees.
+
 The audit also exposed workflow gaps:
 
 - Installed dpkg metadata retains source identity but not necessarily repository
@@ -180,13 +203,19 @@ versions, architectures, and source identities.
   downloading source archives or changing the installed package set.
 - GStreamer resolves to its exact vendor source version and expected artifact
   list. The five Mesa binaries reference one exact source record.
+- For an NVL BKC template, reconcile installed packages across the kernel/DKMS,
+  Mesa, OpenVPL/Media Driver, FFmpeg, and camera HAL domains. Each applicable
+  package has an evidence-backed source mapping or an explicit coverage gap;
+  absent domains are reported rather than assumed installed.
 - A developer can find the `.dsc` and all archive URLs from the manifest or SPDX
   without booting the image or discovering repository configuration manually.
 - Automated fixtures cover Debian source defaults, explicit source versions,
   epochs/binNMUs, multiarch, multiple upstream archives, repository ambiguity,
   baseline/script inventory gaps, missing indexes/versions, signature/hash
-  failures, cache behavior, and network failures. Normal non-opt-in builds make
-  no source requests, and SPDX schema validation passes.
+  failures, cache behavior, and network failures. Include representative NVL
+  domain packages and unavailable or proprietary sources without relying on
+  private repositories. Normal non-opt-in builds make no source requests, and
+  SPDX schema validation passes.
 
 ### Phase 1 Limitations
 
@@ -248,6 +277,10 @@ versions, architectures, and source identities.
 - Unpacking Mesa applies the selected NVL patch; the manifest distinguishes its
   Git archive revision from the patch-header revision. GStreamer's unavailable
   build commit remains explicitly unavailable rather than guessed.
+- For available NVL BKC source records, retrieval and optional unpacking expose
+  published kernel/DKMS, media, FFmpeg, and camera sources and patch evidence;
+  unavailable sources, tuning assets, debug symbols, and build evidence remain
+  explicit gaps rather than inferred provenance.
 - Records distinguish links resolved, bytes verified, artifacts retained,
   sources unpacked, revision evidence found, build evidence available, and rebuild
   comparison outcomes. Full coverage is claimed only for a stated inventory and
