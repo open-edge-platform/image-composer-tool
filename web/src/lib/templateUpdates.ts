@@ -88,32 +88,60 @@ export function pinSources(
   return out
 }
 
-// keptPinsNotice says which template pins "Update to latest version" kept
-// while browsing `browsed`, where their pinned versions come from, and so
-// where to go to update them.
-export function keptPinsNotice(
+// pinnedElsewhere names the template pins among `rows`, the browsed repo's
+// own entries for template packages, whose pinned version that repo doesn't
+// publish. "Update to latest version" leaves them as they are there, since
+// whether the repo's newest is newer or older than the pin can't be told.
+export function pinnedElsewhere(rows: PackageSearchResult[], baseLock: BaseLock): string[] {
+  return rows
+    .filter((row) => {
+      const info = baseLock.info(row.name)
+      const pinned = info.currentVersion
+      if (!info.locked || info.currentIsFloating || pinned === undefined) return false
+      const versions = row.versions?.length ? row.versions : [{ version: row.version, repository: row.repository }]
+      return !versions.some((v) => sameVersion(v.version, pinned))
+    })
+    .map((row) => row.name)
+}
+
+// pinnedElsewhereLabel is the short note beside "Update to latest version"
+// for those pins: how many, and where from when that is one repository.
+// `sources` is pinSources' answer, or undefined while it is still looked up.
+export function pinnedElsewhereLabel(
+  count: number,
+  sources: Map<string, string[]> | undefined,
+  repoLabelFor: (id: string) => string,
+): string {
+  const known = sources ? [...sources.keys()].filter((repo) => repo !== '') : []
+  if (sources && known.length === 1 && !sources.has('')) return `${count} pinned from ${repoLabelFor(known[0])}`
+  return known.length > 1 ? `${count} pinned from other repositories` : `${count} pinned from another repository`
+}
+
+// pinnedElsewhereNotice says which template pins "Update to latest version"
+// doesn't update while browsing `browsed`, where their pinned versions come
+// from, and so where to go to update them.
+export function pinnedElsewhereNotice(
   names: string[],
-  sources: Map<string, string[]>,
+  sources: Map<string, string[]> | undefined,
   browsed: string,
   repoLabelFor: (id: string) => string,
 ): string {
   const one = names.length === 1
   const list = names.slice(0, 5).join(', ') + (names.length > 5 ? ` and ${names.length - 5} more` : '')
-  const kept = `Kept ${names.length} template ${one ? 'pin' : 'pins'} (${list})`
+  const head = `${names.length} template ${one ? 'pin' : 'pins'} (${list}) ${one ? "isn't" : "aren't"} updated here`
+  const versions = one ? 'its pinned version' : 'their pinned versions'
+  if (!sources) return `${head}: ${repoLabelFor(browsed)} doesn't publish ${versions}.`
   const known = [...sources].filter(([repo]) => repo !== '')
   const unknown = sources.get('')?.length ?? 0
-  if (known.length === 0) {
-    return `${kept}: no repository in use publishes ${one ? 'its pinned version' : 'their pinned versions'}, so ${one ? 'it' : 'they'} can't be updated here.`
-  }
+  if (known.length === 0) return `${head}: no repository in use publishes ${versions}.`
   const from =
     known.length === 1
       ? repoLabelFor(known[0][0])
       : known.map(([repo, n]) => `${repoLabelFor(repo)} (${n.length})`).join(' and ')
   const where = known.length === 1 ? from : 'those repositories'
-  const subject = one ? 'its pinned version comes' : 'their pinned versions come'
-  let msg = `${kept}: ${subject} from ${from}, not ${repoLabelFor(browsed)}. Browse ${where} to update ${one ? 'it' : 'them'}.`
+  let msg = `${head}: ${one ? 'its pinned version comes' : 'their pinned versions come'} from ${from}, not ${repoLabelFor(browsed)}. Browse ${where} to update ${one ? 'it' : 'them'}.`
   if (unknown > 0) {
-    msg += ` ${unknown} of them ${unknown === 1 ? 'pins a version' : 'pin versions'} no repository in use publishes, so ${unknown === 1 ? 'it' : 'they'} can't be updated here.`
+    msg += ` ${unknown} of them ${unknown === 1 ? 'pins a version' : 'pin versions'} no repository in use publishes.`
   }
   return msg
 }

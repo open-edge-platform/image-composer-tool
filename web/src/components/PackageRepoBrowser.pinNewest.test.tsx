@@ -314,23 +314,27 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     expect(pinButton().disabled).toBe(false)
   })
 
-  it("keeps a template pin the browsed repo doesn't publish, and says where it comes from", async () => {
+  it("leaves out a template pin the browsed repo doesn't publish, and says where it comes from", async () => {
     // Base has curl 8.3.0-1; the template's 8.4.0-1ppa1 is Intel ECI's.
     mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
       Promise.resolve({
         packages: asked?.includes('base')
-          ? [versioned('curl', '8.3.0-1')]
+          ? [versioned('curl', '8.3.0-1'), versioned('vim', '2:9.1.0016-1')]
           : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
         unavailableRepos: [],
       }),
     )
-    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
-    await act(async () => fireEvent.click(pinButton()))
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, ['vim']))
+    await act(async () => {})
 
-    expect(useStore.getState().addedPackages).toEqual([])
-    expect(screen.getByRole('status').textContent).toBe(
-      'Kept 1 template pin (curl): its pinned version comes from Intel ECI, not Ubuntu Base. Browse Intel ECI to update it.',
+    // vim is updated here; curl isn't, and the note says where it's from.
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+    const note = screen.getByText('1 pinned from Intel ECI')
+    expect(note.getAttribute('title')).toBe(
+      "1 template pin (curl) isn't updated here: its pinned version comes from Intel ECI, not Ubuntu Base. Browse Intel ECI to update it.",
     )
+    await act(async () => fireEvent.click(pinButton()))
+    expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['vim'])
   })
 
   it("doesn't name a repo the build doesn't read, even one publishing the pinned version", async () => {
@@ -346,10 +350,11 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
       }),
     )
     await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
-    await act(async () => fireEvent.click(pinButton()))
+    await act(async () => {})
 
+    expect(pinButton().disabled).toBe(true)
+    expect(screen.getByText('1 pinned from another repository')).toBeTruthy()
     expect(mockApi.lookupPackages).not.toHaveBeenCalledWith(expect.objectContaining({ repos: ['intel-eci'] }))
-    expect(screen.getByRole('status').textContent).not.toMatch(/Intel ECI/)
   })
 
   it("doesn't pin template packages past the build's package limit", async () => {

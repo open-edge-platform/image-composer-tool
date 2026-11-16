@@ -5,7 +5,14 @@ import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 import { ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import type { VersionResolver } from '../lib/useVersionResolver'
-import { MAX_SELECTED_PACKAGES, keptPinsNotice, pinSources, planTemplateUpdates } from '../lib/templateUpdates'
+import {
+  MAX_SELECTED_PACKAGES,
+  pinSources,
+  pinnedElsewhere,
+  pinnedElsewhereLabel,
+  pinnedElsewhereNotice,
+  planTemplateUpdates,
+} from '../lib/templateUpdates'
 
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
@@ -406,11 +413,10 @@ function MergedPane({
     const repoId = selectedRepo?.id
     if (!repoId) return
     const dispatched = addedPackages.filter((p) => p.repo === repoId)
-    const dispatchedTemplate = lockedRows.map((r) => r.name)
+    const dispatchedTemplate = lockedRows.map((r) => r.name).filter((name) => !elsewhere.includes(name))
     const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
-    keptNoticeSeq.current++
     // The newest version in the browsed repo, so every pin this sets is one
     // of the chips on screen.
     lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate], [repoId])
@@ -440,30 +446,6 @@ function MergedPane({
       .finally(() => setPinning(false))
   }
 
-  // Says which template pins the last update kept, and where their pinned
-  // versions come from, so the notice can point at the repository to browse
-  // to update them. That takes one more lookup, across the other repos the
-  // build reads (an unchecked one may publish the same build, but the build
-  // never takes it from there); until it lands, or if it fails, the notice
-  // says only that they were kept.
-  const keptNoticeSeq = useRef(0)
-  const explainKeptPins = (names: string[]) => {
-    const seq = ++keptNoticeSeq.current
-    const repoId = selectedRepo?.id ?? ''
-    setPinNotice(unverifiableNotice(names, repoLabelFor(repoId)))
-    const others = enabledRepoIds.filter((id) => id !== repoId)
-    if (names.length === 0 || others.length === 0) return
-    api
-      .lookupPackages({ os, repos: others, names })
-      .then((r) => {
-        if (seq !== keptNoticeSeq.current || latestBrowsedRepo.current !== repoId) return
-        const found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
-        const priorities = Object.fromEntries(repos.map((r) => [r.id, r.priority ?? 500]))
-        setPinNotice(keptPinsNotice(names, pinSources(names, baseLock, found, priorities), repoId, repoLabelFor))
-      })
-      .catch(() => {})
-  }
-
   // The template's share of a completed answer, with pinNotice saying what
   // it left alone and why.
   const planTemplatePins = (
@@ -490,7 +472,7 @@ function MergedPane({
       )
       return []
     }
-    explainKeptPins(plan.unverifiable)
+    setPinNotice(unverifiableNotice(plan.unverifiable, repoLabelFor(selectedRepo?.id ?? '')))
     return plan.pins
   }
   // What the pane is actually fetched against — only the one repository
@@ -631,7 +613,36 @@ function MergedPane({
   )
   // "Update to latest version" acts on the browsed repo's selection, the same
   // rows "Show only selected" lists and counts.
-  const pinCount = selectedRows.length
+  // Template pins whose pinned version the browsed repo doesn't publish:
+  // the button leaves them as they are, so they aren't in its count, and a
+  // note beside it says where they come from. That takes one lookup across
+  // the other repos the build reads (an unchecked one may publish the same
+  // build, but a build never takes it from there).
+  const elsewhere = pinnedElsewhere(lockedRows, baseLock)
+  const pinCount = selectedRows.length - elsewhere.length
+  const elsewhereOthers = enabledRepoIds.filter((id) => id !== selectedRepo?.id)
+  const elsewhereKey = `${os}|${selectedRepo?.id}|${elsewhere.join(',')}|${elsewhereOthers.join(',')}`
+  const [elsewhereSources, setElsewhereSources] = useState<{ key: string; sources: Map<string, string[]> } | null>(
+    null,
+  )
+  useEffect(() => {
+    if (elsewhere.length === 0 || elsewhereOthers.length === 0) return
+    let cancelled = false
+    const priorities = Object.fromEntries(repos.map((r) => [r.id, r.priority ?? 500]))
+    api
+      .lookupPackages({ os, repos: elsewhereOthers, names: elsewhere })
+      .then((r) => {
+        if (cancelled) return
+        const found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
+        setElsewhereSources({ key: elsewhereKey, sources: pinSources(elsewhere, baseLock, found, priorities) })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- elsewhereKey stands in for its parts
+  }, [elsewhereKey])
+  const sourcesNow = elsewhereSources?.key === elsewhereKey ? elsewhereSources.sources : undefined
 
   const selectedCountLabel = checkingTemplate
     ? 'checking…'
@@ -770,6 +781,14 @@ function MergedPane({
         >
           {pinning ? 'Updating…' : `Update to latest version (${pinCount})`}
         </button>
+        {elsewhere.length > 0 && !checkingTemplate && (
+          <span
+            className="text-slate-500"
+            title={pinnedElsewhereNotice(elsewhere, sourcesNow, selectedRepo?.id ?? '', repoLabelFor)}
+          >
+            {pinnedElsewhereLabel(elsewhere.length, sourcesNow, repoLabelFor)}
+          </span>
+        )}
         {/* Sits on the controls row rather than a line of its own, so the
             vertical space goes to package rows instead. */}
         {!selectedOnly && pageCount > 1 && displayRows.length > 0 && !error && (
