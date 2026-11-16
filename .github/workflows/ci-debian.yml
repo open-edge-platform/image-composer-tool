@@ -6,7 +6,7 @@ on:
   push:
     tags: ['ict-*']
   pull_request:
-    branches: [main, feat/ci-debian-publishing]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
