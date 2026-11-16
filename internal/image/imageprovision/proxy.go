@@ -1,6 +1,7 @@
 package imageprovision
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -63,6 +64,8 @@ func WriteProxyConfig(installRoot string, p config.ProxyConfig) error {
 			if err := writeFile(root, aptProxyFile, []byte(apt), 0644); err != nil {
 				return err
 			}
+		} else if err := root.Remove(aptProxyFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove apt proxy config: %w", err)
 		}
 		if err := writeFile(root, systemdProxyFile, []byte(renderSystemdProxy(vars)), 0644); err != nil {
 			return err

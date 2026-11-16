@@ -63,12 +63,8 @@ function browse(repoId: string) {
   fireEvent.change(screen.getByRole('combobox', { name: /Repository/ }), { target: { value: repoId } })
 }
 
-function useInBuilds(repoName: string) {
-  return screen.getByRole('checkbox', { name: `Use ${repoName} in builds` }) as HTMLInputElement
-}
-
 describe('a repo the matched template already draws a package from', () => {
-  it('renders checked and disabled, same as the base repo', () => {
+  it('renders as always on, same as the base repo', () => {
     render(
       <Browser
         repos={repos}
@@ -79,9 +75,6 @@ describe('a repo the matched template already draws a package from', () => {
     )
 
     browse('intel-eci')
-    const box = useInBuilds('Intel ECI')
-    expect(box.checked).toBe(true)
-    expect(box.disabled).toBe(true)
     expect(screen.getByText('In template — always on')).toBeTruthy()
   })
 
@@ -98,7 +91,7 @@ describe('a repo the matched template already draws a package from', () => {
     expect(useStore.getState().enabledRepos).not.toContain('intel-eci')
   })
 
-  it('leaves an ordinary optional repo unchecked and enabled', () => {
+  it('leaves an ordinary optional repo not in use', () => {
     render(
       <Browser
         repos={repos}
@@ -109,9 +102,8 @@ describe('a repo the matched template already draws a package from', () => {
     )
 
     browse('docker')
-    const box = useInBuilds('Docker')
-    expect(box.checked).toBe(false)
-    expect(box.disabled).toBe(false)
+    expect(screen.queryByText(/always on$/)).toBeNull()
+    expect(screen.getByRole('option', { name: 'Docker' })).toBeTruthy()
   })
 
   it('sorts locked repos to the top, after the base repo', () => {
@@ -134,13 +126,12 @@ describe('a repo the matched template already draws a package from', () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
     browse('intel-eci')
-    const box = useInBuilds('Intel ECI')
-    expect(box.checked).toBe(false)
-    expect(box.disabled).toBe(false)
+    expect(screen.queryByText(/always on$/)).toBeNull()
+    expect(screen.getByRole('option', { name: 'Intel ECI' })).toBeTruthy()
   })
 })
 
-describe('the dropdown browses a repository, independent of using it in builds', () => {
+describe('the dropdown browses a repository, independent of using it for the build', () => {
   it('fetches the base repo by default, without any repo checked', async () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
@@ -151,12 +142,9 @@ describe('the dropdown browses a repository, independent of using it in builds',
     )
   })
 
-  it('shows the base repo as always on and not uncheckable', () => {
+  it('shows the base repo as always on', () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    const box = useInBuilds('Ubuntu Base')
-    expect(box.checked).toBe(true)
-    expect(box.disabled).toBe(true)
     expect(screen.getByText('Base — always on')).toBeTruthy()
   })
 
@@ -182,23 +170,7 @@ describe('the dropdown browses a repository, independent of using it in builds',
     expect(useStore.getState().enabledRepos).not.toContain('docker')
   })
 
-  it('enables the browsed repo from "Use in builds" without changing what is browsed', async () => {
-    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
-    browse('docker')
-    await waitFor(() =>
-      expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ repos: ['docker'] })),
-    )
-    mockApi.searchPackages.mockClear()
-
-    fireEvent.click(useInBuilds('Docker'))
-
-    expect(useStore.getState().enabledRepos).toContain('docker')
-    expect((screen.getByRole('combobox', { name: /Repository/ }) as HTMLSelectElement).value).toBe('docker')
-    expect(mockApi.searchPackages).not.toHaveBeenCalled()
-  })
-
-  // Only the browsed repo's checkbox is on screen, so the option labels and
-  // the count are what still show every repo's state at a glance.
+  // The option labels and the count are what show every repo's state at a glance.
   it('marks optional repos in use in the dropdown and counts them', () => {
     useStore.setState({ enabledRepos: ['docker'] })
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
