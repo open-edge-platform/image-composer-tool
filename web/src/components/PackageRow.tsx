@@ -42,6 +42,10 @@ interface PackageRowProps {
   // The row says so, and this repository's chips warn that choosing one
   // replaces the template's build.
   pinnedFrom?: { repoLabel?: string; onBrowse?: () => void }
+  // The repository being browsed, on a surface that lists one repository's
+  // catalog. "Via" never names it: every row there comes from it, so it
+  // would say nothing. Unset where rows come from several repositories.
+  browsedRepoId?: string
   // Offered only by the Selected rail, for a row that's unpinned (a
   // locked-but-floating template entry, or a floating user pick) and hasn't
   // been checked against the currently-checked repos yet. Fires a real
@@ -86,6 +90,7 @@ export function PackageRow({
   currentVersion,
   currentIsFloating,
   pinnedFrom,
+  browsedRepoId,
   onResolve,
   resolving,
   resolvedVersion,
@@ -116,8 +121,10 @@ export function PackageRow({
   // only when it comes from another repository. (A template pin is matched
   // on version alone, the way its chip is marked.)
   const pinShownByChip =
-    status?.label === 'Pinned to' &&
-    versions.some((v) => v.version === status.version && (status.repo === undefined || v.repository === status.repo))
+    // A bare "Unpinned" likewise: the Unpinned chip shows it, highlighted.
+    status?.label === 'Unpinned' ||
+    (status?.label === 'Pinned to' &&
+      versions.some((v) => v.version === status.version && (status.repo === undefined || v.repository === status.repo)))
   // Where that version comes from. A template pin from another repository
   // links there (pinnedFrom); otherwise it's the pick's or the resolution's
   // own repository when known, and the row's own repositories failing that.
@@ -126,9 +133,9 @@ export function PackageRow({
     ? pinnedFrom!.repoLabel
         ? [pinnedFrom.repoLabel]
         : []
-    : status?.repo
-      ? [repoLabelFor(status.repo)]
-      : [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
+    : (status?.repo ? [status.repo] : [...new Set(versions.map((v) => v.repository).filter(Boolean))])
+        .filter((id) => id !== browsedRepoId)
+        .map(repoLabelFor)
   // An override only ever exists on a locked row once the user has
   // explicitly picked a version — the template's own inclusion never
   // becomes a real addedPackages entry on its own.

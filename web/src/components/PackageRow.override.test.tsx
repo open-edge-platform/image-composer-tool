@@ -256,3 +256,70 @@ describe('PackageRow — the template line once overridden', () => {
     expect(templateLine()).toBe('Already in template')
   })
 })
+
+describe('PackageRow — browsing one repository', () => {
+  const via = () => screen.queryByText(/^via /, { selector: 'span' })
+  const headerSpan = () => screen.queryByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' })
+
+  it('names neither the pin nor the browsed repo when its chip shows the pin', () => {
+    // ffmpeg, browsing the snapshot its template pin comes from.
+    render(
+      <PackageRow
+        name="ffmpeg"
+        version="7:9.0.1-1ppa1~resolute1"
+        versions={[{ version: '7:9.0.1-1ppa1~resolute1', repository: 'snapshot' }]}
+        repoLabelFor={(id) => id}
+        selection={undefined}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        locked
+        currentVersion="7:9.0.1-1ppa1~resolute1"
+        currentIsFloating={false}
+        browsedRepoId="snapshot"
+      />,
+    )
+    expect(headerSpan()).toBeNull()
+    expect(via()).toBeNull()
+    expect(chip(/^7:9\.0\.1-1ppa1~resolute1$/).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('leaves an unpinned template package to its highlighted Unpinned chip', () => {
+    // adb, unpinned in the template, its current version not yet known.
+    render(
+      <PackageRow
+        name="adb"
+        version="1:34.0.5-12build1"
+        versions={[{ version: '1:34.0.5-12build1', repository: 'base' }]}
+        repoLabelFor={(id) => id}
+        selection={undefined}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        locked
+        currentIsFloating
+        browsedRepoId="base"
+      />,
+    )
+    expect(headerSpan()).toBeNull()
+    expect(via()).toBeNull()
+    expect(chip(/^Unpinned$/).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('still names the repository a resolution comes from when it is another one', () => {
+    render(
+      <PackageRow
+        name="vim"
+        version="2:9.1.0016-1"
+        versions={[{ version: '2:9.1.0016-1', repository: 'base' }]}
+        repoLabelFor={(id) => ({ base: 'Ubuntu Base', snapshot: 'Snapshot' })[id] ?? id}
+        selection={{ name: 'vim', version: '', repo: 'base' }}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        resolvedVersion="2:9.2-1ppa1"
+        resolvedRepo="snapshot"
+        browsedRepoId="base"
+      />,
+    )
+    expect(headerSpan()?.textContent).toBe('Resolved to 2:9.2-1ppa1')
+    expect(via()?.textContent).toBe('via Snapshot')
+  })
+})
