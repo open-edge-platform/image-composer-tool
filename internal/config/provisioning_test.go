@@ -719,10 +719,21 @@ func TestValidateOverlaySystemConfigRejectsProvisioningSections(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected overlay validation to reject provisioning sections")
 	}
-	for _, section := range []string{"proxy", "provisioning", "cloudInit", "aptPolicy"} {
+	for _, section := range []string{"provisioning", "cloudInit", "aptPolicy"} {
 		if !strings.Contains(err.Error(), "systemConfig."+section) {
 			t.Errorf("error does not name systemConfig.%s: %v", section, err)
 		}
+	}
+}
+
+func TestValidateOverlaySystemConfigAllowsProxy(t *testing.T) {
+	t.Parallel()
+	tmpl := &ImageTemplate{SystemConfig: SystemConfig{
+		Proxy: ProxyConfig{HTTPProxy: "http://proxy.example.com:3128", NoProxy: "localhost"},
+	}}
+
+	if err := tmpl.validateOverlaySystemConfig(); err != nil {
+		t.Fatalf("overlay proxy configuration must be supported: %v", err)
 	}
 }
 

@@ -235,3 +235,46 @@ func keys(m map[string]string) []string {
 	}
 	return out
 }
+
+func TestValidateUserTemplateIssues_BootloaderTimeout(t *testing.T) {
+	base := `image:
+  name: my-image
+  version: "1.0"
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: my-config
+  bootloader:
+`
+	tests := []struct {
+		name       string
+		bootloader string
+		wantIssue  bool
+	}{
+		{"grub with a timeout", "    provider: grub\n    timeoutSec: 3\n", false},
+		{"timeout without a provider (may be inherited)", "    timeoutSec: 3\n", false},
+		{"systemd-boot without a timeout", "    provider: systemd-boot\n", false},
+		{"systemd-boot with a timeout", "    provider: systemd-boot\n    timeoutSec: 3\n", true},
+		{"negative timeout", "    provider: grub\n    timeoutSec: -1\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues := ValidateUserTemplateIssues(toJSON(t, base+tt.bootloader))
+			if !tt.wantIssue {
+				if len(issues) != 0 {
+					t.Fatalf("expected no issues, got %+v", issues)
+				}
+				return
+			}
+			for _, iss := range issues {
+				if strings.HasPrefix(iss.Path, "systemConfig.bootloader") {
+					return
+				}
+			}
+			t.Fatalf("expected an issue under systemConfig.bootloader, got %+v", issues)
+		})
+	}
+}

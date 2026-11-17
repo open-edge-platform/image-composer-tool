@@ -6,7 +6,68 @@
 
 **New**:
 
+- **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
+  selected by explicit APT `name_version` requests with
+  `packageOperation: additive-and-upgrade`. It defaults to false and does not
+  bypass dependency integrity, protected boot packages, or removal policy.
+  Unpinned packages and dependencies are not automatically selected for
+  downgrade; RPM overlay builds are not supported end-to-end.
+- Overlay builds now print a planned package-change report after dependency
+  resolution and preflight, before the build begins. It lists resolver-selected
+  dependency upgrades along with additions and approved removals; install-time
+  cascade removals may differ from the plan and appear in the final statistics.
 - Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
+- Follow an OEP Installer development branch from a template. In `systemConfig.oepInstaller`, only `sbomUrl` and `user` are now required: without `url`, ICT installs the CLI the package list names in its `cli-url` header, verified against its `cli-sha256` header when present; without `modules` or `args`, it uses the list's own; without `sbomSha256`, the list is not verified. A template can point `sbomUrl` at a branch and pick up OEP Installer fixes without changing. The template the image carries records the CLI and digests that were used.
+- **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
+  constraints and alternatives. With `packageOperation: additive-and-upgrade`,
+  library upgrades that break previously satisfied requirements automatically
+  seed affected retained native-architecture baseline packages as internal
+  upgrade targets, using the existing `Breaks` repair loop (at most four extra
+  resolves). `Requested` is unchanged; `CompatibilityUpgrades` tracks actual
+  forced installs. Preflight blocks unresolved newly unsatisfied retained
+  dependencies, including unavailable or unchanged candidates and blocking pins.
+  Explicit pins are not relaxed; no blanket upgrades, removals or downgrades are
+  authorized. RPM baseline reverse-dependency auto-repair is not implemented.
+  Upgraded versioned `Provides` and `Multi-Arch` metadata are preserved, and the
+  parsed metadata cache version is bumped to re-parse older entries.
+  Retained-dependency checks treat `Architecture: all` as the native architecture
+  before applying qualifiers and `Multi-Arch` rules, so an unannotated `all`
+  replacement cannot hide newly broken foreign-architecture dependencies.
+- **Fixed**: Debian overlay dependency audits now ignore apt's changing installed-
+  version explanation when comparing a broken dependency across package transactions.
+  The comparison still distinguishes different requirements and multiarch package
+  instances, avoiding false build failures when an unrelated package upgrade changes
+  the version named in `apt-get check` output.
+- **Fixed**: Ubuntu `linux-main-modules-*` packages are classified as kernel
+  companions, not extra bootable kernel images. Old companions are removable
+  only under a valid explicit kernel replacement, preserving the replacement
+  dependency-closure keep-set.
+- **Changed**: the overlay installer dependency audit compares failure
+  descriptors before and after every nonempty install or removal transaction,
+  including upgrade-only transactions, ignoring pre-existing failures. Newly
+  introduced upgrade-only failures fail closed without cascade removal, even
+  with `allowPackageRemoval: true`. Existing explicitly authorized removal
+  cascades retain their bounds and protected-package guards.
+- **Fixed**: overlay kernel replacement now treats a Debian `name_version`
+  request as the canonical package name when its name and version match resolved
+  or dependency-closure metadata, avoiding false extra-kernel-image ambiguity.
+- **Fixed**: under `packageOperation: additive-and-upgrade`, an exact APT
+  `name_version` pin differing from the baseline now enters the install set even
+  when older. Preflight rejects it unless `allowDowngrade` is explicitly enabled,
+  instead of silently ignoring the pin and later reporting unsatisfied dependencies.
+  Matching follows the Debian resolver for omitted epochs and artifact-style
+  requests, so these downgrade pins also reach preflight instead of being skipped.
+  Pins that compare equal under Debian version rules (for example, `2.12-1` and
+  `0:2.12-1`) remain no-ops, preventing an unclassified bootloader reinstall.
+- Overlay templates now support `systemConfig.proxy`, reusing the create-mode
+  writer for login, APT and systemd settings after build-time configuration
+  commands. Add site-specific settings in a local or internal template. Build
+  downloads still use the host proxy environment.
+- **Fixed**: a `systemConfig.proxy` with only `noProxy` now removes a stale
+  ICT-managed APT proxy file from the base image. Other APT files are unchanged.
+- **Changed**: platform-enablement templates requiring private repositories are
+  maintained in the internal template repository, not the public template catalog.
+  The workspace `cbkc-to-overlay-template` skill covers repeatable script migration.
 - Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
 - Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
 - Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
@@ -17,6 +78,7 @@
 - Run the Web UI with only Docker installed. `docker compose up --build` from a checkout builds the ICT container image and serves the UI at <http://127.0.0.1:8080>; Go, Node.js, the programs a build runs, and sudoers rules are not needed on the host. Build history and OS images are kept in Docker named volumes, so they survive `docker compose down` and `docker compose up`. **The container is privileged and has the host's `/dev` mounted, so it is root-equivalent on the host**, and the UI has no authentication of its own: the port is published on `127.0.0.1` only, and should stay that way. See the [Web UI Quick Start](./get-started/web-ui-quick-start.md).
 - **Changed**: a new ICT container image, defined by `build/ict/Dockerfile`, replaces the builder image (`build/builder/Dockerfile`), which only its own CI check used. The new image holds everything needed to build OS images with nothing but Docker on the host: the `image-composer-tool` binary with the web UI compiled in, `live-installer`, `config/`, `image-templates/`, and every program a build runs, all under `/opt/ict` in the same layout as a checkout. The builder image could not complete a build: it had no CA certificates, so HTTPS downloads failed, and it lacked `arch-test`, `qemu-user-static`, and `debian-archive-keyring`, which Ubuntu, eLxr, and Debian builds install when missing and cannot install inside the image. Build the new image with `earthly +ict-image` (named `ict` unless you set `ICT_IMAGE_NAME`), and check that it contains every program ICT may run with `earthly +ict-image-preflight`. The `+builder-image`, `+builder-image-push`, and `+builder-image-preflight` Earthly targets are removed.
 - An in-app **User Guide** in the Web UI. The **?** (Help) button at the right of the top bar opens it as a page of its own, with its own address (`#guide/<topic>`) so it can be bookmarked and left with the browser's Back button. It introduces Image Composer Tool and walks step by step through composing with the **Basic** and **Advanced** tabs, including setting a password or SSH key for the image's users. The guide works even when the API server is unreachable.
+- New `systemConfig.bootloader.timeoutSec` template field sets how long GRUB shows its menu before booting the default entry (`GRUB_TIMEOUT`), so a template no longer needs an `/etc/default/grub.d` drop-in for it. It applies to create-mode builds with the `grub` provider; with `systemd-boot` the template is rejected.
 - Add users to an image from the Web UI's Basic tab. The credentials dialog now opens on every **Compose Image**, not only when the chosen template leaves an account without a login, and carries an **Add a user** section at the bottom. An added account takes the same options a template may set for one — password and/or SSH public key, administrator (sudo), additional groups, login shell, home directory, startup script, and password maximum age — and is created through the same generated `extends` delta the credentials use, so the curated template is never rewritten and a password is hashed before it reaches disk. A name the template already declares is refused, with the dialog pointing at that account's own fields instead: supplying a login for an existing account must never change its privileges. Every added account needs a password or an SSH key, except one confined to a startup script, which has no interactive login. When **Compose Image** is unavailable the dialog now names what is missing, including accounts scrolled out of view.
 - **Fixed**: the Web UI's compose view became unresponsive while a build was streaming logs — the artifact table's download buttons did nothing for the whole of a long compose, then fired all at once when the stream stopped. Every log line arriving over the event stream was appended to the view as it landed, which re-stripped ANSI escapes from, and re-rendered, every line already on screen; package resolution emits hundreds of lines a second and nothing caps how many accumulate, so the work grew with the log until it saturated the browser and starved clicks elsewhere in the page. Arrivals are now batched into about ten updates a second and each line is cleaned once, when it arrives, instead of on every render. **The log pane now keeps only the most recent 5,000 lines on screen**, with a line above the output saying how many earlier ones are hidden; copying the log and downloading the log file both still give the complete output, and a build's full log is unchanged on disk.
 - **Fixed**: the Web UI Advanced tab's Edge Pack view no longer stays on "Loading Edge Pack…" for 30–90 s when the Edge Pack repository is slow or unreachable, for example when `NO_PROXY` covers `.intel.com` and so sends `apt.repos.intel.com`, which is reachable only through the proxy, direct. The server now waits at most 3 s for that repository's index and answers without package versions if it is still loading; the page shows a loading panel meanwhile and fills the versions in once the index arrives.

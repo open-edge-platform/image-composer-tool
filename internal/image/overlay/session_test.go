@@ -2,6 +2,8 @@ package overlay
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,8 +20,10 @@ type builderSeams struct {
 	validateUsers func(*config.ImageTemplate, string) error
 	resolve       func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
 	preflight     func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
+	printPlan     func(*PackageStats)
 	install       func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
 	createUsers   func(*config.ImageTemplate, string) error
+	proxy         func(string, config.ProxyConfig) error
 	configure     func(*config.ImageTemplate, string) error
 	regenBoot     func(*config.ImageTemplate, *BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
 	grubRegen     func(*config.ImageTemplate, *BaselineInfo, string) error
@@ -36,10 +40,12 @@ func saveBuilderSeams() builderSeams {
 		acquire: builderAcquire, mountLayout: builderMountLayout, detach: builderDetach,
 		removeCopy: builderRemoveCopy,
 		detect:     builderDetectFn, validateUsers: builderValidateUsersFn, resolve: builderResolveFn, preflight: builderPreflightFn,
-		install: builderInstallFn, createUsers: builderCreateUsersFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
+		printPlan: builderPrintPlanFn,
+		install:   builderInstallFn, createUsers: builderCreateUsersFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
 		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 		convert: builderConvertFn,
+		proxy:   builderProxyFn,
 	}
 }
 
@@ -47,12 +53,14 @@ func (s builderSeams) restore() {
 	builderAcquire, builderMountLayout, builderDetach = s.acquire, s.mountLayout, s.detach
 	builderRemoveCopy = s.removeCopy
 	builderDetectFn, builderResolveFn, builderPreflightFn = s.detect, s.resolve, s.preflight
+	builderPrintPlanFn = s.printPlan
 	builderValidateUsersFn, builderCreateUsersFn = s.validateUsers, s.createUsers
 	builderInstallFn, builderConfigureFn, builderRegenBootFn, builderResizeFn = s.install, s.configure, s.regenBoot, s.resize
 	builderGrubRegenFn = s.grubRegen
 	builderAddFilesFn = s.addFiles
 	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
 	builderConvertFn = s.convert
+	builderProxyFn = s.proxy
 }
 
 // builderRecorder tracks calls through the seams and lets a test inject errors at
@@ -72,6 +80,7 @@ type builderRecorder struct {
 	validateUsersErr error
 	resolveErr       error
 	preflightErr     error
+	packagePlan      *PackageStats
 	installErr       error
 	createUsersErr   error
 	configureErr     error
@@ -150,6 +159,10 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		}
 		return &PreflightReport{Blocked: false}, nil
 	}
+	builderPrintPlanFn = func(stats *PackageStats) {
+		r.note("packagePlan")
+		r.packagePlan = stats
+	}
 	builderInstallFn = func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error) {
 		r.note("install")
 		if r.installErr != nil {
@@ -214,6 +227,134 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 	return b
 }
 
+func TestBuilder_ProxyConfiguration(t *testing.T) {
+	tests := []struct {
+		name    string
+		proxy   config.ProxyConfig
+		wantErr bool
+	}{
+		{name: "unset"},
+		{name: "configured", proxy: config.ProxyConfig{HTTPProxy: "http://proxy.example.com:3128"}},
+		{name: "write failure", proxy: config.ProxyConfig{NoProxy: "localhost"}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer saveBuilderSeams().restore()
+			recorder := &builderRecorder{}
+			builder := installOverlayTestBuilder(t, recorder)
+			builder.template.SystemConfig.Proxy = test.proxy
+			called := false
+			writeErr := errors.New("proxy write failed")
+			builderProxyFn = func(root string, proxy config.ProxyConfig) error {
+				called = true
+				if root != "/wd/mnt/root" || proxy != test.proxy {
+					t.Errorf("proxy arguments = %q, %+v; want baseline root and %+v", root, proxy, test.proxy)
+				}
+				if got := recorder.calls[len(recorder.calls)-1]; got != "configure" {
+					t.Errorf("stage before proxy = %q, want configure", got)
+				}
+				if test.wantErr {
+					return writeErr
+				}
+				return nil
+			}
+			if err := builder.Preprocess(); err != nil {
+				t.Fatalf("Preprocess: %v", err)
+			}
+
+			err := builder.Build()
+
+			if test.wantErr && !errors.Is(err, writeErr) || !test.wantErr && err != nil {
+				t.Errorf("Build error = %v, want proxy failure: %v", err, test.wantErr)
+			}
+			if called != !test.proxy.IsEmpty() {
+				t.Errorf("proxy called = %v, want %v", called, !test.proxy.IsEmpty())
+			}
+			if test.wantErr && recorder.calls[len(recorder.calls)-1] != "configure" {
+				t.Errorf("build continued after proxy failure: %v", recorder.calls)
+			}
+		})
+	}
+}
+
+func TestBuilder_ProxyWritesBaselineFiles(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	builder := installOverlayTestBuilder(t, &builderRecorder{})
+	builder.template.SystemConfig.Proxy = config.ProxyConfig{
+		HTTPProxy: "http://proxy.example.com:3128", NoProxy: "mirror.example.com",
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/environment"), []byte("PATH=/usr/bin\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	builder.layout.RootMount = root
+
+	if err := builder.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	for name, expected := range map[string][]string{
+		"etc/environment": {"PATH=/usr/bin", "http_proxy=\"http://proxy.example.com:3128\"",
+			"HTTP_PROXY=\"http://proxy.example.com:3128\""},
+		"etc/apt/apt.conf.d/95ict-proxy": {"Acquire::http::Proxy \"http://proxy.example.com:3128\";",
+			"Acquire::https::Proxy::mirror.example.com \"DIRECT\";"},
+		"etc/systemd/system.conf.d/90-ict-proxy.conf": {"DefaultEnvironment=", "NO_PROXY=mirror.example.com"},
+	} {
+		content, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("reading baseline %s: %v", name, err)
+		}
+		for _, value := range expected {
+			if !strings.Contains(string(content), value) {
+				t.Errorf("baseline %s = %q, want %q", name, content, value)
+			}
+		}
+	}
+}
+
+func TestBuilder_NoProxyOnlyRemovesExistingAPTProxy(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	builder := installOverlayTestBuilder(t, &builderRecorder{})
+	builder.template.SystemConfig.Proxy = config.ProxyConfig{NoProxy: "localhost"}
+	root := t.TempDir()
+	aptDir := filepath.Join(root, "etc/apt/apt.conf.d")
+	if err := os.MkdirAll(aptDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ownedAPT := filepath.Join(aptDir, "95ict-proxy")
+	if err := os.WriteFile(ownedAPT, []byte("Acquire::http::Proxy \"http://old:3128\";\n"+
+		`Acquire::http::Proxy::localhost "DIRECT";`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	otherAPT := filepath.Join(aptDir, "90other-proxy")
+	if err := os.WriteFile(otherAPT, []byte(`Acquire::http::Proxy "http://other:3128";`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	builder.layout.RootMount = root
+
+	if err := builder.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := os.Stat(ownedAPT); !os.IsNotExist(err) {
+		t.Errorf("ICT-owned APT proxy fragment should be removed, stat error = %v", err)
+	}
+	if got, err := os.ReadFile(otherAPT); err != nil {
+		t.Fatalf("reading unrelated APT proxy fragment: %v", err)
+	} else if string(got) != `Acquire::http::Proxy "http://other:3128";` {
+		t.Errorf("unrelated APT proxy fragment = %q, want it unchanged", got)
+	}
+}
+
 func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	defer saveBuilderSeams().restore()
 	r := &builderRecorder{}
@@ -221,6 +362,9 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 
 	if err := b.Preprocess(); err != nil {
 		t.Fatalf("Preprocess: %v", err)
+	}
+	if r.packagePlan == nil || len(r.packagePlan.Added) != 1 || r.packagePlan.Added[0].Name != "curl" {
+		t.Errorf("pre-build package plan = %+v, want curl listed as added", r.packagePlan)
 	}
 	if err := b.Build(); err != nil {
 		t.Fatalf("Build: %v", err)
@@ -234,7 +378,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// defaults --inspect off; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
 	// The pre-initramfs additionalFiles pass runs BEFORE regenBoot; the default
 	// pass runs after grubRegen, as before.
-	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "packagePlan", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -306,7 +450,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	// Inspection runs immediately after emit, against the emitted RAW artifact,
 	// and conversion follows it (a request that omits raw would delete the RAW,
 	// so the RAW inspection must happen first).
-	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "packagePlan", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -410,7 +554,7 @@ func TestBuilder_ConfigureFailureStopsBuildBeforeBootRegen(t *testing.T) {
 	}
 	// Configurations run after install; a failure there must halt the build before
 	// boot regeneration so a broken image is never carried into the artifact.
-	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "packagePlan", "resize", "install", "users", "configure"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on configure failure = %v, want %v", r.calls, want)
 	}
@@ -473,7 +617,7 @@ func TestBuilder_UsersFailureStopsBuildBeforeConfigure(t *testing.T) {
 		t.Errorf("expected user creation failure to surface, got %v", err)
 	}
 	// Users run after install and before configure; a failure there stops the build.
-	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "packagePlan", "resize", "install", "users"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on user creation failure = %v, want %v", r.calls, want)
 	}
@@ -502,7 +646,7 @@ func TestBuilder_GrubRegenFailureStopsBuild(t *testing.T) {
 	}
 	// GRUB regen is the last build stage; a failure there must halt before b.built
 	// is set, so no SBOM/emit runs and no image is produced.
-	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "packagePlan", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on GRUB regen failure = %v, want %v", r.calls, want)
 	}
