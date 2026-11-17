@@ -77,6 +77,13 @@ printf '%s\n' 'workers: 8' \
     'work_dir: "/tmp/image-composer-tool"' 'temp_dir: "/tmp"' \
     'logging:' '  level: "info"' > "${stage}/etc/image-composer-tool/config.yml"
 cp -r "${root}/config/." "${stage}/etc/image-composer-tool/config/"
+find "${stage}/etc/image-composer-tool/config" -type f -exec \
+    sed -i 's#../../../../../../build/live-installer#/usr/local/bin/live-installer#g' {} +
+if grep -R -Fq '../../../../../../build/live-installer' \
+    "${stage}/etc/image-composer-tool/config"; then
+    echo "error: staged configuration contains an unresolved live-installer path" >&2
+    exit 1
+fi
 cp -r "${root}/image-templates/." "${stage}/usr/share/image-composer-tool/examples/"
 install -m 0644 "${root}/README.md" "${root}/LICENSE" \
     "${root}/docs/user-guide/architecture/image-composer-tool-cli-specification.md" \
@@ -90,7 +97,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: Intel Edge Software Team <edge.platform@intel.com>
-Depends: bash, coreutils, unzip, dosfstools, xorriso, grub-common
+Depends: bash, ca-certificates, coreutils, unzip, dosfstools, xorriso, grub-common
 Recommends: mmdebstrap, debootstrap
 Description: Image Composer Tool (ICT)
  Compose custom bootable OS images from templates.

@@ -124,11 +124,18 @@ jobs:
           test "$(dpkg-deb -f "${file}" Architecture)" = amd64
           dpkg-deb --contents "${file}"
           (cd dist && sha256sum "ict_${VERSION}_amd64.deb" > SHA256SUMS)
+      - name: Extract package payload for SBOM
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/ict-package-root"
+          dpkg-deb -x "dist/ict_${VERSION}_amd64.deb" "${RUNNER_TEMP}/ict-package-root"
       - name: Generate SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 #0.36.0
         with:
           scan-type: fs
-          scan-ref: .
+          scan-ref: ${{ runner.temp }}/ict-package-root
           format: spdx-json
           output: dist/sbom.spdx.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 #v7.0.2
