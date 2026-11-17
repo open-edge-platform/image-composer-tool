@@ -751,7 +751,7 @@ function PackageSearch({
         )}
       </div>
       <p className="mb-4 mt-1.5 text-sm text-slate-500">
-        Search across all repositories. Pick &quot;Latest&quot; or a specific
+        Search across all repositories. Pick &quot;Unpinned&quot; or a specific
         version to add it.
       </p>
     </>

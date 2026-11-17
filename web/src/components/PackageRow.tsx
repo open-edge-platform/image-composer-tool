@@ -169,7 +169,7 @@ export function PackageRow({
                 {name}
               </span>
               <span className="font-mono text-[11px] text-slate-500">
-                {locked && currentVersion ? currentVersion : version || 'latest'}
+                {locked && currentVersion ? currentVersion : version || 'unpinned'}
               </span>
               {templatePinElsewhere && pinnedFrom?.repoLabel && pinnedFrom.onBrowse ? (
                 // The template's pin comes from another repository: "via"
@@ -209,7 +209,7 @@ export function PackageRow({
             )}
             {!locked && selection?.version === '' && resolvedVersion && (
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                Latest — currently resolves to <span className="font-mono">{resolvedVersion}</span>
+                Unpinned — currently resolves to <span className="font-mono">{resolvedVersion}</span>
                 {resolvedRepo && resolvedRepo !== selection.repo ? ` from ${repoLabelFor(resolvedRepo)}` : ''}.
               </span>
             )}
@@ -227,7 +227,7 @@ export function PackageRow({
                 </span>
                 {overridden && (
                   <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-                    Overrides with {selection?.version || 'latest'}
+                    Overrides with {selection?.version || 'unpinned'}
                   </span>
                 )}
               </span>
@@ -365,7 +365,7 @@ function VersionChips({
               ? "Already the template's own (unpinned) choice"
               : currentIsFloating
                 ? "The template's own (unpinned) choice — choose it to drop your override"
-                : undefined
+                : 'No version pin: the build installs the newest version from the highest-priority repository'
         }
         onClick={(e) => {
           stop(e)
@@ -382,7 +382,7 @@ function VersionChips({
           disabled: disabled || latestIsTemplates || noRepoKnown,
         })}
       >
-        Latest
+        Unpinned
       </button>
       {shown.map((v) => {
         const isCurrent = v.version === currentVersion

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// A template package's own choice — the version it pins, or Latest when it
+// A template package's own choice — the version it pins, or Unpinned when it
 // leaves the package unpinned — is disabled as redundant. Once the user
 // overrides it, choosing it is the way back, so it drops the override.
 
@@ -55,17 +55,17 @@ describe('PackageRow — returning to the template’s own choice', () => {
     expect(onChooseVersion).not.toHaveBeenCalled()
   })
 
-  it('keeps Latest disabled on an unpinned template package while nothing overrides it', () => {
+  it('keeps Unpinned disabled on an unpinned template package while nothing overrides it', () => {
     renderRow({ currentIsFloating: true })
-    expect(chip(/^Latest$/).disabled).toBe(true)
+    expect(chip(/^Unpinned$/).disabled).toBe(true)
   })
 
-  it('drops the override when Latest is chosen on an unpinned template package', () => {
+  it('drops the override when Unpinned is chosen on an unpinned template package', () => {
     const { onToggle, onChooseVersion } = renderRow({
       currentIsFloating: true,
       selection: { name: 'spice-client-gtk', version: '0.42-1ppa1~resolute3', repo: 'snapshot' },
     })
-    fireEvent.click(chip(/^Latest$/))
+    fireEvent.click(chip(/^Unpinned$/))
     expect(onToggle).toHaveBeenCalledWith(false)
     expect(onChooseVersion).not.toHaveBeenCalled()
   })
@@ -94,18 +94,18 @@ describe('PackageRow — which chip reads as selected', () => {
   const pressed = () =>
     screen.getAllByRole('button').filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)
 
-  it('marks only the picked version over an unpinned template entry, not Latest too', () => {
+  it('marks only the picked version over an unpinned template entry, not Unpinned too', () => {
     renderFloating({ name: 'apt-transport-https', version: '3.2.0', repo: 'base' })
     expect(pressed()).toEqual(['3.2.0'])
   })
 
-  it('marks Latest when nothing is picked over an unpinned template entry', () => {
+  it('marks Unpinned when nothing is picked over an unpinned template entry', () => {
     renderFloating()
-    expect(pressed()).toEqual(['Latest'])
+    expect(pressed()).toEqual(['Unpinned'])
   })
 
-  it('marks Latest when Latest itself is the pick', () => {
+  it('marks Unpinned when Unpinned itself is the pick', () => {
     renderFloating({ name: 'apt-transport-https', version: '', repo: 'base' })
-    expect(pressed()).toEqual(['Latest'])
+    expect(pressed()).toEqual(['Unpinned'])
   })
 })

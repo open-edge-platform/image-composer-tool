@@ -182,7 +182,7 @@ export function SelectedPackages({
 function VersionBadge({ version, floating, title }: { version: string; floating: boolean; title: string }) {
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {floating && <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">latest</span>}
+      {floating && <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">unpinned</span>}
       <span
         className={
           'rounded-full px-1.5 py-0.5 font-mono text-[10px] font-medium ' +

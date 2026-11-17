@@ -221,7 +221,7 @@ describe('a package already selected from a different repository than the one be
     expect(chip.className).toContain('bg-[#0071c5]')
   })
 
-  it('shows "Latest" as selected in every repo once picked as the unpinned choice', async () => {
+  it('shows "Unpinned" as selected in every repo once picked', async () => {
     useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'intel-eci' }] })
     mockApi.searchPackages.mockResolvedValue({
       packages: [{ name: 'vim', version: '9.0', repository: 'base', versions: [{ version: '9.0', repository: 'base' }] }],
@@ -230,7 +230,7 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    const latest = screen.getByRole('button', { name: 'Latest' })
+    const latest = screen.getByRole('button', { name: 'Unpinned' })
     expect(latest.className).toContain('bg-[#0071c5]')
   })
 })
