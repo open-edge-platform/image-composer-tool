@@ -111,6 +111,13 @@ export function PackageRow({
             ? { label: 'Resolved to', version: currentVersion, repo: resolvedRepo }
             : { label: 'Unpinned' }
         : undefined
+  // A pin this row's own chips include shows as that chip, highlighted, so
+  // saying it again beside the name adds nothing: the header names a pin
+  // only when it comes from another repository. (A template pin is matched
+  // on version alone, the way its chip is marked.)
+  const pinShownByChip =
+    status?.label === 'Pinned to' &&
+    versions.some((v) => v.version === status.version && (status.repo === undefined || v.repository === status.repo))
   // Where that version comes from. A template pin from another repository
   // links there (pinnedFrom); otherwise it's the pick's or the resolution's
   // own repository when known, and the row's own repositories failing that.
@@ -186,7 +193,7 @@ export function PackageRow({
               <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
                 {name}
               </span>
-              {status ? (
+              {pinShownByChip ? null : status ? (
                 <span className="text-[11px] text-slate-500">
                   {status.label}
                   {status.version && <span className="font-mono"> {status.version}</span>}
@@ -336,10 +343,14 @@ function VersionChips({
   const [expanded, setExpanded] = useState(false)
   const currentIdx = currentVersion !== undefined ? versions.findIndex((v) => v.version === currentVersion) : -1
   let shown = expanded ? versions : versions.slice(0, DEFAULT_VISIBLE_VERSIONS)
-  // The template's own version is the one chip a locked row most needs
-  // visible — don't let it hide behind "+N more".
-  if (!expanded && currentIdx >= DEFAULT_VISIBLE_VERSIONS) {
-    shown = [...shown, versions[currentIdx]]
+  // The template's own version and the user's own pin are the chips a row
+  // most needs visible, since the header leaves a pin to its chip — don't
+  // let either hide behind "+N more".
+  const pinnedIdx = pinned ? versions.findIndex((v) => v.version === pinned && v.repository === pinnedRepo) : -1
+  if (!expanded) {
+    for (const idx of [currentIdx, pinnedIdx]) {
+      if (idx >= DEFAULT_VISIBLE_VERSIONS && !shown.includes(versions[idx])) shown = [...shown, versions[idx]]
+    }
   }
   const hidden = versions.length - shown.length
 

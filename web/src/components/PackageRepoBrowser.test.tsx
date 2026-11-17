@@ -218,7 +218,9 @@ describe('a package already selected from a different repository than the one be
     browse('intel-eci')
 
     await screen.findByText('vim')
-    expect(screen.getByText('Pinned to').textContent).toBe('Pinned to 9.1')
+    // The pin is one of this repo's chips, highlighted, so the header
+    // doesn't repeat it.
+    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
     expect(screen.queryByText(/Picking a version here pins/)).toBeNull()
     const chip = screen.getByRole('button', { name: '9.1' })
     expect(chip.className).toContain('bg-[#0071c5]')

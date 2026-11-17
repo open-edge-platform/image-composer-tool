@@ -113,21 +113,59 @@ describe('PackageRow — which chip reads as selected', () => {
 describe('PackageRow — what the header says the build installs', () => {
   const header = () => screen.getByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' }).textContent
 
-  it('says "Pinned to" the template pin, and marks its chip selected but not clickable', () => {
+  it('leaves a template pin on screen to its chip, selected but not clickable', () => {
     renderRow({ currentIsFloating: false })
-    expect(header()).toBe('Pinned to 0.42-1ppa1~resolute3')
+    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
     const own = chip(/^0\.42-1ppa1~resolute3$/)
     expect(own.getAttribute('aria-pressed')).toBe('true')
     expect(own.disabled).toBe(true)
     expect(own.className).toContain('bg-[#0071c5]')
   })
 
-  it('says "Pinned to" an override, ahead of the template’s own pin', () => {
+  it('leaves an override on screen to its chip, ahead of the template’s own pin', () => {
     renderRow({
       currentIsFloating: false,
       selection: { name: 'spice-client-gtk', version: '0.42-4build1', repo: 'ubuntu-resolute-base' },
     })
-    expect(header()).toBe('Pinned to 0.42-4build1')
+    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
+    expect(chip(/^0\.42-4build1$/).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('says "Pinned to" a pin from another repository, which no chip here shows', () => {
+    // ffmpeg, browsing Ubuntu base: the template's pin is the snapshot's build.
+    render(
+      <PackageRow
+        name="ffmpeg"
+        version="7:8.0.1-3ubuntu2"
+        versions={[{ version: '7:8.0.1-3ubuntu2', repository: 'base' }]}
+        repoLabelFor={(id) => id}
+        selection={undefined}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        locked
+        currentVersion="7:9.0.1-1ppa1~resolute1"
+        currentIsFloating={false}
+      />,
+    )
+    expect(header()).toBe('Pinned to 7:9.0.1-1ppa1~resolute1')
+  })
+
+  it('keeps a pinned chip visible even when it is past the first few versions', () => {
+    // ethtool, pinned to an older build than the few chips shown by default.
+    const many = ['1:6.19-4', '1:6.19-3', '1:6.19-2', '1:6.19-1'].map((version) => ({ version, repository: 'base' }))
+    render(
+      <PackageRow
+        name="ethtool"
+        version="1:6.19-4"
+        versions={many}
+        repoLabelFor={(id) => id}
+        selection={{ name: 'ethtool', version: '1:6.19-1', repo: 'base' }}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+      />,
+    )
+    expect(chip(/^1:6\.19-1$/).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
   })
 
   it('says "Resolved to" for an unpinned template package, and marks Unpinned selected', () => {
