@@ -157,7 +157,7 @@ function RepoToolbar({
     <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <label className="flex min-w-[280px] flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
-          Repository
+          Choose repository
           <select
             value={selectedRepo.id}
             onChange={(e) => onSelect(e.target.value)}
@@ -167,7 +167,7 @@ function RepoToolbar({
             className="min-w-0 max-w-[420px] flex-1 cursor-pointer truncate rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-semibold text-slate-700 hover:border-[#0071c5] focus:border-[#0071c5] focus:outline-none focus:ring-2 focus:ring-[#0071c5]/25"
           >
             {alwaysOnRepos.length > 0 && (
-              <optgroup label="Already included">
+              <optgroup label="Currently in template">
                 {alwaysOnRepos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.displayName}
@@ -176,7 +176,7 @@ function RepoToolbar({
               </optgroup>
             )}
             {optionalRepos.length > 0 && (
-              <optgroup label="Optional">
+              <optgroup label="Available (not in template)">
                 {optionalRepos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {isEnabled(r) ? `✓ ${r.displayName}` : r.displayName}
