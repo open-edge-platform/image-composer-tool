@@ -186,3 +186,35 @@ describe('PackageRow — what the header says the build installs', () => {
     expect(screen.getAllByText('3.3.0-4').length).toBeGreaterThan(0)
   })
 })
+
+describe('PackageRow — the template line once overridden', () => {
+  const templateLine = () => screen.getByText(/^Already in template/).textContent
+
+  it('asks to pin an unpinned template package only until it is', () => {
+    renderRow({ currentIsFloating: true })
+    expect(templateLine()).toBe('Already in template (unpinned; pin a chip to freeze it)')
+  })
+
+  it('says the template had it unpinned once a version overrides it', () => {
+    // apt-transport-https, unpinned in the template, pinned to 3.2.1ubuntu0.1.
+    renderRow({
+      currentIsFloating: true,
+      selection: { name: 'spice-client-gtk', version: '0.42-4build1', repo: 'ubuntu-resolute-base' },
+    })
+    expect(templateLine()).toBe('Already in template (unpinned)')
+    expect(screen.getByText('Overrides with 0.42-4build1')).toBeTruthy()
+  })
+
+  it('says what the template pinned once a different version overrides it', () => {
+    renderRow({
+      currentIsFloating: false,
+      selection: { name: 'spice-client-gtk', version: '0.42-4build1', repo: 'ubuntu-resolute-base' },
+    })
+    expect(templateLine()).toBe('Already in template (pinned to 0.42-1ppa1~resolute3)')
+  })
+
+  it('says nothing more for a template pin left as it is', () => {
+    renderRow({ currentIsFloating: false })
+    expect(templateLine()).toBe('Already in template')
+  })
+})

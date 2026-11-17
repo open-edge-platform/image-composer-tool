@@ -234,7 +234,16 @@ export function PackageRow({
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                 <span className="font-medium text-slate-500">
                   Already in template
-                  {currentIsFloating ? ' (unpinned; pin a chip to freeze it)' : ''}
+                  {overridden
+                    ? // What the override replaces; the header shows the override.
+                      currentIsFloating
+                      ? ' (unpinned)'
+                      : currentVersion
+                        ? ` (pinned to ${currentVersion})`
+                        : ''
+                    : currentIsFloating
+                      ? ' (unpinned; pin a chip to freeze it)'
+                      : ''}
                 </span>
                 {overridden && (
                   <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
