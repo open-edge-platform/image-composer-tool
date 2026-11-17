@@ -118,7 +118,7 @@ describe('a repository only the template declares', () => {
     expect(useStore.getState().enabledRepos).toEqual([])
   })
 
-  it('is listed under Already included in the Repositories tab', async () => {
+  it('is listed under Currently in template in the Repositories tab', async () => {
     render(
       <PackagesStep os="ubuntu24" active basePackages={[]} templateRepos={[snapshot.id]} templateOnlyRepos={[snapshot]} />,
     )
@@ -129,7 +129,7 @@ describe('a repository only the template declares', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })
-    const included = screen.getByRole('group', { name: 'Already included' })
+    const included = screen.getByRole('group', { name: 'Currently in template' })
     const labels = Array.from(included.querySelectorAll('option')).map((o) => o.textContent)
     expect(labels).toContain(snapshot.displayName)
   })
