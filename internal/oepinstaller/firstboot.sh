@@ -20,6 +20,8 @@ sudoers="$grant_dir/grant"
 cleanup() { rm -f "$sudoers" "$sudoers.tmp"; }
 trap cleanup EXIT
 trap 'exit 143' TERM INT HUP
+# The image's tmpfiles.d entry creates this directory at boot; create it here too
+# in case the script is run on its own.
 install -d -m 0755 "$grant_dir"
 printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$user" >"$sudoers.tmp"
 chmod 0440 "$sudoers.tmp"
