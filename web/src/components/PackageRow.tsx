@@ -94,15 +94,33 @@ export function PackageRow({
   disabledReason,
 }: PackageRowProps) {
   const checked = locked || selection != null
-  // Where the version beside the name comes from. A locked row whose
-  // template pin comes from another repository shows that pin, so "via"
-  // names that repository (or nothing until it's known), not the browsed one,
-  // whose own versions are only the chips.
-  const templatePinElsewhere = !!(locked && pinnedFrom && currentVersion)
+  // What the build installs, said beside the name: the user's own pick
+  // first, since it overrides the template, then the template's own entry.
+  // A catalog row nothing selects shows just its version instead.
+  const status: { label: string; version?: string; repo?: string } | undefined =
+    selection != null
+      ? selection.version !== ''
+        ? { label: 'Pinned to', version: selection.version, repo: selection.repo }
+        : resolvedVersion
+          ? { label: 'Resolved to', version: resolvedVersion, repo: resolvedRepo }
+          : { label: 'Unpinned' }
+      : locked
+        ? currentVersion && !currentIsFloating
+          ? { label: 'Pinned to', version: currentVersion }
+          : currentVersion
+            ? { label: 'Resolved to', version: currentVersion, repo: resolvedRepo }
+            : { label: 'Unpinned' }
+        : undefined
+  // Where that version comes from. A template pin from another repository
+  // links there (pinnedFrom); otherwise it's the pick's or the resolution's
+  // own repository when known, and the row's own repositories failing that.
+  const templatePinElsewhere = !!(locked && selection == null && pinnedFrom && currentVersion)
   const repoNames = templatePinElsewhere
     ? pinnedFrom!.repoLabel
         ? [pinnedFrom.repoLabel]
         : []
+    : status?.repo
+      ? [repoLabelFor(status.repo)]
       : [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
   // An override only ever exists on a locked row once the user has
   // explicitly picked a version — the template's own inclusion never
@@ -168,9 +186,14 @@ export function PackageRow({
               <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
                 {name}
               </span>
-              <span className="font-mono text-[11px] text-slate-500">
-                {locked && currentVersion ? currentVersion : version || 'unpinned'}
-              </span>
+              {status ? (
+                <span className="text-[11px] text-slate-500">
+                  {status.label}
+                  {status.version && <span className="font-mono"> {status.version}</span>}
+                </span>
+              ) : (
+                <span className="font-mono text-[11px] text-slate-500">{version}</span>
+              )}
               {templatePinElsewhere && pinnedFrom?.repoLabel && pinnedFrom.onBrowse ? (
                 // The template's pin comes from another repository: "via"
                 // links there, where that version is one of the chips.
@@ -203,27 +226,15 @@ export function PackageRow({
             )}
             {pinnedElsewhere && (
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                Pinned to <span className="font-mono">{selection!.version}</span> from{' '}
-                {repoLabelFor(selection!.repo)} — picking a version here pins a different repository instead.
-              </span>
-            )}
-            {!locked && selection?.version === '' && resolvedVersion && (
-              <span className="mt-0.5 block text-[11px] text-slate-500">
-                Unpinned — currently resolves to <span className="font-mono">{resolvedVersion}</span>
-                {resolvedRepo && resolvedRepo !== selection.repo ? ` from ${repoLabelFor(resolvedRepo)}` : ''}.
+                Picking a version here pins {repoLabelFor(versions[0]?.repository ?? '')} instead of{' '}
+                {repoLabelFor(selection!.repo)}.
               </span>
             )}
             {locked && (
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                 <span className="font-medium text-slate-500">
                   Already in template
-                  {templatePinElsewhere
-                    ? ''
-                    : currentVersion
-                      ? currentIsFloating
-                        ? ` — currently resolves to ${currentVersion} (unpinned; pin a chip to freeze it)`
-                        : ` (${currentVersion})`
-                      : ' (version resolved at build time)'}
+                  {currentIsFloating ? ' (unpinned; pin a chip to freeze it)' : ''}
                 </span>
                 {overridden && (
                   <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
@@ -347,8 +358,7 @@ function VersionChips({
   // mark instead — worth highlighting the same way an explicit pin would be.
   // A version picked over a floating template entry is the current state
   // then, so Latest isn't.
-  const latestIsCurrent =
-    pinned === '' || (pinned === undefined && currentIsFloating === true && currentVersion === undefined)
+  const latestIsCurrent = pinned === '' || (pinned === undefined && currentIsFloating === true)
   // Latest is the template's own choice for an unpinned template entry, so
   // it changes nothing — unless an override is in place, which it drops.
   const latestIsTemplates = currentIsFloating === true && !overridden
@@ -379,7 +389,9 @@ function VersionChips({
         aria-pressed={latestIsCurrent}
         className={chipClass({
           active: latestIsCurrent,
-          disabled: disabled || latestIsTemplates || noRepoKnown,
+          // The template's own choice, so not clickable, but it reads as
+          // selected rather than greyed out.
+          disabled: disabled || (latestIsTemplates ? false : noRepoKnown),
         })}
       >
         Unpinned
@@ -423,11 +435,13 @@ function VersionChips({
               }
               onChoose(v)
             }}
-            aria-pressed={pinned === v.version && pinnedRepo === v.repository}
+            aria-pressed={(pinned === v.version && pinnedRepo === v.repository) || isRedundant}
             className={chipClass({
-              active: pinned === v.version && pinnedRepo === v.repository,
-              disabled: disabled || isRedundant,
-              redundant: isRedundant,
+              // The template's own pin reads as selected, the same as a pick
+              // of the user's; it just isn't clickable, as choosing it changes
+              // nothing.
+              active: (pinned === v.version && pinnedRepo === v.repository) || isRedundant,
+              disabled,
               ring: isCurrent,
             })}
           >
@@ -451,29 +465,21 @@ function VersionChips({
   )
 }
 
-// active: a real selection (or, for Latest, the row's actual current
-// floating state) — full blue fill. disabled: not clickable; on an active
-// chip this dims the same blue rather than switching to grey, since the
-// information it's conveying is still true, just not actionable right now
-// (e.g. Latest already being the template's own choice). redundant is a
-// stronger, separate case — a chip that could never do anything regardless
-// of active/disabled (the template already pins this exact version itself)
-// — grey, ignoring every other flag. ring flags "this is what the row
-// currently resolves to" on a chip that's neither active nor redundant.
+// active: the chip in effect — a real selection, the template's own choice
+// (its pin, or Unpinned when it leaves the package unpinned), or Unpinned
+// when nothing is picked — full blue fill. disabled: not clickable; on an
+// active chip this dims the same blue rather than switching to grey. ring
+// flags "this is what the row currently resolves to" on a chip that isn't
+// active.
 function chipClass({
   active = false,
   disabled = false,
-  redundant = false,
   ring = false,
 }: {
   active?: boolean
   disabled?: boolean
-  redundant?: boolean
   ring?: boolean
 }): string {
-  if (redundant) {
-    return 'rounded-full px-2 py-0.5 font-mono text-[11px] font-medium bg-slate-200 text-slate-500 cursor-not-allowed ring-1 ring-slate-300'
-  }
   const base = 'rounded-full px-2 py-0.5 font-mono text-[11px] font-medium '
   const fill = active ? 'bg-[#0071c5] text-white' : 'bg-[#e6f2fa] text-[#0071c5]'
   const hover = disabled || active ? '' : ' hover:bg-[#d3e9f8]'

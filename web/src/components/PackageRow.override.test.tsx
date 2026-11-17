@@ -109,3 +109,80 @@ describe('PackageRow — which chip reads as selected', () => {
     expect(pressed()).toEqual(['Unpinned'])
   })
 })
+
+describe('PackageRow — what the header says the build installs', () => {
+  const header = () => screen.getByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' }).textContent
+
+  it('says "Pinned to" the template pin, and marks its chip selected but not clickable', () => {
+    renderRow({ currentIsFloating: false })
+    expect(header()).toBe('Pinned to 0.42-1ppa1~resolute3')
+    const own = chip(/^0\.42-1ppa1~resolute3$/)
+    expect(own.getAttribute('aria-pressed')).toBe('true')
+    expect(own.disabled).toBe(true)
+    expect(own.className).toContain('bg-[#0071c5]')
+  })
+
+  it('says "Pinned to" an override, ahead of the template’s own pin', () => {
+    renderRow({
+      currentIsFloating: false,
+      selection: { name: 'spice-client-gtk', version: '0.42-4build1', repo: 'ubuntu-resolute-base' },
+    })
+    expect(header()).toBe('Pinned to 0.42-4build1')
+  })
+
+  it('says "Resolved to" for an unpinned template package, and marks Unpinned selected', () => {
+    // adb, unpinned in the template, resolving to Ubuntu's build.
+    render(
+      <PackageRow
+        name="adb"
+        version="1:34.0.5-12build1"
+        versions={[{ version: '1:34.0.5-12build1', repository: 'base' }]}
+        repoLabelFor={(id) => id}
+        selection={undefined}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        locked
+        currentVersion="1:34.0.5-12build1"
+        currentIsFloating
+      />,
+    )
+    expect(header()).toBe('Resolved to 1:34.0.5-12build1')
+    const unpinned = chip(/^Unpinned$/)
+    expect(unpinned.getAttribute('aria-pressed')).toBe('true')
+    expect(unpinned.className).toContain('bg-[#0071c5]')
+  })
+
+  it('says "Resolved to" for an unpinned pick, naming where it resolves from', () => {
+    render(
+      <PackageRow
+        name="vim"
+        version="2:9.1.0016-1"
+        versions={[{ version: '2:9.1.0016-1', repository: 'base' }]}
+        repoLabelFor={(id) => ({ base: 'Ubuntu Base', snapshot: 'Snapshot' })[id] ?? id}
+        selection={{ name: 'vim', version: '', repo: 'base' }}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        resolvedVersion="2:9.2-1ppa1"
+        resolvedRepo="snapshot"
+      />,
+    )
+    expect(header()).toBe('Resolved to 2:9.2-1ppa1')
+    expect(screen.getByText('via Snapshot')).toBeTruthy()
+  })
+
+  it('shows just the version on a catalog row nothing selects', () => {
+    render(
+      <PackageRow
+        name="htop"
+        version="3.3.0-4"
+        versions={[{ version: '3.3.0-4', repository: 'base' }]}
+        repoLabelFor={(id) => id}
+        selection={undefined}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' })).toBeNull()
+    expect(screen.getAllByText('3.3.0-4').length).toBeGreaterThan(0)
+  })
+})
