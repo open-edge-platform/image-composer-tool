@@ -1,6 +1,6 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Ubuntu 24.04 unattended ISO installer with only the Intel EdgePack standard base runtime installed (Panther Lake / Wildcat Lake) — no Media or Manageability add-ons
+  description: Ubuntu 26.04 unattended ISO installer with only the Intel EdgePack standard base runtime installed (Panther Lake / Wildcat Lake) — no Media, Manageability or TSN add-ons
   use_cases:
     - Demo template for the Web UI Advanced tab's Edge Pack "already in template" pre-check — shows the Standard base runtime locked in with every domain left unselected
     - Hands-free bare metal installation of the mandatory Intel PTL/WCL base enablement with no optional capabilities
@@ -20,11 +20,11 @@ metadata:
 
 image:
   name: edgepack-standard-only-os-image-ubuntu-unattended
-  version: "24.04.0"
+  version: "26.04.3"
 
 target:
   os: ubuntu
-  dist: ubuntu24
+  dist: ubuntu26
   arch: x86_64
   imageType: iso
 
@@ -74,24 +74,15 @@ disk:
       fsType: linux-swap
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release; noble here) plus a separate signed prerequisite repository
-# the base metapackage's NPU profile resolves from.
+# Ubuntu release; resolute here). Only one repository is needed: the base
+# metapackage's dependencies all resolve from it, so no separate prerequisite
+# repository is required.
 packageRepositories:
   # EdgePack base/add-on packages, public signed repository.
-  - codename: "noble"
+  - codename: "resolute"
     url: "https://apt.repos.intel.com/edgepack"
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "stable"
-
-  # NPU prerequisite snapshot repository, required by the base metapackage
-  # below: intel-edge-base-standard pulls in the NPU profile, whose client GPU
-  # compute runtime is published here rather than in the EdgePack repository.
-  # Public Launchpad snapshot; safe to use as-is, but pin/update the snapshot
-  # timestamp per EdgePack release notes.
-  - codename: "noble"
-    url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z"
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f"
-    component: "main"
 
 systemConfig:
   initramfs:
@@ -116,7 +107,7 @@ systemConfig:
     - ubuntu-minimal
     - ubuntu-standard
     - ubuntu-desktop-minimal
-    - gnome-terminal
+    - ptyxis
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
@@ -127,13 +118,17 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    # ── EdgePack: mandatory base (core graphics/media + NPU/IPU + platform-enablement DKMS drivers) ──
-    # Deliberately no Media or Manageability add-ons here — this template exists
-    # to demo the Web UI's "already in template" pre-check against a selection
-    # that locks in only the base runtime, leaving every domain unselected.
+    # edge-gfx-dkms builds a host tool (xe_gen_wa_oob) and needs libc headers, but
+    # only depends on dkms. ICT installs packages in list order, so install
+    # libc6-dev before intel-edge-base-standard.
+    - libc6-dev
+    # ── EdgePack: mandatory base (core graphics/media + platform-enablement DKMS drivers) ──
+    # Deliberately no Media, Manageability or TSN add-ons here — this template
+    # exists to demo the Web UI's "already in template" pre-check against a
+    # selection that locks in only the base runtime, leaving every domain unselected.
     - intel-edge-base-standard
-    # intel-edge-base-realtime is the alternative base profile but is currently
-    # disabled for all OS variants upstream, so it is intentionally omitted here.
+    # intel-edge-base-realtime is the alternative base profile (Ubuntu 26.04 only,
+    # with the ubuntu-realtime kernel). Not used here: this image uses the generic kernel.
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
@@ -150,6 +145,7 @@ systemConfig:
     - language-pack-en-base
     - language-pack-gnome-en
     - language-pack-gnome-en-base
+    - python3-netifaces
     - shim-signed
     - network-manager
     - nano
@@ -158,7 +154,6 @@ systemConfig:
     - cmake
     - git
     - libssl-dev
-    - build-essential
     - apt-transport-https
     - git-lfs
     - libglew-dev
@@ -171,6 +166,8 @@ systemConfig:
     - acpica-tools
     - lsscsi
     - i2c-tools
+    - thermald # Intel Dynamic Thermal Management daemon (thermald.service)
+    - upower # UPower D-Bus service; intel_lpmd segfaults at startup without org.freedesktop.UPower
     # Required for Docker's bridge/NAT networking — install-docker.sh
     # (first-boot provisioning) drops static Docker binaries with no apt
     # dependency resolution, so dockerd needs iptables present already.
@@ -186,13 +183,11 @@ systemConfig:
     - libtool
     - gtk-doc-tools
     - libdbus-1-dev
-    - libxml2-dev
     - libnl-3-dev
     - libnl-genl-3-dev
-    - libsystemd-dev
     - libupower-glib-dev
     - python3-cffi
-    - python3.12-venv
+    - python3-venv
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
@@ -219,7 +214,7 @@ systemConfig:
     # since it needs a real signing key/cert; enable and point at your
     # organization's key material to sign modules and, optionally, retain the
     # signing identity in the image for future on-target DKMS rebuilds after
-    # an HWE kernel update.
+    # a kernel update.
     # secureBoot:
     #   enabled: true
     #   signingKeyPath: /run/secrets/edgepack/module-signing.key
