@@ -592,7 +592,7 @@ func TestRenderProvisioningUnitDefaultModeUnchanged(t *testing.T) {
 		"ExecStartPost=/usr/bin/mkdir -p " + StampDir + "\n" +
 		"ExecStartPost=/usr/bin/touch " + StampDir + "/s\n" +
 		"ExecStartPost=-" + config.ProvisioningReportScript + " ok s\n" +
-		"ExecStopPost=-" + config.ProvisioningReportScript + " failed s %n\n" +
+		"ExecStopPost=-" + config.ProvisioningReportScript + " failed s %n retry\n" +
 		"StandardOutput=journal+console\nStandardError=journal+console\n"
 	if got != want {
 		t.Errorf("default-mode unit changed:\n got:\n%s\nwant:\n%s", got, want)
@@ -760,7 +760,7 @@ func TestRenderProvisioningUnitReportsOutcome(t *testing.T) {
 	for _, stage := range []string{"", config.ProvisioningStageEveryBoot} {
 		unit := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh", Stage: stage}, "", false)
 		okAt, failAt := strings.Index(unit, "ExecStartPost=-"), strings.Index(unit, "ExecStopPost=-")
-		if !strings.Contains(unit, " ok s\n") || !strings.Contains(unit, " failed s %n\n") || okAt < 0 || failAt < okAt {
+		if !strings.Contains(unit, " ok s\n") || !strings.Contains(unit, " failed s %n retry\n") || okAt < 0 || failAt < okAt {
 			t.Errorf("stage %q: hooks missing or misplaced:\n%s", stage, unit)
 		}
 	}
@@ -798,7 +798,16 @@ func runReportWith(t *testing.T, root, systemState string, stubPath bool, env []
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stub := "#!/bin/sh\n[ \"$1\" = is-system-running ] && echo " + systemState + "\nexit 0\n"
+	stub := "#!/bin/sh\necho \"$@\" >> " + shq(root+"/systemctl.log") + "\n" +
+		"[ \"$1\" = is-system-running ] && echo " + systemState + "\n" +
+		// show prints the invocation id; start changes it when STUB_START_NEW_ID is
+		// set, as a unit that really starts does.
+		"if [ \"$1\" = show ]; then\n" +
+		"  [ -z \"$STUB_SHOW_FAILS\" ] || exit 1\n" +
+		"  cat " + shq(root+"/invocation") + " 2>/dev/null\nfi\n" +
+		"if [ \"$1\" = start ]; then\n" +
+		"  [ -z \"$STUB_START_NEW_ID\" ] || echo \"id-$$\" > " + shq(root+"/invocation") + "\n" +
+		"  exit \"${STUB_START_RC:-0}\"\nfi\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1002,7 +1011,8 @@ func TestConfigureProvisioningScriptsNoticeDirs(t *testing.T) {
 	}
 	assertMode(t, root, "usr/libexec/ict-provision-report", 0755)
 	if got := readImageFile(t, root, "usr/libexec/ict-provision-report"); got != string(reportScript) ||
-		!config.IsReservedProvisioningPath(config.ProvisioningReportScript) {
+		!config.IsReservedProvisioningPath(config.ProvisioningReportScript) ||
+		!config.IsReservedProvisioningPath(config.ProvisioningFailedDir+"/x") {
 		t.Error("the embedded report script must be installed and reserved from script destinations")
 	}
 	// A new directory is searchable by everyone; an existing one keeps its mode.
@@ -1015,5 +1025,221 @@ func TestConfigureProvisioningScriptsNoticeDirs(t *testing.T) {
 	bad := newImageRoot(t, map[string]string{"usr/local/sbin/a.sh": "#!/bin/sh\n", "etc/motd.d": "x"})
 	if err := ConfigureProvisioningScripts(bad, scripts, false); err == nil {
 		t.Error("a regular file at /etc/motd.d must fail the build")
+	}
+}
+
+func TestRenderProvisioningUnitStopOnFailure(t *testing.T) {
+	t.Parallel()
+	retried := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "", false)
+	if strings.Contains(retried, "AssertPathExists") || !strings.Contains(retried, " failed s %n retry\n") {
+		t.Errorf("a retried script must not be skipped after a failure:\n%s", retried)
+	}
+	manual := renderProvisioningUnit(config.ProvisioningScript{
+		Name: "m", Final: "/usr/local/sbin/m.sh", StopOnFailure: true,
+	}, "", false)
+	for _, want := range []string{
+		// An assertion, not a condition: a failed condition only skips the unit
+		// and the units that require it would still run.
+		"ConditionPathExists=!" + StampDir + "/m\nAssertPathExists=!" + FailedDir + "/m\n",
+		" failed m %n stop\n",
+	} {
+		if !strings.Contains(manual, want) {
+			t.Errorf("stop-on-failure unit missing %q:\n%s", want, manual)
+		}
+	}
+}
+
+func TestReportScriptStopMode(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	marker := filepath.Join(root, "var/lib/image-composer-tool/provisioning-failed/oep")
+	issue := filepath.Join(root, "etc/issue.d/ict-provision-oep.issue")
+	motd := filepath.Join(root, "etc/motd.d/ict-provision-oep")
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	read := func(p string) string { return readImageFile(t, "/", strings.TrimPrefix(p, "/")) }
+	failed := []string{"SERVICE_RESULT=exit-code"}
+	unit := "ict-provision-000-oep.service"
+
+	// A stop caused by the shutdown records nothing.
+	mustRunReport(t, root, "stopping", []string{"SERVICE_RESULT=exit-code", "EXIT_STATUS=143"}, "failed", "oep", unit, "stop")
+	if exists(marker) || exists(issue) {
+		t.Fatal("a reboot must not record a failure")
+	}
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop")
+	for _, p := range []string{marker, issue, motd} {
+		if !exists(p) {
+			t.Fatalf("%s not written", p)
+		}
+	}
+	if got := read(marker); got != unit+"\n" {
+		t.Errorf("marker = %q, want the unit name so retry can start it", got)
+	}
+	if got := read(issue); !strings.Contains(got, "It does not run again at boot") || !strings.Contains(got, " retry oep\n") {
+		t.Errorf("notice:\n%s", got)
+	}
+	// A retried script's notice says so.
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "retry")
+	if got := read(issue); !strings.Contains(got, "runs again at the next boot") || strings.Contains(got, " retry oep") {
+		t.Errorf("notice:\n%s", got)
+	}
+
+	// retry removes the failure and starts the recorded unit.
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop")
+	if err := os.WriteFile(filepath.Join(root, "systemctl.log"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunReport(t, root, "running", nil, "retry", "oep")
+	if exists(marker) {
+		t.Fatal("retry must remove the marker so the unit starts")
+	}
+	if !exists(issue) || !exists(motd) {
+		t.Fatal("retry must keep the notices until the script succeeds (its ok hook removes them)")
+	}
+	if log := read(filepath.Join(root, "systemctl.log")); !strings.HasSuffix(log, "start "+unit+"\n") ||
+		!strings.Contains(log, "show -p InvocationID --value "+unit+"\n") {
+		t.Errorf("retry ran systemctl %q, want it to read the invocation id and then start %s", log, unit)
+	}
+	if err := runReport(t, root, "running", nil, "retry", "oep"); err == nil {
+		t.Error("retry without a recorded failure must fail")
+	}
+
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop")
+	mustRunReport(t, root, "running", nil, "ok", "oep")
+	if exists(marker) || exists(issue) || exists(motd) {
+		t.Fatal("ok must remove the failure")
+	}
+}
+
+func TestReportScriptRetryKeepsFailureWhenUnitCannotStart(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	marker := filepath.Join(root, "var/lib/image-composer-tool/provisioning-failed/oep")
+	issue := filepath.Join(root, "etc/issue.d/ict-provision-oep.issue")
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	mustRunReport(t, root, "running", []string{"SERVICE_RESULT=exit-code"}, "failed", "oep", "u.service", "stop")
+
+	// systemd refuses the start (a required unit failed): the unit never runs, so
+	// no hook records the failure again. The marker and notice must still be there.
+	err := runReport(t, root, "running", []string{"STUB_START_RC=1"}, "retry", "oep")
+	if err == nil {
+		t.Fatal("retry must report that the unit could not be started")
+	}
+	if !exists(marker) || !exists(issue) {
+		t.Fatal("a retry that could not start the unit must leave the failure recorded")
+	}
+	if got := readImageFile(t, "/", strings.TrimPrefix(marker, "/")); got != "u.service\n" {
+		t.Errorf("restored marker = %q", got)
+	}
+	// While the unit runs the marker is gone (the unit does not start with it),
+	// but the notice stays until the unit's ok hook removes it.
+	mustRunReport(t, root, "running", nil, "retry", "oep")
+	if exists(marker) || !exists(issue) {
+		t.Errorf("after a started retry: marker=%v notice=%v, want the marker gone and the notice kept",
+			exists(marker), exists(issue))
+	}
+}
+
+func TestReportScriptRetryTellsRunFromRejectedStart(t *testing.T) {
+	t.Parallel()
+	marker := func(root string) string {
+		return filepath.Join(root, "var/lib/image-composer-tool/provisioning-failed/oep")
+	}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	tests := []struct {
+		name        string
+		state       string
+		env         []string
+		wantMarker  bool
+		description string
+	}{
+		// The retried script asks for a reboot: systemd cancels the start job, so
+		// systemctl start fails, but the unit did run and the shutdown hook left the
+		// failure unrecorded on purpose. Restoring the marker would block the next boot.
+		{"ran and was stopped by the reboot it asked for", "stopping", []string{"STUB_START_RC=1", "STUB_START_NEW_ID=1"}, false, ""},
+		// The unit ran and failed: its own hook records it, retry adds nothing.
+		{"ran and failed", "running", []string{"STUB_START_RC=1", "STUB_START_NEW_ID=1"}, false, ""},
+		// systemd refused the start (a required unit failed): the unit never ran, so
+		// no hook fired, and that holds while the system is stopping too.
+		{"refused", "running", []string{"STUB_START_RC=1"}, true, ""},
+		{"refused while stopping", "stopping", []string{"STUB_START_RC=1"}, true, ""},
+		// The invocation id cannot be read: assume a rejection, because a script
+		// that stays blocked can be retried again and one that ran unattended cannot.
+		{"refused, id unreadable", "running", []string{"STUB_START_RC=1", "STUB_SHOW_FAILS=1"}, true, ""},
+		{"ran, id unreadable", "running", []string{"STUB_START_RC=1", "STUB_START_NEW_ID=1", "STUB_SHOW_FAILS=1"}, true, ""},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			mustRunReport(t, root, "running", []string{"SERVICE_RESULT=exit-code"}, "failed", "oep", "u.service", "stop")
+			if err := runReport(t, root, tt.state, tt.env, "retry", "oep"); err == nil {
+				t.Fatal("retry must pass on the systemctl failure")
+			}
+			if got := exists(marker(root)); got != tt.wantMarker {
+				t.Errorf("marker restored = %v, want %v", got, tt.wantMarker)
+			}
+		})
+	}
+}
+
+func TestReportScriptNeverBlocksSilently(t *testing.T) {
+	t.Parallel()
+	failed := []string{"SERVICE_RESULT=exit-code"}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	read := func(p string) string { return readImageFile(t, "/", strings.TrimPrefix(p, "/")) }
+
+	// The marker cannot be written: a script that must not be retried is not
+	// blocked, and the notice says it runs again.
+	root := t.TempDir()
+	state := filepath.Join(root, "var/lib/image-composer-tool")
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "provisioning-failed"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunReport(t, root, "running", failed, "failed", "oep", "u.service", "stop")
+	notice := read(filepath.Join(root, "etc/issue.d/ict-provision-oep.issue"))
+	if !strings.Contains(notice, "runs again at the next boot") || strings.Contains(notice, "does not run again") {
+		t.Errorf("without a marker the notice must not claim the script is blocked:\n%s", notice)
+	}
+
+	// No notice can be written: remove the marker so the script is retried
+	// instead of blocked without anyone being told.
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"issue.d", "motd.d"} {
+		if err := os.WriteFile(filepath.Join(root, "etc", d), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runReport(t, root, "running", failed, "failed", "oep", "u.service", "stop"); err == nil {
+		t.Error("a failure notice that cannot be written must be reported")
+	}
+	if exists(filepath.Join(root, "var/lib/image-composer-tool/provisioning-failed/oep")) {
+		t.Error("a blocking marker must not stay when no notice could be shown")
+	}
+}
+
+func TestReportScriptMarkerNamesDoNotCollide(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dir := filepath.Join(root, "var/lib/image-composer-tool/provisioning-failed")
+	failed := []string{"SERVICE_RESULT=exit-code"}
+	// "alpha.tmp" is a valid script name: recording the failure of "alpha" must
+	// not touch its marker.
+	mustRunReport(t, root, "running", failed, "failed", "alpha.tmp", "a.service", "stop")
+	mustRunReport(t, root, "running", failed, "failed", "alpha", "b.service", "retry")
+	if got := readImageFile(t, "/", strings.TrimPrefix(filepath.Join(dir, "alpha.tmp"), "/")); got != "a.service\n" {
+		t.Errorf("marker of alpha.tmp = %q, want it kept", got)
+	}
+	// The same for retry's saved copy: "alpha.retry" keeps its marker.
+	mustRunReport(t, root, "running", failed, "failed", "alpha.retry", "c.service", "stop")
+	mustRunReport(t, root, "running", nil, "retry", "alpha")
+	if _, err := os.Stat(filepath.Join(dir, "alpha.retry")); err != nil {
+		t.Error("retrying alpha removed the marker of alpha.retry")
 	}
 }
