@@ -81,6 +81,23 @@ type PackageRepository struct {
 	Component          string   `yaml:"component,omitempty"`          // Repository component (e.g., "main", "restricted")
 	Priority           int      `yaml:"priority,omitempty"`           // Repository priority (higher numbers = higher priority)
 	AllowPackages      []string `yaml:"allowPackages,omitempty"`      // Optional: specific packages to include from this repo (pinning)
+
+	// The OEP Installer integration sets these for the repositories it
+	// imports: ICT writes the repository's sources list, keyring, and
+	// preferences at these in-image paths, with this content, instead of its
+	// own generated files, so openedge-cli rewriting them on first boot
+	// changes nothing.
+	ListFile        string   `yaml:"-"` // in-image sources list path
+	SourceLines     []string `yaml:"-"` // sources list lines, written as given
+	KeyFile         string   `yaml:"-"` // in-image dearmored keyring path
+	PreferencesFile string   `yaml:"-"` // in-image apt preferences path
+	Preferences     string   `yaml:"-"` // apt preferences content, written as given
+}
+
+// hasOwnFiles reports whether the repository's apt files are written at
+// paths it names rather than ICT's generated locations.
+func (r PackageRepository) hasOwnFiles() bool {
+	return r.ListFile != ""
 }
 
 // ProviderRepoConfig represents the repository configuration for a provider
@@ -202,21 +219,16 @@ type OverlayPolicy struct {
 	// (validate() rejects that combination).
 	ReplaceKernel *ReplaceKernel `yaml:"replaceKernel,omitempty"`
 
-	// AllowDowngrade gates whether preflight permits downgrading a baseline
-	// package to an older version. Like AllowRemoval it is intentionally NOT a
-	// YAML field (the schema rejects it via additionalProperties:false) and
-	// always carries its zero value (false): overlay mode is additive-only in
-	// v1, so downgrades are blocked by default. A future release can surface it.
-	AllowDowngrade bool `yaml:"-"`
+	AllowDowngrade bool `yaml:"allowDowngrade,omitempty"`
 
 	// AllowUpgrade gates whether preflight permits upgrading a baseline package
-	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
+	// to a newer version. It is intentionally
 	// NOT a YAML field (the schema rejects it via additionalProperties:false);
 	// it is instead derived from PackageOperation by validate(), which sets it
 	// true when packageOperation is "additive-and-upgrade" and leaves it false
 	// (the default) for "additive-only". Enabling it lets the deb backend replace
 	// an installed package in place (dpkg -i upgrades), and switches the rpm
-	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
+	// backend to `rpm -U`; downgrades and removals require separate opt-ins.
 	AllowUpgrade bool `yaml:"-"`
 }
 
@@ -450,6 +462,7 @@ type SystemConfig struct {
 	Provisioning    ProvisioningConfig   `yaml:"provisioning,omitempty"`
 	CloudInit       CloudInitConfig      `yaml:"cloudInit,omitempty"`
 	AptPolicy       AptPolicy            `yaml:"aptPolicy,omitempty"`
+	OEPInstaller    OEPInstallerConfig   `yaml:"oepInstaller,omitempty"`
 }
 
 // AdditionalFile stage markers control WHEN an overlay build copies an
@@ -1717,9 +1730,6 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	}
 	// These sections are applied by the create-mode configuration step,
 	// which an overlay build does not run.
-	if !sc.Proxy.IsEmpty() {
-		offending = append(offending, "proxy")
-	}
 	if len(sc.Provisioning.Scripts) > 0 || sc.Provisioning.BeforeLogin != nil {
 		offending = append(offending, "provisioning")
 	}
@@ -1728,6 +1738,9 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	}
 	if !sc.AptPolicy.isEmpty() {
 		offending = append(offending, "aptPolicy")
+	}
+	if !sc.OEPInstaller.IsEmpty() {
+		offending = append(offending, "oepInstaller")
 	}
 
 	if len(offending) == 0 {
@@ -1930,12 +1943,14 @@ func (p *OverlayPolicy) validate() error {
 		// Additive-only: upgrades of baseline packages stay blocked.
 		p.AllowUpgrade = false
 	case OverlayPackageOpAdditiveAndUpgrade:
-		// Opt in to upgrading already-installed baseline packages. Downgrades stay
-		// gated off (AllowDowngrade stays false).
 		p.AllowUpgrade = true
 	default:
 		return fmt.Errorf("overlayPolicy.packageOperation must be %q or %q (got %q)",
 			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
+	}
+	if p.AllowDowngrade && op != OverlayPackageOpAdditiveAndUpgrade {
+		return fmt.Errorf("overlayPolicy.allowDowngrade requires packageOperation %q (got %q)",
+			OverlayPackageOpAdditiveAndUpgrade, op)
 	}
 	// Package removal is a strictly more invasive operation than an in-place
 	// upgrade, so it is only permitted under additive-and-upgrade. Under

@@ -197,6 +197,7 @@ func TestWriteProxyConfig(t *testing.T) {
 	t.Parallel()
 	root := newImageRoot(t, map[string]string{
 		"etc/environment": "PATH=\"/usr/bin:/bin\"\nhttp_proxy=\"http://old:1\"\nexport HTTPS_PROXY=old\n",
+		aptProxyFile:      `Acquire::http::Proxy "http://old:3128";`,
 	})
 	p := config.ProxyConfig{
 		HTTPProxy:  "http://proxy.example.com:3128",
@@ -228,7 +229,7 @@ func TestWriteProxyConfig(t *testing.T) {
 			t.Errorf("apt proxy config missing %q:\n%s", want, apt)
 		}
 	}
-	for _, unwanted := range []string{"ftp::Proxy", "Proxy::.example.com", "10.0.0.0"} {
+	for _, unwanted := range []string{"http://old:3128", "ftp::Proxy", "Proxy::.example.com", "10.0.0.0"} {
 		if strings.Contains(apt, unwanted) {
 			t.Errorf("apt proxy config must not contain %q:\n%s", unwanted, apt)
 		}
@@ -244,15 +245,45 @@ func TestWriteProxyConfig(t *testing.T) {
 
 func TestWriteProxyConfigNoProxyOnly(t *testing.T) {
 	t.Parallel()
-	root := newImageRoot(t, nil)
-	if err := WriteProxyConfig(root, config.ProxyConfig{NoProxy: "localhost"}); err != nil {
-		t.Fatalf("WriteProxyConfig: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, aptProxyFile)); err == nil {
-		t.Error("apt proxy config must not be written without a proxy URL")
+	for _, existing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(existing), func(t *testing.T) {
+			t.Parallel()
+			otherAptFile := "etc/apt/apt.conf.d/90other-proxy"
+			oldProxy := `Acquire::http::Proxy "http://old:3128";`
+			files := map[string]string{}
+			if existing {
+				files[aptProxyFile] = oldProxy
+				files[otherAptFile] = oldProxy
+			}
+			root := newImageRoot(t, files)
+
+			if err := WriteProxyConfig(root, config.ProxyConfig{NoProxy: "localhost"}); err != nil {
+				t.Fatalf("WriteProxyConfig: %v", err)
+			}
+
+			if _, err := os.Stat(filepath.Join(root, aptProxyFile)); !os.IsNotExist(err) {
+				t.Errorf("apt proxy config must be absent without a proxy URL, got %v", err)
+			}
+			if existing {
+				if got := readImageFile(t, root, otherAptFile); got != oldProxy {
+					t.Errorf("unrelated apt proxy config = %q, want %q", got, oldProxy)
+				}
+			}
+		})
 	}
 	if err := WriteProxyConfig("/nonexistent", config.ProxyConfig{}); err != nil {
 		t.Errorf("empty proxy must be a no-op, got %v", err)
+	}
+}
+
+func TestWriteProxyConfigAptRemoveFailure(t *testing.T) {
+	t.Parallel()
+	root := newImageRoot(t, map[string]string{aptProxyFile + "/child": "content"})
+
+	err := WriteProxyConfig(root, config.ProxyConfig{NoProxy: "localhost"})
+
+	if err == nil || !strings.Contains(err.Error(), "remove apt proxy config") {
+		t.Fatalf("WriteProxyConfig error = %v, want apt proxy removal error", err)
 	}
 }
 

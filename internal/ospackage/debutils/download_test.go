@@ -984,76 +984,100 @@ func TestLoadDebPackageInfosFromMetadataCache(t *testing.T) {
 	}
 }
 
+func writeCachedDebs(t *testing.T, dir string, files ...string) {
+	t.Helper()
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0644); err != nil {
+			t.Fatalf("failed to write cached deb %s: %v", f, err)
+		}
+	}
+}
+
 func TestIsDebPackageCacheOutdated(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeCachedDebs(t, tmpDir, "bash_1.0_amd64.deb", "coreutils_1.0_amd64.deb")
 
-	if err := os.WriteFile(filepath.Join(tmpDir, "bash_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
-		t.Fatalf("failed to write cached deb: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "coreutils_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
-		t.Fatalf("failed to write cached deb: %v", err)
-	}
-
-	outdated, missing, _, err := isDebPackageCacheOutdated([]string{"bash", "coreutils"}, tmpDir)
+	outdated, missing, present, err := isDebPackageCacheOutdated(
+		[]string{"bash_1.0_amd64.deb", "coreutils_1.0_amd64.deb"}, tmpDir)
 	if err != nil {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
 	if outdated {
 		t.Fatalf("expected cache to be up-to-date, missing=%v", missing)
 	}
+	if len(present) != 2 || present[0] != "bash_1.0_amd64.deb" || present[1] != "coreutils_1.0_amd64.deb" {
+		t.Fatalf("present = %v, want required files in order", present)
+	}
 
-	outdated, missing, _, err = isDebPackageCacheOutdated([]string{"bash", "curl"}, tmpDir)
+	outdated, missing, _, err = isDebPackageCacheOutdated(
+		[]string{"bash_1.0_amd64.deb", "curl_8.0_amd64.deb"}, tmpDir)
 	if err != nil {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
 	if !outdated {
 		t.Fatalf("expected cache to be outdated")
 	}
-	if len(missing) != 1 || missing[0] != "curl" {
-		t.Fatalf("expected missing=[curl], got %v", missing)
+	if len(missing) != 1 || missing[0] != "curl_8.0_amd64.deb" {
+		t.Fatalf("expected missing=[curl_8.0_amd64.deb], got %v", missing)
 	}
 }
 
-func TestIsDebPackageCacheOutdated_VersionPinnedRequirement(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	if err := os.WriteFile(filepath.Join(tmpDir, "intel-dlstreamer_2025.2.0_amd64.deb"), []byte("x"), 0644); err != nil {
-		t.Fatalf("failed to write cached deb: %v", err)
-	}
-
-	outdated, missing, _, err := isDebPackageCacheOutdated([]string{"intel-dlstreamer_2025.2.0"}, tmpDir)
-	if err != nil {
-		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
-	}
-
-	if !outdated {
-		t.Fatalf("expected version-pinned requirement to be reported missing when only exact cached package names are checked")
-	}
-	if len(missing) != 1 || missing[0] != "intel-dlstreamer_2025.2.0" {
-		t.Fatalf("expected missing=[intel-dlstreamer_2025.2.0], got %v", missing)
-	}
-}
-
-func TestIsDebPackageCacheOutdated_EpochPinnedRequirement(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	if err := os.WriteFile(filepath.Join(tmpDir, "qemu-system_9.1.0+git20251029-ppa1-noble3_amd64.deb"), []byte("x"), 0644); err != nil {
-		t.Fatalf("failed to write cached deb: %v", err)
-	}
-
-	outdated, missing, _, err := isDebPackageCacheOutdated(
-		[]string{"qemu-system_4:9.1.0+git20251029-ppa1-noble3"},
-		tmpDir,
+// A cached older version of a package must not satisfy a requirement for the
+// newly resolved version: it would leave the stale file in the build while the
+// repo index (and a fresh-cache build) uses the newer one.
+func TestIsDebPackageCacheOutdated_OlderCachedVersionIsMissing(t *testing.T) {
+	const (
+		oldDeb = "ca-certificates_20260816ubuntu0.24.04.1_all.deb"
+		newDeb = "ca-certificates_20260816ubuntu0.24.04.2_all.deb"
 	)
+	tmpDir := t.TempDir()
+	writeCachedDebs(t, tmpDir, oldDeb, "bash_5.2_amd64.deb")
+
+	outdated, missing, present, err := isDebPackageCacheOutdated(
+		[]string{newDeb, "bash_5.2_amd64.deb"}, tmpDir)
 	if err != nil {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
-
 	if !outdated {
-		t.Fatalf("expected epoch-pinned requirement to be reported missing when only exact cached package names are checked")
+		t.Fatalf("expected cache with only the older version to be outdated")
 	}
-	if len(missing) != 1 || missing[0] != "qemu-system_4:9.1.0+git20251029-ppa1-noble3" {
-		t.Fatalf("expected missing=[qemu-system_4:9.1.0+git20251029-ppa1-noble3], got %v", missing)
+	if len(missing) != 1 || missing[0] != newDeb {
+		t.Fatalf("missing = %v, want [%s]", missing, newDeb)
+	}
+	for _, f := range present {
+		if f == oldDeb {
+			t.Fatalf("stale file %s reported as satisfying the requirement", oldDeb)
+		}
+	}
+}
+
+func TestIsDebPackageCacheOutdated_IgnoresUnrequiredCachedFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeCachedDebs(t, tmpDir, "bash_5.2_amd64.deb", "leftover_1.0_amd64.deb")
+
+	outdated, _, present, err := isDebPackageCacheOutdated([]string{"bash_5.2_amd64.deb"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+	if outdated {
+		t.Fatalf("expected cache to be up-to-date")
+	}
+	if len(present) != 1 || present[0] != "bash_5.2_amd64.deb" {
+		t.Fatalf("present = %v, want only the required file", present)
+	}
+}
+
+func TestIsDebPackageCacheOutdated_EpochVersionFile(t *testing.T) {
+	const f = "qemu-system_4%3a9.1.0+git20251029-ppa1-noble3_amd64.deb"
+	tmpDir := t.TempDir()
+	writeCachedDebs(t, tmpDir, f)
+
+	outdated, missing, _, err := isDebPackageCacheOutdated([]string{f}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+	if outdated {
+		t.Fatalf("expected epoch-versioned cached file to satisfy requirement, missing=%v", missing)
 	}
 }
 
