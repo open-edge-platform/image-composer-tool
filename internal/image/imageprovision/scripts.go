@@ -1,6 +1,7 @@
 package imageprovision
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,6 +27,14 @@ const (
 	StampDir = config.ProvisioningStampDir
 )
 
+// noticeDirs are the image directories the failure notices are written to.
+var noticeDirs = []string{"etc/issue.d", "etc/motd.d"}
+
+// reportScript is installed at config.ProvisioningReportScript.
+//
+//go:embed report.sh
+var reportScript []byte
+
 // ProvisioningUnitName returns the unit name for the index-th script in
 // execution order. The zero-padded index keeps `systemctl list-units`
 // sorted in run order.
@@ -37,7 +46,8 @@ func ProvisioningUnitName(index int, script config.ProvisioningScript) string {
 // oneshot unit for it, in the given order; each unit requires the previous one,
 // so a failed script stops the scripts after it. A first-boot script's unit
 // writes a stamp file only when the script succeeds, so a failed script is
-// retried on the next boot; every-boot scripts run on each boot.
+// retried on the next boot; every-boot scripts run on each boot. A failed
+// script is also shown at the login prompt and after login until it succeeds.
 //
 // By default the units run after network-online.target and, when cloud-init is
 // running, after cloud-final.service, started at boot by an enabled trigger
@@ -51,6 +61,26 @@ func ConfigureProvisioningScripts(installRoot string, scripts []config.Provision
 	return withRoot(installRoot, func(root *os.Root) error {
 		if err := root.MkdirAll(wantsDir, 0755); err != nil {
 			return fmt.Errorf("creating /%s: %w", wantsDir, err)
+		}
+		if err := writeFile(root, rel(config.ProvisioningReportScript), reportScript, 0755); err != nil {
+			return err
+		}
+		// The failure notices are written here at runtime. Creating the directories
+		// now also fails the build if something already made one a regular file.
+		for _, dir := range noticeDirs {
+			info, existed := root.Stat(dir)
+			if err := root.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("creating /%s for provisioning failure notices: %w", dir, err)
+			}
+			// Login programs read the notices as the logging-in user: a directory made
+			// here gets 0755 whatever the umask; an existing one keeps its mode.
+			if existed != nil {
+				if err := root.Chmod(dir, 0755); err != nil {
+					return fmt.Errorf("setting the mode of /%s: %w", dir, err)
+				}
+			} else if perm := info.Mode().Perm(); perm&0o005 != 0o005 {
+				log.Warnf("/%s has mode %o, so failure notices are not shown to users other than root", dir, perm)
+			}
 		}
 		previous := ""
 		units := make([]string, 0, len(scripts))
@@ -136,6 +166,9 @@ func writeUnitSection(b *strings.Builder, script config.ProvisioningScript, afte
 	if beforeLogin {
 		b.WriteString("Before=systemd-user-sessions.service apt-daily.service apt-daily-upgrade.service\n")
 	}
+	// On an immutable image /etc is writable only once setup-overlay.service has
+	// run, and the failure notice goes there. Ordering against an absent unit is ignored.
+	b.WriteString("After=setup-overlay.service\n")
 	if after != "" {
 		// Requires= (not just After=) so a failed script stops the ones after it.
 		fmt.Fprintf(b, "Requires=%s\n", after)
@@ -158,6 +191,7 @@ func writeServiceSection(b *strings.Builder, script config.ProvisioningScript, b
 		fmt.Fprintf(b, "ExecStartPost=/usr/bin/mkdir -p %s\n", StampDir)
 		fmt.Fprintf(b, "ExecStartPost=/usr/bin/touch %s/%s\n", StampDir, script.Name)
 	}
+	fmt.Fprintf(b, "ExecStartPost=-%s ok %s\n", config.ProvisioningReportScript, script.Name)
 	if script.RebootAfter {
 		// After the stamp: the reboot job is queued only once success is recorded.
 		b.WriteString("ExecStartPost=/usr/bin/systemctl reboot --no-block\n")
@@ -169,6 +203,9 @@ func writeServiceSection(b *strings.Builder, script config.ProvisioningScript, b
 	if timeout > 0 {
 		fmt.Fprintf(b, "TimeoutStartSec=%d\n", timeout)
 	}
+	// Runs after a failed or timed-out start; the leading "-" keeps a problem
+	// in the report from changing the unit's result.
+	fmt.Fprintf(b, "ExecStopPost=-%s failed %s %%n\n", config.ProvisioningReportScript, script.Name)
 	b.WriteString("StandardOutput=journal+console\nStandardError=journal+console\n")
 }
 
