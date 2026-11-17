@@ -2,6 +2,7 @@ package ubuntu
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/overlay"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
+	"github.com/open-edge-platform/image-composer-tool/internal/oepinstaller"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -97,6 +100,14 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 		return p.overlayPreProcess(template)
 	}
 
+	oepOutput, err := applyOEPInstaller(template)
+	if err != nil {
+		return err
+	}
+	// Apply the OEP Installer's apt preferences when resolving packages; PostProcess
+	// clears them when the build ends.
+	debutils.ConfigurePins(oepinstaller.Pins(oepOutput))
+
 	// Generate apt sources file from packageRepositories
 	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
 		return fmt.Errorf("failed to generate apt sources from repositories: %w", err)
@@ -112,6 +123,11 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to download image packages: %w", err)
 	}
 	template.FinishDownloadImagePkgsTimer()
+	if oepOutput != nil {
+		if err := oepinstaller.CheckKernel(oepOutput, resolvedKernelImages(template.FullPkgListBom)); err != nil {
+			return fmt.Errorf("systemConfig.oepInstaller: %w", err)
+		}
+	}
 	if templateAwareChrootEnv, ok := p.chrootEnv.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
 		templateAwareChrootEnv.SetBuildTemplate(template)
 	}
@@ -249,6 +265,8 @@ func (p *ubuntu) buildIsoImage(template *config.ImageTemplate) error {
 }
 
 func (p *ubuntu) PostProcess(template *config.ImageTemplate, err error) error {
+	// The pins are process-wide; they must not outlive the build that set them.
+	defer debutils.ConfigurePins(nil)
 	if template.IsOverlayMode() {
 		return p.overlayPostProcess(template, err)
 	}
@@ -438,8 +456,65 @@ func (p *ubuntu) downloadImagePkgs(template *config.ImageTemplate) error {
 	// Narrow a kernel glob to the concrete package selected during download so the
 	// install step (including an installer ISO's separate process) installs only it.
 	template.ResolvedKernelPackages = debutils.ExpandKernelInstallNames(template.GetKernelPackages(), debutils.SelectedKernelPackages())
+	// Pin "name_version*" requests (from the OEP Installer) to the version selected,
+	// so the install step installs exactly that version.
+	template.SystemConfig.Packages = debutils.PinVersionPrefixRequests(template.SystemConfig.Packages, fullPkgListBom)
 
 	return nil
+}
+
+// addOEPInstallerFirstBoot downloads the CLI, the template's or the one out
+// was generated with, and adds the first-boot installation that runs it. The
+// template's section is completed from out first, so the first boot and the
+// template the image carries name exactly what was installed.
+func addOEPInstallerFirstBoot(template *config.ImageTemplate, out *oepinstaller.Output) error {
+	resolved, cli, err := oepinstaller.Resolve(template.SystemConfig.OEPInstaller, out)
+	if err != nil {
+		return err
+	}
+	template.SystemConfig.OEPInstaller = resolved
+	if err := os.MkdirAll(config.TempDir(), 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", config.TempDir(), err)
+	}
+	workDir, err := os.MkdirTemp(config.TempDir(), "oep-installer-*")
+	if err != nil {
+		return fmt.Errorf("creating a work directory: %w", err)
+	}
+	return oepinstaller.AddFirstBoot(template, cli, workDir)
+}
+
+// applyOEPInstaller imports the OEP Installer's published package
+// requirements into the template, or returns nil when the template has no
+// systemConfig.oepInstaller section. The caller checks the kernel after the
+// packages are resolved, because a meta-package selects the kernel image.
+func applyOEPInstaller(template *config.ImageTemplate) (*oepinstaller.Output, error) {
+	o := template.SystemConfig.OEPInstaller
+	if o.IsEmpty() {
+		return nil, nil
+	}
+	out, err := oepinstaller.Load(o)
+	if err != nil {
+		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
+	}
+	if err := oepinstaller.Apply(template, out); err != nil {
+		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
+	}
+	if err := addOEPInstallerFirstBoot(template, out); err != nil {
+		return nil, fmt.Errorf("systemConfig.oepInstaller: %w", err)
+	}
+	return out, nil
+}
+
+// resolvedKernelImages returns the names of the kernel images among the
+// resolved packages, including those that only a kernel meta-package pulls in.
+func resolvedKernelImages(resolved []ospackage.PackageInfo) []string {
+	var images []string
+	for _, pi := range resolved {
+		if oepinstaller.IsKernelImage(pi.Name) {
+			images = append(images, pi.Name)
+		}
+	}
+	return images
 }
 
 // buildUserRepoList converts user-defined package repositories from the image

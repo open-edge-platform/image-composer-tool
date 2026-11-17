@@ -1,0 +1,48 @@
+"schema-version": "1"
+"cli-version": "main"
+"cli-url": "https://github.com/example/oep-installer-cli/blob/main/rendered/openedge-cli-federal-aerospace"
+"module-list": ["handheld_blueprint"]
+---
+"pkg-list": ["curl","ca-certificates"]
+---
+"pkg-list": ["https://ppa.example.com/pool/main/l/level-zero-loader/libze1_1.28.2-1~24.04~ppa1_amd64.deb"]
+---
+"pkg-list": ["linux-image-generic-7.0"]
+"kernel-cmdline": ["xe.max_vfs=7","xe.force_probe=*","modprobe.blacklist=i915","udmabuf.list_limit=8192"]
+---
+"pkg-list": ["gcc-13","g++-13","linux-headers-7.0.0-38-generic"]
+---
+"pkg-list": ["linux-tools-common","linux-tools-7.0.0-38-generic"]
+---
+"gpg-key": "https://keyserver.example.com/pks/lookup?op=get&search=0x4D098D70AFBE5E1F"
+"key-file": "/etc/apt/keyrings/kobuk-ppa.gpg"
+"apt-source": "deb [signed-by=/etc/apt/keyrings/kobuk-ppa.gpg] https://ppa.example.com/kobuk-team/intel-graphics/ubuntu/20260830T100000Z/ noble main"
+"apt-list-file": "/etc/apt/sources.list.d/kobuk-ppa.list"
+---
+"repo-name": "edge.example.com"
+"gpg-key": "http://edge.example.com/edgepack-test-publickey.asc"
+"key-file": "/etc/apt/keyrings/intel-edge-pack.gpg"
+"apt-source": "deb [signed-by=/etc/apt/keyrings/intel-edge-pack.gpg] http://edge.example.com/edgepack-test noble unstable"
+"apt-list-file": "/etc/apt/sources.list.d/intel-edge-pack.list"
+"apt-pref": ["Package: *","Pin: origin edge.example.com","Pin-Priority: 1001","Package: intel-edge-npu","Pin: version 1.0*","Pin-Priority: 1002"]
+"apt-pref-file": "/etc/apt/preferences.d/intel-edge-pack.pref"
+---
+"pkg-list": ["intel-edge-base-standard=1.0*"]
+---
+"gpg-key": "https://keyserver.example.com/pks/lookup?op=get&search=0x4D098D70AFBE5E1F"
+"key-file": "/etc/apt/keyrings/kobuk-ppa.gpg"
+"apt-source": "deb [signed-by=/etc/apt/keyrings/kobuk-ppa.gpg] https://ppa.example.com/kobuk-team/intel-graphics/ubuntu/20260830T100000Z/ noble main"
+"apt-list-file": "/etc/apt/sources.list.d/kobuk-ppa.list"
+---
+"repo-name": "edge.example.com"
+"gpg-key": "http://edge.example.com/edgepack-test-publickey.asc"
+"key-file": "/etc/apt/keyrings/intel-edge-pack.gpg"
+"apt-source": "deb [signed-by=/etc/apt/keyrings/intel-edge-pack.gpg] http://edge.example.com/edgepack-test noble unstable"
+"apt-list-file": "/etc/apt/sources.list.d/intel-edge-pack.list"
+"apt-pref": ["Package: *","Pin: origin edge.example.com","Pin-Priority: 1001","Package: intel-edge-npu","Pin: version 1.0*","Pin-Priority: 1002"]
+"apt-pref-file": "/etc/apt/preferences.d/intel-edge-pack.pref"
+---
+"pkg-list": ["intel-edge-npu=1.0*"]
+---
+"pkg-list": ["ubuntu-server","-ubuntu-desktop"]
+---

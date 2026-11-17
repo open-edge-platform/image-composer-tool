@@ -100,7 +100,10 @@ const MODE_LABELS: Record<LayoutMode, string> = {
   offset: 'Offset-based (manual)',
 }
 
-export function DiskStep() {
+// overlay is true for an overlay-mode template. Its partition layout comes from
+// the baseline image it builds on, so the partition table and partitions are
+// not offered for editing; size, max size and artifacts still apply.
+export function DiskStep({ overlay = false }: { overlay?: boolean }) {
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
   const setDisk = useStore((s) => s.setDisk)
@@ -116,7 +119,10 @@ export function DiskStep() {
   const [showPartitions, setShowPartitions] = useState(false)
 
   const offsets = useMemo(() => (disk ? computeOffsets(disk) : []), [disk])
-  const issues = useMemo(() => (disk ? validateDisk(disk, { imageType }) : null), [disk, imageType])
+  const issues = useMemo(
+    () => (disk ? validateDisk(disk, { imageType, overlay }) : null),
+    [disk, imageType, overlay],
+  )
 
   if (!disk) {
     return (
@@ -238,7 +244,7 @@ export function DiskStep() {
               </option>
             ))}
           </select>
-          {!disk.size && disk.partitions.length > 0 && (
+          {!overlay && !disk.size && disk.partitions.length > 0 && (
             <button
               type="button"
               onClick={() => patch({ size: suggestedSize(disk) })}
@@ -249,16 +255,19 @@ export function DiskStep() {
           )}
         </div>
         <p className="mt-1 text-xs text-slate-400">
-          {disk.size
+          {overlay
+            ? 'Grows the baseline image to this size before packages are installed; the last partition is extended to fill it. Leave it empty to keep the baseline size.'
+            : disk.size
             ? `Partitions use ${used} MiB of ${sizeBytes === null ? '?' : Math.floor(sizeBytes / MIB)} MiB${restNote}`
             : 'The resolved template sets no disk size — ISO images size their own media. Leave it empty to keep it that way.'}
         </p>
       </div>
 
       {/* maxSize is an overlay-mode ceiling (internal/config/config.go). It is
-          shown only when the resolved template already has one: offering it on a
-          create-mode template would advertise a field the build ignores. */}
-      {disk.maxSize !== '' && (
+          shown for an overlay template, or when the resolved template already
+          has one: offering it on a create-mode template would advertise a field
+          the build ignores. */}
+      {(overlay || disk.maxSize !== '') && (
         <div className="mb-4">
           <label htmlFor="disk-max-size" className={LABEL}>
             Max Size
@@ -277,145 +286,154 @@ export function DiskStep() {
         </div>
       )}
 
-      <div className="mb-4">
-        <span className={LABEL}>Partition Table</span>
-        <div className="flex flex-wrap gap-2">
-          {PARTITION_TABLE_TYPES.map((t) => {
-            const selected = disk.partitionTableType === t
-            // A disabled type stays clickable-looking only while it is the
-            // template's own current value, which the user can move away from
-            // but not return to.
-            const lockedReason = selected ? undefined : PARTITION_TABLE_DISABLED[t]
-            return (
-              <button
-                key={t}
-                type="button"
-                disabled={lockedReason !== undefined}
-                title={lockedReason}
-                aria-pressed={selected}
-                onClick={() => patch({ partitionTableType: t as PartitionTableType })}
-                className={`${CHIP_BASE} ${selected ? CHIP_ON : lockedReason ? CHIP_LOCKED : CHIP_OFF}`}
-              >
-                {t.toUpperCase()}
-              </button>
-            )
-          })}
-        </div>
-        {PARTITION_TABLE_DISABLED[disk.partitionTableType] === undefined && (
-          <p className="mt-1 text-xs text-slate-400">
-            {PARTITION_TABLE_DISABLED.mbr}
-          </p>
-        )}
-      </div>
-
-      <div className="mb-4">
-        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-          <SectionToggle
-            open={showPartitions}
-            onToggle={() => setShowPartitions((v) => !v)}
-            summary={
-              disk.partitions.map((p, i) => p.name || p.id || `#${i + 1}`).join(' · ') || 'none'
-            }
-          >
-            Partitions
-          </SectionToggle>
-          {showPartitions && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">Edit by</span>
-              {(Object.keys(MODE_LABELS) as LayoutMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  aria-pressed={disk.layoutMode === m}
-                  onClick={() => setDisk(setLayoutMode(disk, m))}
-                  className={`cursor-pointer select-none rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-                    disk.layoutMode === m ? CHIP_ON : CHIP_OFF
-                  }`}
-                >
-                  {MODE_LABELS[m]}
-                </button>
-              ))}
+      {overlay ? (
+        <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          This image builds on an existing baseline image and keeps its partition
+          table and partitions, so they cannot be changed here.
+        </p>
+      ) : (
+        <>
+          <div className="mb-4">
+            <span className={LABEL}>Partition Table</span>
+            <div className="flex flex-wrap gap-2">
+              {PARTITION_TABLE_TYPES.map((t) => {
+                const selected = disk.partitionTableType === t
+                // A disabled type stays clickable-looking only while it is the
+                // template's own current value, which the user can move away from
+                // but not return to.
+                const lockedReason = selected ? undefined : PARTITION_TABLE_DISABLED[t]
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={lockedReason !== undefined}
+                    title={lockedReason}
+                    aria-pressed={selected}
+                    onClick={() => patch({ partitionTableType: t as PartitionTableType })}
+                    className={`${CHIP_BASE} ${selected ? CHIP_ON : lockedReason ? CHIP_LOCKED : CHIP_OFF}`}
+                  >
+                    {t.toUpperCase()}
+                  </button>
+                )
+              })}
             </div>
-          )}
-        </div>
+            {PARTITION_TABLE_DISABLED[disk.partitionTableType] === undefined && (
+              <p className="mt-1 text-xs text-slate-400">
+                {PARTITION_TABLE_DISABLED.mbr}
+              </p>
+            )}
+          </div>
 
-        {showPartitions && (
-          <>
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              {disk.partitions.length === 0 ? (
-                <p className="py-2 text-center text-sm text-slate-400">No partitions defined.</p>
-              ) : (
-                <>
-                  <div className={`${ROW_GRID} border border-transparent p-2 pb-1`}>
-                    <span className={COL_HEAD}>Name</span>
-                    <span className={COL_HEAD}>Label</span>
-                    <span className={COL_HEAD}>FS{REQUIRED}</span>
-                    <span className={COL_HEAD}>
-                      Size{disk.layoutMode === 'offset' && <em className="font-normal"> (derived)</em>}
-                    </span>
-                    <span className={COL_HEAD}>Mount Point</span>
-                    <span className={COL_HEAD}>
-                      Start{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
-                    </span>
-                    <span className={COL_HEAD}>
-                      End{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
-                    </span>
-                    <span className={COL_HEAD} />
-                  </div>
-                  {disk.partitions.map((p, i) => (
-                    <PartitionRow
-                      key={p.key}
-                      partition={p}
-                      index={i}
-                      count={disk.partitions.length}
-                      mode={disk.layoutMode}
-                      offsets={offsets[i]}
-                      sizeMiB={partitionSizeMiB(disk, i)}
-                      unit={rowUnits[p.key] ?? defaultRowUnit(p)}
-                      rest={isRest(disk, i)}
-                      restForced={i === disk.partitions.length - 1 && disk.extendLastPartitionToFillDisk}
-                      restIsLast={restIsLast}
-                      expanded={!!expanded[p.key]}
-                      onToggleExpand={() => setExpanded((s) => ({ ...s, [p.key]: !s[p.key] }))}
-                      onUnitChange={(u) => setRowUnits((s) => ({ ...s, [p.key]: u }))}
-                      onChange={(next) => patchPart(i, next)}
-                      onMove={(delta) => movePart(i, delta)}
-                      onRemove={() => patch({ partitions: disk.partitions.filter((_, j) => j !== i) })}
-                    />
+          <div className="mb-4">
+            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+              <SectionToggle
+                open={showPartitions}
+                onToggle={() => setShowPartitions((v) => !v)}
+                summary={
+                  disk.partitions.map((p, i) => p.name || p.id || `#${i + 1}`).join(' · ') || 'none'
+                }
+              >
+                Partitions
+              </SectionToggle>
+              {showPartitions && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">Edit by</span>
+                  {(Object.keys(MODE_LABELS) as LayoutMode[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      aria-pressed={disk.layoutMode === m}
+                      onClick={() => setDisk(setLayoutMode(disk, m))}
+                      className={`cursor-pointer select-none rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                        disk.layoutMode === m ? CHIP_ON : CHIP_OFF
+                      }`}
+                    >
+                      {MODE_LABELS[m]}
+                    </button>
                   ))}
-                </>
+                </div>
               )}
-              <button
-                type="button"
-                onClick={() => patch({ partitions: appendPartition(disk) })}
-                className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
-              >
-                + Add Partition
-              </button>
             </div>
 
-            <p className="mt-1 text-xs text-slate-400">
-              {disk.layoutMode === 'size'
-                ? `The schema stores start/end offsets, not sizes. Partitions are laid out contiguously from the first start offset, so Start and End are calculated for you.${restAt >= 0 && restAt < disk.partitions.length - 1 ? ' Partitions after the one using the remaining space are placed back from the end of the disk.' : ''}`
-                : 'Start and End are written to the template exactly as typed. Gaps and overlaps are reported but not corrected.'}
-            </p>
+            {showPartitions && (
+              <>
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  {disk.partitions.length === 0 ? (
+                    <p className="py-2 text-center text-sm text-slate-400">No partitions defined.</p>
+                  ) : (
+                    <>
+                      <div className={`${ROW_GRID} border border-transparent p-2 pb-1`}>
+                        <span className={COL_HEAD}>Name</span>
+                        <span className={COL_HEAD}>Label</span>
+                        <span className={COL_HEAD}>FS{REQUIRED}</span>
+                        <span className={COL_HEAD}>
+                          Size{disk.layoutMode === 'offset' && <em className="font-normal"> (derived)</em>}
+                        </span>
+                        <span className={COL_HEAD}>Mount Point</span>
+                        <span className={COL_HEAD}>
+                          Start{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
+                        </span>
+                        <span className={COL_HEAD}>
+                          End{disk.layoutMode === 'size' && <em className="font-normal"> (calc)</em>}
+                        </span>
+                        <span className={COL_HEAD} />
+                      </div>
+                      {disk.partitions.map((p, i) => (
+                        <PartitionRow
+                          key={p.key}
+                          partition={p}
+                          index={i}
+                          count={disk.partitions.length}
+                          mode={disk.layoutMode}
+                          offsets={offsets[i]}
+                          sizeMiB={partitionSizeMiB(disk, i)}
+                          unit={rowUnits[p.key] ?? defaultRowUnit(p)}
+                          rest={isRest(disk, i)}
+                          restForced={i === disk.partitions.length - 1 && disk.extendLastPartitionToFillDisk}
+                          restIsLast={restIsLast}
+                          expanded={!!expanded[p.key]}
+                          onToggleExpand={() => setExpanded((s) => ({ ...s, [p.key]: !s[p.key] }))}
+                          onUnitChange={(u) => setRowUnits((s) => ({ ...s, [p.key]: u }))}
+                          onChange={(next) => patchPart(i, next)}
+                          onMove={(delta) => movePart(i, delta)}
+                          onRemove={() => patch({ partitions: disk.partitions.filter((_, j) => j !== i) })}
+                        />
+                      ))}
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => patch({ partitions: appendPartition(disk) })}
+                    className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
+                  >
+                    + Add Partition
+                  </button>
+                </div>
 
-            {/* The template loader rejects this for ISO and, for RAW, unless the
-                last partition is the rootfs (internal/config/validate/validate.go).
-                The checkbox stays enabled so a template that arrives with it set can
-                still be unset; validateDisk reports the violation. */}
-            <label className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-              <input
-                type="checkbox"
-                checked={disk.extendLastPartitionToFillDisk}
-                onChange={(e) => patch({ extendLastPartitionToFillDisk: e.target.checked })}
-              />
-              Force the last partition to fill the remaining disk space
-              {isIso && <span className="text-slate-400">— not supported for ISO images</span>}
-            </label>
-          </>
-        )}
-      </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  {disk.layoutMode === 'size'
+                    ? `The schema stores start/end offsets, not sizes. Partitions are laid out contiguously from the first start offset, so Start and End are calculated for you.${restAt >= 0 && restAt < disk.partitions.length - 1 ? ' Partitions after the one using the remaining space are placed back from the end of the disk.' : ''}`
+                    : 'Start and End are written to the template exactly as typed. Gaps and overlaps are reported but not corrected.'}
+                </p>
+
+                {/* The template loader rejects this for ISO and, for RAW, unless the
+                    last partition is the rootfs (internal/config/validate/validate.go).
+                    The checkbox stays enabled so a template that arrives with it set can
+                    still be unset; validateDisk reports the violation. */}
+                <label className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={disk.extendLastPartitionToFillDisk}
+                    onChange={(e) => patch({ extendLastPartitionToFillDisk: e.target.checked })}
+                  />
+                  Force the last partition to fill the remaining disk space
+                  {isIso && <span className="text-slate-400">— not supported for ISO images</span>}
+                </label>
+              </>
+            )}
+          </div>
+        </>
+      )}
 
       <ArtifactsSection
         artifacts={disk.artifacts}
@@ -439,7 +457,7 @@ export function DiskStep() {
         </button>
         {showYaml && (
           <pre className="max-h-80 overflow-auto border-t border-slate-200 px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
-            {diskYamlFragment(disk)}
+            {diskYamlFragment(disk, { overlay })}
           </pre>
         )}
       </div>

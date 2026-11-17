@@ -1,16 +1,20 @@
 package imageos
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
@@ -57,6 +61,12 @@ type MockChrootEnv struct {
 	updatedRepoDir      string
 	updatedTargetArch   string
 	updatedWithSudo     bool
+	mountedHostPath     string
+	mountLog            []string // ordered "mount <path>" / "umount <path>" host mount points
+	umountErr           error
+	// realRoot, when set, makes path conversion and mount points behave like
+	// the real ChrootEnv: chroot paths are prefixed with this root.
+	realRoot string
 }
 
 func (m *MockChrootEnv) GetChrootImageBuildDir() string {
@@ -70,7 +80,18 @@ func (m *MockChrootEnv) GetChrootEnvEssentialPackageList() ([]string, error) {
 	return m.essentialPkgs, nil
 }
 
+// host maps a chroot path to its host path; a no-op unless realRoot is set.
+func (m *MockChrootEnv) host(chrootPath string) string {
+	if m.realRoot != "" {
+		return filepath.Join(m.realRoot, chrootPath)
+	}
+	return chrootPath
+}
+
 func (m *MockChrootEnv) GetChrootEnvHostPath(chrootPath string) (string, error) {
+	if m.realRoot != "" {
+		return m.host(chrootPath), nil
+	}
 	if m.hostPath != "" {
 		return m.hostPath, nil
 	}
@@ -78,6 +99,12 @@ func (m *MockChrootEnv) GetChrootEnvHostPath(chrootPath string) (string, error) 
 }
 
 func (m *MockChrootEnv) GetChrootEnvPath(installRoot string) (string, error) {
+	if m.realRoot != "" {
+		if !strings.HasPrefix(installRoot, m.realRoot+"/") {
+			return "", fmt.Errorf("path %s is not a subpath of chroot env root %s", installRoot, m.realRoot)
+		}
+		return strings.TrimPrefix(installRoot, m.realRoot), nil
+	}
 	if m.chrootPath != "" {
 		return m.chrootPath, nil
 	}
@@ -115,9 +142,14 @@ func (m *MockChrootEnv) GetChrootPkgCacheDir() string {
 func (m *MockChrootEnv) MountChrootSysfs(chrootPath string) error  { return nil }
 func (m *MockChrootEnv) UmountChrootSysfs(chrootPath string) error { return nil }
 func (m *MockChrootEnv) MountChrootPath(hostFullPath, chrootPath, mountFlags string) error {
+	m.mountedHostPath = hostFullPath
+	m.mountLog = append(m.mountLog, "mount "+m.host(chrootPath))
 	return nil
 }
-func (m *MockChrootEnv) UmountChrootPath(chrootPath string) error                       { return nil }
+func (m *MockChrootEnv) UmountChrootPath(chrootPath string) error {
+	m.mountLog = append(m.mountLog, "umount "+m.host(chrootPath))
+	return m.umountErr
+}
 func (m *MockChrootEnv) CopyFileFromHostToChroot(hostFilePath, chrootPath string) error { return nil }
 func (m *MockChrootEnv) CopyFileFromChrootToHost(hostFilePath, chrootPath string) error { return nil }
 func (m *MockChrootEnv) UpdateChrootLocalRepoMetadata(chrootRepoDir string, targetArch string, sudo bool) error {
@@ -2882,6 +2914,268 @@ func TestDebLocalRepo(t *testing.T) {
 	}
 
 	t.Log("DEB local repo tests completed")
+}
+
+func writeDebFiles(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create %s: %v", dir, err)
+	}
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", n, err)
+		}
+	}
+}
+
+func listDebFiles(t *testing.T, dir string) (names []string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", dir, err)
+	}
+	return names
+}
+
+// mockDebRepoShell stubs the shell commands of the install-root repository setup and teardown.
+func mockDebRepoShell(t *testing.T, aptUpdateErr error) {
+	t.Helper()
+	original := shell.Default
+	t.Cleanup(func() { shell.Default = original })
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: `sudo rm -f .*?/etc/apt/sources\.list\.d/\*`, Output: ""},
+		{Pattern: `sudo chroot .* apt-get update`, Output: "", Error: aptUpdateErr},
+		{Pattern: `sudo rm -f .*/(local\.list|policy-rc\.d)`, Error: fmt.Errorf("template file removed")},
+		{Pattern: `sudo mkdir -p '?.*?/usr/sbin'?`, Output: ""},
+		{Pattern: `sudo cp '.*/filewrite-.*' '.*/usr/sbin/policy-rc\.d'`, Output: ""},
+	})
+}
+
+func TestStageResolvedDebs(t *testing.T) {
+	const (
+		resolved = "ca-certificates_20260816ubuntu0.24.04.2_all.deb"
+		stale    = "ca-certificates_20260816ubuntu0.24.04.3_all.deb"
+		bash     = "bash_5.2_amd64.deb"
+	)
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	stageDir := t.TempDir()
+	writeDebFiles(t, cacheDir, resolved, stale, bash, "unrelated_1.0_amd64.deb")
+
+	if err := stageResolvedDebs(cacheDir, stageDir, []string{resolved, bash}); err != nil {
+		t.Fatalf("stageResolvedDebs failed: %v", err)
+	}
+	if got := listDebFiles(t, stageDir); len(got) != 2 || got[0] != bash || got[1] != resolved {
+		t.Fatalf("staged files = %v, want [%s %s]", got, bash, resolved)
+	}
+
+	for _, bad := range []string{"curl_8.0_amd64.deb", "../" + bash, ""} {
+		if err := stageResolvedDebs(cacheDir, t.TempDir(), []string{bad}); err == nil {
+			t.Fatalf("expected an error staging %q", bad)
+		}
+	}
+}
+
+// Staging copies only across filesystems, so test the copy directly: intact, and cancellable.
+func TestCopyDebFile(t *testing.T) {
+	src, dst := filepath.Join(t.TempDir(), "big.deb"), filepath.Join(t.TempDir(), "big.deb")
+	content := bytes.Repeat([]byte("0123456789"), 250<<10) // 2.5 MiB: several chunks
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyDebFile(src, dst); err != nil {
+		t.Fatalf("copyDebFile failed: %v", err)
+	}
+	if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("copied content differs (err=%v)", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	defer runctx.SetContext(ctx)()
+	if err := copyDebFile(src, filepath.Join(t.TempDir(), "x.deb")); err != context.Canceled {
+		t.Fatalf("copy under a cancelled context error = %v, want context.Canceled", err)
+	}
+}
+
+// newTestImageOs builds an ImageOs whose chroot root is not "/" and whose mock
+// prefixes chroot paths with it, like the real chroot environment does.
+func newTestImageOs(t *testing.T, sysName string, cacheDebs, fullPkgList []string) (*ImageOs, *MockChrootEnv) {
+	t.Helper()
+	testDir := t.TempDir()
+	configDir := filepath.Join(testDir, "config")
+	writeDebFiles(t, filepath.Join(configDir, "chrootenvconfigs"), "local.list")
+	cacheDir := filepath.Join(testDir, "pkg-cache")
+	writeDebFiles(t, cacheDir, cacheDebs...)
+	chrootRoot := filepath.Join(testDir, "chroot")
+	buildDir := filepath.Join(chrootRoot, "workspace", "imagebuild")
+	installRoot := filepath.Join(buildDir, sysName)
+	writeDebFiles(t, filepath.Join(installRoot, "etc", "apt", "sources.list.d"))
+	mock := &MockChrootEnv{
+		realRoot:            chrootRoot,
+		chrootImageBuildDir: buildDir,
+		targetOsConfigDir:   configDir,
+		chrootPkgCacheDir:   cacheDir,
+		pkgType:             "deb",
+	}
+	template := createTestImageTemplate()
+	template.FullPkgList = fullPkgList
+	return &ImageOs{installRoot: installRoot, chrootEnv: mock, template: template}, mock
+}
+
+// The image's repository must hold only the packages this build resolved, for the bootstrap as
+// well as the installation: APT takes the highest version it sees. The template is named like a
+// fixed staging directory would be, to check staging never touches the install root.
+func TestUseResolvedDebRepo(t *testing.T) {
+	const (
+		resolved = "base-files_13ubuntu10.2_amd64.deb"
+		higher   = "base-files_13ubuntu10.3_amd64.deb"
+	)
+	mockDebRepoShell(t, nil)
+	coord := runctx.New()
+	runctx.Set(coord)
+	t.Cleanup(runctx.Clear)
+	imageOs, mock := newTestImageOs(t, "cache-repo-resolved", []string{resolved, higher}, []string{resolved})
+	cacheDir := mock.chrootPkgCacheDir
+	marker := filepath.Join(imageOs.installRoot, "etc", "os-release")
+	writeDebFiles(t, filepath.Dir(marker), "os-release")
+
+	restore, err := imageOs.useResolvedDebRepo()
+	if err != nil {
+		t.Fatalf("useResolvedDebRepo failed: %v", err)
+	}
+	stageDir := imageOs.resolvedRepoDir
+	if stageDir == "" || stageDir == cacheDir || stageDir == imageOs.installRoot {
+		t.Fatalf("resolved repository dir = %q, want a separate staging directory", stageDir)
+	}
+	if got := listDebFiles(t, stageDir); len(got) != 1 || got[0] != resolved {
+		t.Fatalf("repository holds %v, want only [%s]", got, resolved)
+	}
+	if fi, err := os.Stat(stageDir); err != nil || fi.Mode().Perm() != 0o755 { // apt's _apt user must read it
+		t.Fatalf("staging directory mode = %v (err %v), want 0755", fi, err)
+	}
+	repo := mock.host(chroot.ChrootRepoDir)
+	if want := []string{"umount " + repo, "mount " + repo}; !reflect.DeepEqual(mock.mountLog, want) {
+		t.Fatalf("mount log = %v, want %v", mock.mountLog, want)
+	}
+
+	// The install-root repository is built from the same staged directory.
+	if err := imageOs.initDebLocalRepoWithinInstallRoot(imageOs.installRoot); err != nil {
+		t.Fatalf("initDebLocalRepoWithinInstallRoot failed: %v", err)
+	}
+	if mock.mountedHostPath != stageDir {
+		t.Fatalf("install root repository mounted %q, want %q", mock.mountedHostPath, stageDir)
+	}
+	// The teardown must unmount the very path the mount side mounted: a host path
+	// would be prefixed with the chroot root twice and be treated as unmounted.
+	repoMount := filepath.Join(imageOs.installRoot, "cdrom", "cache-repo")
+	if err := imageOs.deInitDebLocalRepoWithinInstallRoot(imageOs.installRoot); err != nil {
+		t.Fatalf("deInitDebLocalRepoWithinInstallRoot failed: %v", err)
+	}
+	if got := mock.mountLog[len(mock.mountLog)-2:]; !reflect.DeepEqual(got, []string{"mount " + repoMount, "umount " + repoMount}) {
+		t.Fatalf("install root repository mount log = %v", got)
+	}
+
+	// Customization may create these after the teardown; restore must not remove them.
+	writeDebFiles(t, filepath.Join(imageOs.installRoot, "etc", "apt", "sources.list.d"), "local.list")
+	writeDebFiles(t, filepath.Join(imageOs.installRoot, "usr", "sbin"), "policy-rc.d")
+	if err := restore(); err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+	if imageOs.resolvedRepoDir != "" || mock.mountedHostPath != cacheDir || coord.Len() != 0 {
+		t.Fatalf("not restored: dir=%q, last mount=%q, cleanups=%d", imageOs.resolvedRepoDir, mock.mountedHostPath, coord.Len())
+	}
+	if _, err := os.Stat(stageDir); !os.IsNotExist(err) {
+		t.Fatalf("staged directory was not removed (err=%v)", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("install root content was removed: %v", err)
+	}
+}
+
+// An interrupted build tears the staged repository down through the cancellation coordinator,
+// removing the staged copy only once its mounts are released.
+func TestUseResolvedDebRepoCleanupOnCancel(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mount busy=%v", busy), func(t *testing.T) {
+			coord := runctx.New()
+			runctx.Set(coord)
+			t.Cleanup(runctx.Clear)
+			imageOs, mock := newTestImageOs(t, "test-image", []string{"bash_5.2_amd64.deb"}, []string{"bash_5.2_amd64.deb"})
+			if _, err := imageOs.useResolvedDebRepo(); err != nil {
+				t.Fatalf("useResolvedDebRepo failed: %v", err)
+			}
+			if busy {
+				mock.umountErr = fmt.Errorf("target is busy")
+			}
+
+			residual := coord.Run(context.Background())
+			_, err := os.Stat(imageOs.resolvedRepoDir)
+			if gone := os.IsNotExist(err); gone == busy || (len(residual) == 1) != busy {
+				t.Fatalf("busy=%v: staged directory removed=%v, residual=%v", busy, gone, residual)
+			}
+		})
+	}
+}
+
+// If the install-root repository fails to initialize after mounting, installImagePkgs returns before
+// registering its teardown, so the restore must release that mount, keeping the staged copy until it has.
+func TestUseResolvedDebRepoRestoreAfterPartialInit(t *testing.T) {
+	coord := runctx.New()
+	runctx.Set(coord)
+	t.Cleanup(runctx.Clear)
+	mockDebRepoShell(t, fmt.Errorf("apt-get update failed"))
+	imageOs, mock := newTestImageOs(t, "test-image", []string{"bash_5.2_amd64.deb"}, []string{"bash_5.2_amd64.deb"})
+
+	restore, err := imageOs.useResolvedDebRepo()
+	if err != nil {
+		t.Fatalf("useResolvedDebRepo failed: %v", err)
+	}
+	stageDir := imageOs.resolvedRepoDir
+	if err := imageOs.initDebLocalRepoWithinInstallRoot(imageOs.installRoot); err == nil {
+		t.Fatalf("expected the repository setup to fail")
+	}
+	repo := filepath.Join(imageOs.installRoot, "cdrom", "cache-repo")
+	if !slices.Contains(mock.mountLog, "mount "+repo) {
+		t.Fatalf("install root repository was not mounted: %v", mock.mountLog)
+	}
+
+	mock.umountErr = fmt.Errorf("target is busy")
+	if err := restore(); err == nil {
+		t.Fatalf("restore succeeded although the mount could not be released")
+	}
+	if _, err := os.Stat(stageDir); err != nil || coord.Len() != 1 {
+		t.Fatalf("staged dir (err=%v) or cleanup (registered=%d) dropped while still mounted", err, coord.Len())
+	}
+
+	mock.umountErr, mock.mountLog = nil, nil
+	if err := restore(); err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+	if !slices.Contains(mock.mountLog, "umount "+repo) {
+		t.Fatalf("install root repository was not unmounted: %v", mock.mountLog)
+	}
+	if _, err := os.Stat(stageDir); !os.IsNotExist(err) || coord.Len() != 0 {
+		t.Fatalf("staged dir not removed (err=%v) or cleanup still registered (%d)", err, coord.Len())
+	}
+}
+
+func TestUseResolvedDebRepoLeavesCacheAloneWhenNotApplicable(t *testing.T) {
+	for _, fullPkgList := range [][]string{nil, {"curl_8.0_amd64.deb"}} {
+		imageOs, mock := newTestImageOs(t, "test-image", []string{"bash_5.2_amd64.deb"}, fullPkgList)
+		restore, err := imageOs.useResolvedDebRepo()
+		if (err != nil) != (fullPkgList != nil) {
+			t.Fatalf("useResolvedDebRepo error = %v, resolved list %v", err, fullPkgList)
+		}
+		if err == nil && restore() != nil {
+			t.Fatalf("restore failed")
+		}
+		if len(mock.mountLog) != 0 || imageOs.resolvedRepoDir != "" || len(listDebFiles(t, mock.chrootImageBuildDir)) != 1 {
+			t.Fatalf("cache mount or staging changed (list %v): log %v", fullPkgList, mock.mountLog)
+		}
+	}
 }
 
 // TestUmountDiskFromChroot tests the umountDiskFromChroot functionality
