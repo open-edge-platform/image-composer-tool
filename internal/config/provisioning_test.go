@@ -106,7 +106,7 @@ func TestParseProvisioningSections(t *testing.T) {
 func TestStopOnFailureSurvivesTemplateDump(t *testing.T) {
 	t.Parallel()
 	yamlText := strings.Replace(provisioningTemplateYAML, "        rebootAfter: true\n",
-		"        stopOnFailure: true\n", 1)
+		"        stopOnFailure: true\n        recoveryHint: \"as edge run ~/.local/bin/openedge-cli resume\"\n", 1)
 	if yamlText == provisioningTemplateYAML {
 		t.Fatal("test input not found in the template")
 	}
@@ -128,7 +128,7 @@ func TestStopOnFailureSurvivesTemplateDump(t *testing.T) {
 			got = sc
 		}
 	}
-	if !got.StopOnFailure {
+	if !got.StopOnFailure || got.RecoveryHint != "as edge run ~/.local/bin/openedge-cli resume" {
 		t.Errorf("failure handling lost in the template dump: %+v", got)
 	}
 }
@@ -278,10 +278,26 @@ func TestValidateProvisioningScripts(t *testing.T) {
 			s.Stage = ProvisioningStageEveryBoot
 			s.RebootAfter = true
 		}, false, true},
-		{"stopOnFailure", func(s *ProvisioningScript) { s.StopOnFailure = true }, false, false},
+		{"stopOnFailure with a hint", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = "as edge run ~/.local/bin/openedge-cli resume"
+		}, false, false},
 		{"stopOnFailure on an every-boot script", func(s *ProvisioningScript) {
 			s.Stage = ProvisioningStageEveryBoot
 			s.StopOnFailure = true
+		}, false, true},
+		{"hint without stopOnFailure", func(s *ProvisioningScript) { s.RecoveryHint = "fix it" }, false, true},
+		{"hint with a backslash", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = `fix \n it`
+		}, false, true},
+		{"hint with a newline", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = "fix\nit"
+		}, false, true},
+		{"hint too long", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = strings.Repeat("x", 201)
 		}, false, true},
 		{"env value too long", func(s *ProvisioningScript) { s.Env = map[string]string{"A": strings.Repeat("x", 257)} }, false, true},
 	}

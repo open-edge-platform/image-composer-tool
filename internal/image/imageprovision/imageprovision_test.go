@@ -906,7 +906,7 @@ func TestReportScriptIgnoresScriptPath(t *testing.T) {
 	// The script keeps its trusted PATH although the environment's puts a template's directory first.
 	env := []string{"PATH=" + evil + ":/usr/bin:/bin", "SERVICE_RESULT=exit-code"}
 	issue := filepath.Join(root, "etc/issue.d/ict-provision-x.issue")
-	for i, args := range [][]string{{"failed", "x", "u.service"}, {"ok", "x"}} {
+	for i, args := range [][]string{{"failed", "x", "u.service"}, {"ok", "x"}, {"done", "x"}} {
 		if err := runReportWith(t, root, "running", false, env, args...); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
@@ -1036,12 +1036,13 @@ func TestRenderProvisioningUnitStopOnFailure(t *testing.T) {
 	}
 	manual := renderProvisioningUnit(config.ProvisioningScript{
 		Name: "m", Final: "/usr/local/sbin/m.sh", StopOnFailure: true,
+		RecoveryHint: `run "x" --resume 100% $HOME`,
 	}, "", false)
 	for _, want := range []string{
 		// An assertion, not a condition: a failed condition only skips the unit
 		// and the units that require it would still run.
 		"ConditionPathExists=!" + StampDir + "/m\nAssertPathExists=!" + FailedDir + "/m\n",
-		" failed m %n stop\n",
+		" failed m %n stop \"run \\\"x\\\" --resume 100%% $$HOME\"\n",
 	} {
 		if !strings.Contains(manual, want) {
 			t.Errorf("stop-on-failure unit missing %q:\n%s", want, manual)
@@ -1065,7 +1066,7 @@ func TestReportScriptStopMode(t *testing.T) {
 	if exists(marker) || exists(issue) {
 		t.Fatal("a reboot must not record a failure")
 	}
-	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop")
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop", "run it by hand")
 	for _, p := range []string{marker, issue, motd} {
 		if !exists(p) {
 			t.Fatalf("%s not written", p)
@@ -1074,8 +1075,15 @@ func TestReportScriptStopMode(t *testing.T) {
 	if got := read(marker); got != unit+"\n" {
 		t.Errorf("marker = %q, want the unit name so retry can start it", got)
 	}
-	if got := read(issue); !strings.Contains(got, "It does not run again at boot") || !strings.Contains(got, " retry oep\n") {
+	if got := read(issue); !strings.Contains(got, "It does not run again at boot") || !strings.Contains(got, " retry oep\n") ||
+		!strings.Contains(got, "Or finish it by hand (run it by hand), then clear this notice: sudo ") ||
+		!strings.Contains(got, " done oep\n") {
 		t.Errorf("notice:\n%s", got)
+	}
+	// Without a hint there is no by-hand line.
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop")
+	if got := read(issue); strings.Contains(got, "by hand") {
+		t.Errorf("notice without a hint:\n%s", got)
 	}
 	// A retried script's notice says so.
 	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "retry")
@@ -1107,6 +1115,30 @@ func TestReportScriptStopMode(t *testing.T) {
 	mustRunReport(t, root, "running", nil, "ok", "oep")
 	if exists(marker) || exists(issue) || exists(motd) {
 		t.Fatal("ok must remove the failure")
+	}
+
+	stamp := filepath.Join(root, "var/lib/image-composer-tool/provisioned/oep")
+	mustRunReport(t, root, "running", failed, "failed", "oep", unit, "stop")
+	mustRunReport(t, root, "running", nil, "done", "oep")
+	if exists(marker) || exists(issue) || !exists(stamp) {
+		t.Fatal("done must remove the failure and record the script as complete")
+	}
+}
+
+func TestReportScriptDoneKeepsFailureWhenStampFails(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	marker := filepath.Join(root, "var/lib/image-composer-tool/provisioning-failed/oep")
+	mustRunReport(t, root, "running", []string{"SERVICE_RESULT=exit-code"}, "failed", "oep", "u.service", "stop")
+	// A file where the stamp directory must be makes the stamp unwritable.
+	if err := os.WriteFile(filepath.Join(root, "var/lib/image-composer-tool/provisioned"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runReport(t, root, "running", nil, "done", "oep"); err == nil {
+		t.Fatal("done must fail when the stamp cannot be written")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("the failure must stay recorded when the script could not be marked complete")
 	}
 }
 

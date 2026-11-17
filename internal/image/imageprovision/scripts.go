@@ -52,7 +52,7 @@ func ProvisioningUnitName(index int, script config.ProvisioningScript) string {
 // script is also recorded and shown at the login prompt and after login until
 // it succeeds. A script with StopOnFailure is not retried at all: its unit fails
 // to start on later boots, and blocks the scripts after it, until an
-// administrator retries it.
+// administrator retries it or clears the failure.
 //
 // By default the units run after network-online.target and, when cloud-init is
 // running, after cloud-final.service, started at boot by an enabled trigger
@@ -220,8 +220,19 @@ func writeServiceSection(b *strings.Builder, script config.ProvisioningScript, b
 	if script.StopOnFailure {
 		mode = "stop"
 	}
-	fmt.Fprintf(b, "ExecStopPost=-%s failed %s %%n %s\n", config.ProvisioningReportScript, script.Name, mode)
+	report := fmt.Sprintf("ExecStopPost=-%s failed %s %%n %s", config.ProvisioningReportScript, script.Name, mode)
+	if script.RecoveryHint != "" {
+		report += " " + quoteUnitArg(script.RecoveryHint)
+	}
+	b.WriteString(report + "\n")
 	b.WriteString("StandardOutput=journal+console\nStandardError=journal+console\n")
+}
+
+// quoteUnitArg quotes s as one systemd command-line argument, escaping what
+// systemd would otherwise interpret (backslash, quote, % and $).
+func quoteUnitArg(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`, `$`, `$$`)
+	return `"` + r.Replace(s) + `"`
 }
 
 // renderProvisioningTrigger renders the unit that queues the script units
