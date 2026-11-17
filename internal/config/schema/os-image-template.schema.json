@@ -329,8 +329,15 @@
           "type": "string",
           "enum": ["preserve", "exclusive"],
           "description": "Live installer only: 'preserve' (default) puts the installed OS first in the firmware BootOrder and keeps the existing BootOrder after it; 'exclusive' leaves only the installed OS in BootOrder. Existing boot entries are kept, except entries labelled exactly 'ICT' from an earlier install, which are replaced"
+        },
+        "timeoutSec": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seconds GRUB shows its menu before booting the default entry (GRUB_TIMEOUT in /etc/default/grub). 0 boots at once. Omit to keep the OS default. GRUB provider only (not allowed with systemd-boot); not applied in overlay mode"
         }
       },
+      "if": { "properties": { "provider": { "const": "systemd-boot" } }, "required": ["provider"] },
+      "then": { "not": { "required": ["timeoutSec"] } },
       "additionalProperties": false
     },
     "Proxy": {
