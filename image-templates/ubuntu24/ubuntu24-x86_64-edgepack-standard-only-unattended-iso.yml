@@ -20,7 +20,7 @@ metadata:
 
 image:
   name: edgepack-standard-only-os-image-ubuntu-unattended
-  version: "24.04.0"
+  version: "24.04.1"
 
 target:
   os: ubuntu
@@ -77,6 +77,18 @@ disk:
 # Ubuntu release; noble here) plus a separate signed prerequisite repository
 # the base metapackage's NPU profile resolves from.
 packageRepositories:
+  # Firefox as a real .deb. Ubuntu's archive only ships a transitional
+  # "firefox" package that installs the snap on first run, and the snap is
+  # never fetched in an offline/first-boot image, so the browser would be
+  # missing. Pin the Mozilla Team PPA build for the firefox package only.
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
+
   # EdgePack base/add-on packages, public signed repository.
   - codename: "noble"
     url: "https://apt.repos.intel.com/edgepack"
