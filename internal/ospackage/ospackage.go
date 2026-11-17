@@ -9,6 +9,7 @@ type PackageInfo struct {
 	License          string // e.g. "Apache-2.0"
 	Version          string // e.g. "7.88.1-10+deb12u5"
 	Arch             string // e.g. "x86_64", "noarch", "src"
+	MultiArch        string
 	URL              string // download URL
 	Checksums        []Checksum
 	Provides         []string // capabilities this package provides (rpm:entry names)

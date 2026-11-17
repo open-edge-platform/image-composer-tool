@@ -61,7 +61,8 @@ type installRequest struct {
 	// package-manager mode that can replace/obsolete an installed package: the rpm
 	// backend switches from `rpm -i` to `rpm -U`. The deb backend ignores it —
 	// `dpkg -i` already upgrades in place and deb has no Obsoletes mechanism.
-	upgrade bool
+	upgrade   bool
+	downgrade bool
 }
 
 // installerBackend installs prepared package artifacts into a mounted baseline
@@ -209,7 +210,8 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// preRemovalBroken holds the failure descriptors already present before the
 	// removal, so the post-install audit acts only on NEW ones.
 	var preRemovalBroken map[string]bool
-	if len(report.ToRemove) > 0 {
+	auditRequired := len(pkgs) > 0 || len(report.ToRemove) > 0
+	if auditRequired {
 		// Fail CLOSED when the audit cannot be established: a force-removal
 		// (--force-depends / --nodeps) with no working whole-database integrity check
 		// could silently leave unrelated baseline packages broken. Rather than run the
@@ -218,9 +220,8 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		// so this is a clean refusal, not a partial state.
 		broken, _, aerr := backend.auditDependencies(rootMount)
 		if aerr != nil {
-			return nil, fmt.Errorf("overlay install: cannot verify dependency integrity for the requested package removal(s) — "+
-				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, dnf for rpm) "+
-				"or drop allowPackageRemoval so no baseline package is removed", aerr)
+			return nil, fmt.Errorf("overlay install: cannot verify dependency integrity for the requested package transaction: "+
+				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, rpm for rpm)", aerr)
 		}
 		preRemovalBroken = make(map[string]bool, len(broken))
 		for _, f := range broken {
@@ -228,10 +229,11 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		}
 		if len(broken) > 0 {
 			sort.Strings(broken)
-			log.Warnf("Overlay install: the baseline already has %d unmet-dependency failure(s) BEFORE the overlay (%s); only NEW failures introduced by the removal will fail the build",
+			log.Warnf("Overlay install: the baseline already has %d unmet-dependency failure(s) BEFORE the overlay (%s); only NEW failures introduced by the transaction will fail the build",
 				len(broken), strings.Join(broken, "; "))
 		}
-
+	}
+	if len(report.ToRemove) > 0 {
 		log.Infof("Overlay install: removing %d baseline package(s) before install (conflict-driven and/or kernel replacement): %s",
 			len(report.ToRemove), strings.Join(report.ToRemove, ", "))
 		if err = backend.removePackages(rootMount, report.ToRemove); err != nil {
@@ -251,12 +253,13 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		// installed package — the obsoletion would silently not happen. An Obsoletes-
 		// driven removal is precisely an approved removal that is not an explicit one, so
 		// it shows up as ApprovedRemovals having more entries than ToRemove.
-		upgradeMode := report.Upgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
+		upgradeMode := report.Upgrades > 0 || report.Downgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
 		if err = backend.install(installRequest{
 			chrootPath:        rootMount,
 			artifactChrootDir: chrootArtifactDir,
 			items:             items,
 			upgrade:           upgradeMode,
+			downgrade:         report.Downgrades > 0,
 		}); err != nil {
 			// A "no space left on device" failure here means the baseline root filled up
 			// while unpacking the added packages. Overlay mode does not auto-grow the
@@ -280,7 +283,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		}
 	}
 
-	// After a force-removal, re-audit the whole installed set's dependency graph. A
+	// After a package transaction, re-audit the whole installed set's dependency graph. A
 	// removal permitted by allowPackageRemoval can orphan an UNRELATED baseline package
 	// that only DEPENDS on the removed one — a reverse-dependency the replacement does
 	// not satisfy (e.g. cloud-initramfs-growroot depends on the removed initramfs-tools).
@@ -292,7 +295,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// Because the policy already consented to removing a baseline package, that consent
 	// cascades to the reverse-dependencies the removal orphaned: each newly-broken
 	// baseline package is removed too, transitively, until the dependency tree is whole.
-	// The package manager's own audit (apt-get check / dnf check) is the ground truth, so
+	// The package manager's own audit (apt-get check / rpm dependency verification) is the ground truth, so
 	// only genuinely-unsatisfiable packages are removed — an alternative dependency the
 	// baseline still satisfies is never mistaken for breakage (which a static reverse-dep
 	// walk over the first-alternative-only baseline metadata could not guarantee).
@@ -308,7 +311,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// set is NOT removed — the build aborts with an actionable error instead, because
 	// removing it would break an invariant stronger than the cascade.
 	var cascadeRemoved []string
-	if len(report.ToRemove) > 0 {
+	if auditRequired {
 		toInstallNames := make(map[string]bool, len(pkgs))
 		for _, p := range pkgs {
 			toInstallNames[p.Name] = true
@@ -324,7 +327,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 			if aerr != nil {
 				// The audit could not run post-install even though it ran pre-removal:
 				// surface it rather than silently skipping the integrity guarantee.
-				return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after removals: %w", aerr)
+				return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after package transaction: %w", aerr)
 			}
 			var newlyBroken []string
 			for _, f := range broken {
@@ -336,6 +339,12 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 				break // dependency tree is whole again
 			}
 			sort.Strings(newlyBroken)
+			if len(report.ToRemove) == 0 {
+				return nil, fmt.Errorf("overlay install: package transaction introduced %d unmet dependency failure(s) "+
+					"that were satisfied before the overlay (%s); upgrade the affected packages with compatible dependencies; "+
+					"no removal cascade is authorized for an install-only transaction:%s",
+					len(newlyBroken), strings.Join(newlyBroken, "; "), formatCommandOutput(out))
+			}
 
 			// Resolve each broken descriptor to two values, refusing to cascade past a
 			// protected (bootloader/kernel) or to-install package:
@@ -370,9 +379,9 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 				// requires the operator to opt in via allowPackageRemoval, so fail closed here
 				// rather than silently purging an unrelated baseline package.
 				if !report.CollateralRemovalAuthorized {
-					return nil, fmt.Errorf("overlay install: the approved removal(s) orphaned %d baseline package(s) that were satisfied before the overlay (%s), "+
+					return nil, fmt.Errorf("overlay install: the package transaction broke dependencies of %d baseline package(s) that were satisfied before the overlay (%s), "+
 						"and removing %q is not authorized — a kernel replacement self-authorizes only its own kernel-family swap, not collateral packages; "+
-						"enable allowPackageRemoval to cascade-remove orphaned packages, or add the missing dependency to the overlay:%s",
+						"upgrade the affected packages or add the missing dependency; allowPackageRemoval is required only for intentional collateral removals:%s",
 						len(newlyBroken), strings.Join(newlyBroken, "; "), name, formatCommandOutput(out))
 				}
 				operand := name
@@ -783,14 +792,17 @@ func (b *rpmInstallerBackend) install(req installRequest) error {
 	// ActionUpgrade under the AllowUpgrade gate, blocked bootable-kernel and
 	// bootloader replacement (ruleKernelImmutable / ruleBootloaderImmutable), and
 	// gated any Obsoletes-driven removal through AllowRemoval — so no unreviewed
-	// replacement can slip through the coarser -U mode. Downgrades never reach
-	// here (preflight leaves AllowDowngrade off), so no --oldpackage is needed.
+	// replacement can slip through the coarser -U mode. Approved downgrades use
+	// --oldpackage; it is never enabled for an ordinary add/upgrade transaction.
 	//
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path rather than an rpm option.
 	op := "-i"
 	if req.upgrade {
 		op = "-U"
+	}
+	if req.downgrade {
+		op = "-U --oldpackage"
 	}
 	cmd := "rpm " + op + " -v -- " + strings.Join(paths, " ")
 	out, err := shell.ExecCmdWithStream(cmd, true, req.chrootPath, nil)
@@ -829,30 +841,62 @@ func (b *rpmInstallerBackend) removePackages(chrootPath string, names []string) 
 	return nil
 }
 
-// auditDependencies runs `dnf check --dependencies`, which inspects the local
-// rpmdb (no network, no metadata refresh) and exits non-zero listing broken
-// dependencies when an installed package requires something no installed package
-// provides — the collateral damage an `rpm -e --nodeps` removal can leave. A clean
-// run returns an empty set; a non-zero exit whose output carries the broken-
-// dependency marker returns the offending package names parsed from the report;
-// any other failure (dnf absent from the baseline, etc.) is returned as an error so
-// the caller skips the check rather than misreporting.
+// auditDependencies verifies dependencies using only the local rpmdb, including
+// on tdnf-only baselines. File checks and verify scripts are disabled. Tool or
+// parsing failures are errors so the caller fails closed before any transaction.
 func (b *rpmInstallerBackend) auditDependencies(chrootPath string) ([]string, string, error) {
-	out, err := shell.ExecCmdSilent("dnf check --dependencies", true, chrootPath, nil)
-	if err == nil {
-		return nil, out, nil // dependency tree is satisfied
+	cmd := "rpm -Va --nofiles --noscripts --nodigest --nosignature"
+	out, err := shell.ExecCmdSilent(cmd, true, chrootPath, []string{"LC_ALL=C"})
+	broken, parseErr := parseRPMDependencyFailures(out)
+	if parseErr != nil {
+		return nil, out, fmt.Errorf("rpm dependency verification report: %w%s", parseErr, formatCommandOutput(out))
 	}
-	if hasUnmetDependencyMarker(out) {
-		broken := parseUnmetDependencyFailures(out)
-		if len(broken) == 0 {
-			// Marked broken but nothing parseable (e.g. a bare "Depsolve Error"): treat
-			// as an integrity-check failure rather than a clean empty result, so the
-			// caller never mistakes an unparseable breakage report for "no new breakage".
-			return nil, out, fmt.Errorf("dnf check reported broken dependencies but no package could be parsed from the report%s", formatCommandOutput(out))
+	if err != nil && len(broken) == 0 {
+		return nil, out, fmt.Errorf("rpm dependency verification could not run: %w%s", err, formatCommandOutput(out))
+	}
+	return broken, out, nil
+}
+
+func parseRPMDependencyFailures(out string) ([]string, error) {
+	var failures []string
+	seen := make(map[string]bool)
+	identity := ""
+	pending := false
+	for _, line := range strings.Split(out, "\n") {
+		text := strings.TrimSpace(line)
+		if text == "" {
+			continue
 		}
-		return broken, out, nil // genuine broken dependencies
+		if strings.HasPrefix(text, "Unsatisfied dependencies for ") && strings.HasSuffix(text, ":") {
+			if pending {
+				return nil, fmt.Errorf("missing requirements for %s", identity)
+			}
+			nevra := strings.TrimSuffix(strings.TrimPrefix(text, "Unsatisfied dependencies for "), ":")
+			identity = rpmNameArch(nevra)
+			if identity == "" || identity == nevra || len(strings.Fields(nevra)) != 1 {
+				return nil, fmt.Errorf("invalid package identity %q", nevra)
+			}
+			pending = true
+			continue
+		}
+		requirement, owner, ok := strings.Cut(text, " is needed by ")
+		owner = strings.TrimPrefix(owner, "(installed) ")
+		if identity == "" || !strings.HasPrefix(line, "\t") || !ok ||
+			strings.TrimSpace(requirement) == "" || rpmNameArch(owner) != identity {
+			return nil, fmt.Errorf("unrecognized dependency diagnostic %q", text)
+		}
+		pending = false
+		descriptor := identity + " | " + strings.TrimSpace(requirement)
+		if !seen[descriptor] {
+			seen[descriptor] = true
+			failures = append(failures, descriptor)
+		}
 	}
-	return nil, out, fmt.Errorf("dnf check could not run: %w%s", err, formatCommandOutput(out))
+	if pending {
+		return nil, fmt.Errorf("missing requirements for %s", identity)
+	}
+	sort.Strings(failures)
+	return failures, nil
 }
 
 func (b *rpmInstallerBackend) verifyInstalled(chrootPath string, pkgs []ResolvedPackage) ([]string, error) {
@@ -922,6 +966,8 @@ func hasUnmetDependencyMarker(out string) bool {
 //     DIFFERENT requirement after the removal (identity unchanged, new pair);
 //   - deb multiarch, where libc6:amd64 and libc6:i386 are distinct instances (the
 //     apt token already carries :arch, so it is kept, NOT trimmed);
+//   - apt's "but <version> is installed" explanation can change after an upgrade,
+//     so only the Depends/Pre-Depends requirement itself is retained;
 //   - rpm version churn, where an upgraded package's NEVRA changes between audits —
 //     so an rpm token (NAME-VERSION-RELEASE.ARCH) is reduced to a version-independent
 //     name.arch identity (see rpmNameArch) that stays equal across the upgrade.
@@ -959,9 +1005,10 @@ func parseUnmetDependencyFailures(out string) []string {
 		fields := strings.Fields(line)
 		switch {
 		case len(fields) >= 2 && fields[1] == ":":
-			// apt-get: "<pkg> : <requirement...>". The apt token is name or name:arch
-			// (no version), so it is a stable identity as-is — keep the arch qualifier.
-			add(fields[0], strings.Join(fields[2:], " "))
+			// apt-get: "<pkg> : <requirement...>". Keep the arch qualifier in the
+			// package identity, but discard apt's version-sensitive explanation after
+			// the dependency clause.
+			add(fields[0], normalizeDebDependencyRequirement(strings.Join(fields[2:], " ")))
 		case len(fields) >= 4 && fields[0] == "package" && fields[2] == "requires":
 			// dnf: "package <nevra> requires <dep>, but none of the providers ..."
 			add(rpmNameArch(fields[1]), strings.Join(fields[3:], " "))
@@ -980,6 +1027,13 @@ func parseUnmetDependencyFailures(out string) []string {
 	}
 	sort.Strings(failures)
 	return failures
+}
+
+func normalizeDebDependencyRequirement(requirement string) string {
+	if i := strings.Index(requirement, " but "); i != -1 {
+		requirement = requirement[:i]
+	}
+	return strings.TrimSpace(requirement)
 }
 
 // brokenDescriptorIdentity returns the package IDENTITY from an audit failure

@@ -282,6 +282,7 @@ func TestPrintPackageStats(t *testing.T) {
 			t.Parallel()
 			// Just ensure it doesn't panic
 			PrintPackageStats(tt.stats)
+			PrintPackagePlan(tt.stats)
 		})
 	}
 }
