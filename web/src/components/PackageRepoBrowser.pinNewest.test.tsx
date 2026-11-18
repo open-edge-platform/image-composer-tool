@@ -361,7 +361,8 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
 
     // The header's version is the template's pin, so its "via" links to
     // where that pin is from, not the repo being browsed.
-    expect(screen.getByText('Already in template')).toBeTruthy()
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('8.4.0-1ppa1')
     expect(screen.queryByText(/via Ubuntu Base/)).toBeNull()
     expect(screen.getByRole('button', { name: '8.3.0-1' }).getAttribute('title')).toBe(
       "8.3.0-1 from Ubuntu Base — replaces the template's own build, 8.4.0-1ppa1 from Intel ECI",

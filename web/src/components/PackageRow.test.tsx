@@ -195,26 +195,28 @@ describe('PackageRow — the version chips', () => {
   })
 })
 
-describe('PackageRow — the template line', () => {
-  const templateLine = () => screen.getByText(/^Already in template/).textContent
+describe('PackageRow — a template package', () => {
+  const modified = () => screen.queryByText('Modified', { selector: 'span' })
 
-  it('asks to pin an unpinned template package only until it is', () => {
+  it('has no line saying it is in the template: the greyed checkbox says so', () => {
     renderRow({ versions: base('3.2.1ubuntu0.1'), locked: true, currentIsFloating: true })
-    expect(templateLine()).toBe('Already in template (unpinned; pin a chip to freeze it)')
+    expect(screen.queryByText(/Already in template/)).toBeNull()
+    expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true)
+    expect(modified()).toBeNull()
   })
 
-  it('says the template had it unpinned once a version overrides it', () => {
+  it('is tagged Modified once a version overrides the template having it unpinned', () => {
+    // apt-transport-https, unpinned in the template, pinned to 3.2.1ubuntu0.1.
     renderRow({
       versions: base('3.2.1ubuntu0.1'),
       locked: true,
       currentIsFloating: true,
       selection: { name: 'pkg', version: '3.2.1ubuntu0.1', repo: 'base' },
     })
-    expect(templateLine()).toBe('Already in template (unpinned)')
-    expect(screen.getByText('Overrides with 3.2.1ubuntu0.1')).toBeTruthy()
+    expect(modified()?.getAttribute('title')).toBe('Template: unpinned · Yours: 3.2.1ubuntu0.1')
   })
 
-  it('says what the template pinned once a different version overrides it', () => {
+  it('is tagged Modified with what the template pinned once a different version overrides it', () => {
     renderRow({
       versions: base('0.42-4build1', '0.42-1ppa1~resolute3'),
       locked: true,
@@ -222,11 +224,16 @@ describe('PackageRow — the template line', () => {
       currentIsFloating: false,
       selection: { name: 'pkg', version: '0.42-4build1', repo: 'base' },
     })
-    expect(templateLine()).toBe('Already in template (pinned to 0.42-1ppa1~resolute3)')
+    expect(modified()?.getAttribute('title')).toBe('Template: pinned to 0.42-1ppa1~resolute3 · Yours: 0.42-4build1')
   })
 
-  it('says nothing more for a template pin left as it is', () => {
+  it('is not tagged Modified while it is left as it is', () => {
     renderRow({ versions: base('0.42-1ppa1~resolute3'), locked: true, currentVersion: '0.42-1ppa1~resolute3', currentIsFloating: false })
-    expect(templateLine()).toBe('Already in template')
+    expect(modified()).toBeNull()
+  })
+
+  it('is not tagged Modified when it is an ordinary added package', () => {
+    renderRow({ versions: base('3.3.0-4'), selection: { name: 'pkg', version: '3.3.0-4', repo: 'base' } })
+    expect(modified()).toBeNull()
   })
 })

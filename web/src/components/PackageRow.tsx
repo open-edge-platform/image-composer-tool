@@ -208,6 +208,18 @@ export function PackageRow({
                   {tag}
                 </span>
               )}
+              {overridden && (
+                // A template package the user changed. The greyed checkbox
+                // already says it's in the template; this says it differs.
+                <span
+                  className="rounded bg-amber-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-amber-800"
+                  title={`Template: ${
+                    currentIsFloating ? 'unpinned' : currentVersion ? `pinned to ${currentVersion}` : 'version resolved at build time'
+                  } · Yours: ${selection?.version || 'unpinned'}`}
+                >
+                  Modified
+                </span>
+              )}
               {!tag && <span className="font-mono text-[11px] text-slate-500">{version}</span>}
               {effective && (
                 // The version a build would install, solid for a pin, dashed
@@ -250,28 +262,6 @@ export function PackageRow({
               <span className="mt-0.5 block text-[11px] text-slate-500">
                 Picking a version here pins {repoLabelFor(versions[0]?.repository ?? '')} instead of{' '}
                 {repoLabelFor(selection!.repo)}.
-              </span>
-            )}
-            {locked && (
-              <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className="font-medium text-slate-500">
-                  Already in template
-                  {overridden
-                    ? // What the override replaces; the header shows the override.
-                      currentIsFloating
-                      ? ' (unpinned)'
-                      : currentVersion
-                        ? ` (pinned to ${currentVersion})`
-                        : ''
-                    : currentIsFloating
-                      ? ' (unpinned; pin a chip to freeze it)'
-                      : ''}
-                </span>
-                {overridden && (
-                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-                    Overrides with {selection?.version || 'unpinned'}
-                  </span>
-                )}
               </span>
             )}
             {onResolve && (
