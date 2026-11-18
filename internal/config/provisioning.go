@@ -86,10 +86,13 @@ type ProvisioningScript struct {
 	// RebootAfter reboots the system once the script has succeeded.
 	RebootAfter bool `yaml:"rebootAfter,omitempty"`
 	// StopOnFailure keeps a failed first-boot script from running again on later
-	// boots: its unit does not start until an administrator runs it again with
-	// ict-provision-report retry. Without it a failed first-boot script is
-	// retried at the next boot.
+	// boots: its unit stays skipped until an administrator runs it again with
+	// ict-provision-report retry, or clears the failure with ict-provision-report
+	// done. Without it a failed first-boot script is retried at the next boot.
 	StopOnFailure bool `yaml:"stopOnFailure,omitempty"`
+	// RecoveryHint is a short sentence, shown in the failure notice, that says
+	// how to finish the script's work by hand. It needs StopOnFailure.
+	RecoveryHint string `yaml:"recoveryHint,omitempty"`
 }
 
 // ProvisioningConfig holds boot-time provisioning scripts.
@@ -434,6 +437,10 @@ var provisioningEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 // Environment= would override them and change how a failure is classified.
 var provisioningReservedEnv = []string{"SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS"}
 
+// provisioningHintRe limits a recovery hint to text that is safe in the failure
+// notice: agetty interprets backslashes in /etc/issue.d files.
+var provisioningHintRe = regexp.MustCompile(`^[ -\[\]-~]{1,200}$`)
+
 // provisioningValueRe keeps an argument or environment value safe to place in
 // a systemd unit: no whitespace, quotes, backslashes, $ (expanded by systemd)
 // or ; (an ExecStart separator). A literal % is allowed and escaped when the
@@ -615,6 +622,13 @@ func validateProvisioningScriptParams(s ProvisioningScript) error {
 	if s.StopOnFailure && s.Stage == ProvisioningStageEveryBoot {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: stopOnFailure needs stage %q; "+
 			"an every-boot script is meant to run on every boot", s.Name, ProvisioningStageFirstBoot)
+	}
+	if s.RecoveryHint != "" && !s.StopOnFailure {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: recoveryHint needs stopOnFailure", s.Name)
+	}
+	if s.RecoveryHint != "" && !provisioningHintRe.MatchString(s.RecoveryHint) {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: recoveryHint must be 1-200 printable "+
+			"ASCII characters without a backslash", s.Name)
 	}
 	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+

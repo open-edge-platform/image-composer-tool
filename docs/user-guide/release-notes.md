@@ -79,6 +79,11 @@
 - **Added**: the script field `stopOnFailure` (first-boot scripts) keeps a failed
   script from running again at every boot. The notice then tells an administrator
   to fix the problem and run `sudo /usr/libexec/ict-provision-report retry <name>`.
+- **Fixed**: the OEP Installer is no longer run again at every boot after it
+  fails. The login notice tells an administrator to fix the problem and run
+  `sudo /usr/libexec/ict-provision-report retry oep-installer`, or to resume by
+  hand and then run `sudo /usr/libexec/ict-provision-report done oep-installer`.
+  Templates can show their own hint with the new `recoveryHint` script field.
 - **Fixed**: on Ubuntu 26.04, `sudo` failed for every user with `cannot open sudoers file /run/ict-oep-installer.d` on boots where the OEP Installer's first-boot script had not run yet, such as before it started and after it had succeeded. The image's sudoers file includes a directory in `/run`, which is empty after each boot, and sudo-rs treats a missing included directory as an error. A `tmpfiles.d` entry now creates the directory at every boot.
 - **Fixed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser pushed the **Back** and **Next** buttons below the bottom of the window on common laptop screens (1440×900, for example). The repository list, package list and **Selected** panel had fixed heights; they now follow the window height, so the buttons stay in view. Each list keeps a minimum height, so on a very short window the page scrolls rather than squeezing the lists below a few rows, and on a tall window the lists grow somewhat taller than before.
 - **Changed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser picks the repository to browse from a **Repository** dropdown instead of a list down the left side, so the package list now spans the full width. Whether the build uses the browsed repository is set with the **Use in builds** checkbox beside the dropdown. The dropdown groups repositories under *Always on* and *Optional* and marks each optional repository in use with ✓, and an *N of M repositories in use* count sits alongside. Package rows are more compact, with the version chips beside the package name rather than under it, so about five packages fit on a 1440×900 screen without scrolling.

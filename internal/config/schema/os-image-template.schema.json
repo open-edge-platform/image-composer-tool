@@ -380,7 +380,8 @@
               },
               "timeoutSec": { "type": "integer", "minimum": 0, "description": "Fail the script's unit if it runs longer than this many seconds; 0 or unset means no limit, except with provisioning.beforeLogin where it means 3600 s" },
               "rebootAfter": { "type": "boolean", "default": false, "description": "Reboot once the script has succeeded; first-boot scripts only, and only on the last script to run" },
-              "stopOnFailure": { "type": "boolean", "default": false, "description": "Do not run a failed first-boot script again on later boots; an administrator runs it again with ict-provision-report retry" }
+              "stopOnFailure": { "type": "boolean", "default": false, "description": "Do not run a failed first-boot script again on later boots; an administrator runs it again with ict-provision-report retry" },
+              "recoveryHint": { "type": "string", "pattern": "^[ -\\[\\]-~]{1,200}$", "description": "Sentence shown in the failure notice that says how to finish the script's work by hand; needs stopOnFailure" }
             },
             "additionalProperties": false
           }

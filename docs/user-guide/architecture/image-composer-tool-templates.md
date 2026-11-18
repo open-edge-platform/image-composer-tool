@@ -1263,7 +1263,8 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters). `SERVICE_RESULT`, `EXIT_CODE` and `EXIT_STATUS` are set by systemd for the failure report and cannot be used |
 | `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit, except with `beforeLogin: true`, where it means 3600 s |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
-| `scripts[].stopOnFailure` | bool | No | Do not run a failed script again on later boots (default: retry at the next boot). `first-boot` scripts only, and not with `imageType: img`, whose root file system is recreated at every boot. The unit fails to start on later boots, so the scripts after it stay blocked, until an administrator runs `sudo /usr/libexec/ict-provision-report retry <name>`, which runs it again. The notice is in `/etc`, so where `/etc` is not persistent it disappears at the next reboot while the script stays blocked |
+| `scripts[].stopOnFailure` | bool | No | Do not run a failed script again on later boots (default: retry at the next boot). `first-boot` scripts only, and not with `imageType: img`, whose root file system is recreated at every boot. The unit fails to start on later boots, so the scripts after it stay blocked, until an administrator runs `sudo /usr/libexec/ict-provision-report retry <name>`, which runs it again, or `... done <name>`, which records it as complete. The notice is in `/etc`, so where `/etc` is not persistent it disappears at the next reboot while the script stays blocked |
+| `scripts[].recoveryHint` | string | No | Sentence shown in the failure notice that says how to finish the script's work by hand. Needs `stopOnFailure`. 1-200 printable ASCII characters, no backslash |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
 execution order), started at boot by `ict-provision-start.service`. Units run after
@@ -1280,7 +1281,7 @@ the command to read its log, `sudo journalctl -u ict-provision-<NNN>-<name>.serv
 The notice stays until the script succeeds on a later boot (on an image whose `/etc` is not
 persistent, such as `imageType: img` or an immutable image with a tmpfs overlay, only until the next
 reboot). A script with `stopOnFailure` is not run again at boot (its unit shows as failed and the
-scripts after it do not start); its notice shows the `retry` command instead. A termination by a reboot or shutdown is
+scripts after it do not start); its notice shows the `retry` command, and the `done` command when it has a `recoveryHint`, instead. A termination by a reboot or shutdown is
 not a failure: a script that reboots the machine to finish a step, as `openedge-cli` does, is not
 reported and runs again after the boot. A unit that fails after its script finished, for example
 when the `rebootAfter` reboot command fails, loses its completion stamp so the script runs again.
@@ -1454,9 +1455,20 @@ On first boot, a generated provisioning script
 `provisioning.scripts`) runs as `user`: the CLI's `setup` command, which saves
 it as `~/.local/bin/openedge-cli`, and then `openedge-cli install` with
 `modules` and `args`. The user has passwordless sudo only while the script
-runs; the grant is kept in `/run`, so it is removed when the script exits and is gone after any reboot, even on an immutable image. The sudoers file that includes the grant directory stays in the image, so a `tmpfiles.d` entry (`/etc/tmpfiles.d/ict-oep-installer.conf`) has systemd create the empty directory at every boot; on Ubuntu 26.04, whose `sudo` is sudo-rs, a missing directory would otherwise stop `sudo` for every user. Like other
-first-boot scripts, it runs again on each boot until it succeeds, including
-after `openedge-cli` reboots the system to finish an installation step. ICT
+runs; the grant is kept in `/run`, so it is removed when the script exits and is gone after any reboot, even on an immutable image. The sudoers file that includes the grant directory stays in the image, so a `tmpfiles.d` entry (`/etc/tmpfiles.d/ict-oep-installer.conf`) has systemd create the empty directory at every boot; on Ubuntu 26.04, whose `sudo` is sudo-rs, a missing directory would otherwise stop `sudo` for every user. The script runs again at the next boot only when
+`openedge-cli` reboots the system to finish an installation step. If
+`openedge-cli` fails, the script is not run again at boot (it has
+`stopOnFailure`): the login prompt and the message of the day tell an
+administrator to read the journal and, after fixing the problem, run
+`sudo /usr/libexec/ict-provision-report retry oep-installer`. That runs the
+script again as the configured user with the temporary sudo grant, so it also
+recovers a failure before `openedge-cli setup` completed, and it works for a user
+without sudo rights of their own. A user who has sudo can instead run
+`~/.local/bin/openedge-cli resume` and then
+`sudo /usr/libexec/ict-provision-report done oep-installer` to clear the
+notice. An `imageType: img` image keeps no state across boots, so there the
+script has neither `stopOnFailure` nor a hint and runs again at every boot until
+it succeeds. ICT
 copies the CLI to `/usr/local/share/oep-installer/` and adds `sudo` to the
 image's packages. Samples that run on top of a blueprint are not part of the
 image; install them afterwards with `openedge-cli install <sample>`.

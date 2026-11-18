@@ -70,6 +70,9 @@ func TestAddFirstBoot(t *testing.T) {
 	}
 	scripts := tmpl.SystemConfig.Provisioning.Scripts
 	got := scripts[len(scripts)-1]
+	if !got.StopOnFailure || got.RecoveryHint != "as edge run ~/.local/bin/openedge-cli resume" {
+		t.Errorf("a failed installer must not be retried at boot, and the notice names its user: %+v", got)
+	}
 	if got.Name != firstBootName || got.Final != firstBootScript || got.Order != 21 ||
 		!slices.Equal(got.Args, []string{"handheld_blueprint", "--edgepack"}) ||
 		got.Env[userEnv] != "edge" || got.Env[cliEnv] != cliFinal {
@@ -146,5 +149,20 @@ func TestAddFirstBootRelativeWorkDir(t *testing.T) {
 	scripts := tmpl.SystemConfig.Provisioning.Scripts
 	if got := scripts[len(scripts)-1]; !filepath.IsAbs(got.Local) {
 		t.Errorf("first-boot script has a relative source %q", got.Local)
+	}
+}
+
+// An img image is a RAM root file system, so no state survives a reboot: the
+// first-boot script cannot be kept from running again, and must not claim it is.
+func TestAddFirstBootOnInitrdImageRunsAgain(t *testing.T) {
+	t.Parallel()
+	tmpl := firstBootTemplate(t)
+	tmpl.Target.ImageType = config.ImageTypeInitrd
+	if err := AddFirstBoot(tmpl, []byte("#!/bin/bash\n"), t.TempDir()); err != nil {
+		t.Fatalf("AddFirstBoot: %v", err)
+	}
+	scripts := tmpl.SystemConfig.Provisioning.Scripts
+	if got := scripts[len(scripts)-1]; got.StopOnFailure || got.RecoveryHint != "" {
+		t.Errorf("an img image keeps no failure state, so the script must be retried at boot: %+v", got)
 	}
 }
