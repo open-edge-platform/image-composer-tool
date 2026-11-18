@@ -192,6 +192,16 @@ export interface ComposeResponse {
   // login. Any entry with satisfied: false must be covered by a credentials
   // entry on the request before a build will start.
   credentials?: CredentialRequirement[]
+  // Present when the resolved template downloads OEP Installer files, which
+  // may need a GitHub token for a private repository.
+  oepInstaller?: OEPInstallerInfo
+}
+
+// Whether a template downloads OEP Installer files, and whether the server
+// already gives builds a GitHub token for them.
+export interface OEPInstallerInfo {
+  uses: boolean
+  serverToken: boolean
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a
@@ -261,6 +271,10 @@ export interface PackageSearchResults {
   query: string
   total: number
   packages: PackageSearchResult[]
+  // Repos with an index the server couldn't load, so their packages may be
+  // missing from `packages`. Absent when every index loaded (and from an
+  // older backend that doesn't report it).
+  unavailableRepos?: string[]
 }
 
 // The Edge Pack grouping for one target (from GET /edge-pack): the same
@@ -371,6 +385,20 @@ export interface Artifact {
 export function artifactTypeLabel(type: string | undefined): string {
   const t = (type ?? '').trim()
   return t === '' ? 'UNKNOWN' : t.toUpperCase()
+}
+
+// artifactKindLabel names what an artifact is for the Artifact column of the
+// compose view: "Image" or "Bill of Materials". It goes by the server-reported
+// type only, so any other type still shows up as itself, via artifactTypeLabel.
+export function artifactKindLabel(type: string | undefined): string {
+  switch ((type ?? '').trim()) {
+    case 'image':
+      return 'Image'
+    case 'sbom':
+      return 'Bill of Materials'
+    default:
+      return artifactTypeLabel(type)
+  }
 }
 
 // Teardown-residue warning surfaced when a cancelled/failed build may have left

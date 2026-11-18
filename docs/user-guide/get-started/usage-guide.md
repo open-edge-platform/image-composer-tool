@@ -102,7 +102,9 @@ sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`. Composition overrides: `--disk-strategy`,
 `--hostname`, `--http-proxy`, `--https-proxy`, `--ftp-proxy`,
-`--no-proxy`, `--ssh-authorized-key`.
+`--no-proxy`, `--ssh-authorized-key`. For `systemConfig.oepInstaller` files in a
+private repository, `--oep-installer-token-file FILE` reads the GitHub token
+for that build from `FILE`.
 See the full
 [build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
 for descriptions and additional flags like `--system-packages-only`.
@@ -409,6 +411,10 @@ oep_installer:
   token_file: "/etc/image-composer-tool/oep-installer-token"
 ```
 
+Without a server token, each user can instead enter their own token in the
+**Users and credentials** dialog when they compose such a template; it is used
+for that build only.
+
 The server binds to localhost by default and has no authentication of its own.
 Because the API can start privileged builds, exposing it with
 `--host 0.0.0.0` should be a deliberate decision, not a convenience.
@@ -512,10 +518,10 @@ ICT may run is present in the image.
 
 ```bash
 # Auto-detect shell and install completion
-./image-composer-tool install-completion
+./image-composer-tool completion install
 
 # Or specify a shell: bash, zsh, fish, powershell
-./image-composer-tool install-completion --shell bash
+./image-composer-tool completion install --shell bash
 ```
 
 After installing, reload your shell configuration (e.g., `source ~/.bashrc`).

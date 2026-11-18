@@ -354,6 +354,24 @@ repos:
       - codename: noble
         component: main
 
+  # The ubuntu26 EdgePack desktop templates install Firefox from the same PPA
+  # but read its resolute suite, not noble. Kept as a separate entry from
+  # `mozillateam-ppa`, the same way `edgepack-ubuntu26` is kept from `edgepack`.
+  - id: mozillateam-ppa-ubuntu26
+    displayName: Mozilla Team PPA (Ubuntu 26.04)
+    url: https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu
+    description: MozillaTeam PPA build of Firefox as a native .deb for Ubuntu 26.04, bypassing the snap transitional package.
+    enabledByDefault: false
+    priority: 1001
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    os: [ubuntu26]
+    curatedPackages:
+      - firefox
+      - firefox-esr
+    index:
+      - codename: resolute
+        component: main
+
   - id: intel-graphics
     displayName: Intel Graphics (kobuk-team)
     url: https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu

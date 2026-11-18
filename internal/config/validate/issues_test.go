@@ -235,3 +235,54 @@ func keys(m map[string]string) []string {
 	}
 	return out
 }
+
+func TestValidateUserTemplateIssues_BootloaderTimeout(t *testing.T) {
+	base := `image:
+  name: my-image
+  version: "1.0"
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: my-config
+  bootloader:
+`
+	tests := []struct {
+		name       string
+		bootloader string
+		wantIssue  bool
+	}{
+		{"grub with a timeout", "    provider: grub\n    timeoutSec: 3\n", false},
+		{"timeout without a provider (may be inherited)", "    timeoutSec: 3\n", false},
+		{"systemd-boot without a timeout", "    provider: systemd-boot\n", false},
+		{"systemd-boot with a timeout", "    provider: systemd-boot\n    timeoutSec: 3\n", true},
+		{"negative timeout", "    provider: grub\n    timeoutSec: -1\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues := ValidateUserTemplateIssues(toJSON(t, base+tt.bootloader))
+			if !tt.wantIssue {
+				if len(issues) != 0 {
+					t.Fatalf("expected no issues, got %+v", issues)
+				}
+				return
+			}
+			for _, iss := range issues {
+				if strings.HasPrefix(iss.Path, "systemConfig.bootloader") {
+					return
+				}
+			}
+			t.Fatalf("expected an issue under systemConfig.bootloader, got %+v", issues)
+		})
+	}
+}
+
+func TestValidateUserTemplateIssues_ReservedProvisioningEnv(t *testing.T) {
+	y := `{"image": {"name": "a", "version": "1"}, "target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+	"systemConfig": {"provisioning": {"scripts": [{"name": "s", "local": "s.sh", "final": "/usr/local/sbin/s.sh", "env": {"SERVICE_RESULT": "x"}}]}}}`
+	if len(ValidateUserTemplateIssues(toJSON(t, y))) == 0 {
+		t.Error("an env name that systemd sets for the failure report must be rejected by the schema")
+	}
+}

@@ -354,6 +354,50 @@ func TestHandleSearchPackages(t *testing.T) {
 	}
 }
 
+// `names` looks up exactly those packages through the same endpoint, ignoring
+// q/limit, so a list can be checked against a repo in one request.
+func TestHandleSearchPackagesByNames(t *testing.T) {
+	fixture := packagesFixtureServer(t)
+	defer fixture.Close()
+
+	reposYAML := fmt.Sprintf(`repos:
+  - id: ros2-jazzy
+    displayName: ROS 2 Jazzy
+    url: %s
+    index:
+      - codename: noble
+        component: main
+`, fixture.URL)
+	reposPath := filepath.Join(t.TempDir(), "package-repos.yaml")
+	if err := os.WriteFile(reposPath, []byte(reposYAML), 0o644); err != nil {
+		t.Fatalf("write repos fixture: %v", err)
+	}
+	manifest := `targets:
+  - {id: ubuntu24, displayName: "Ubuntu 24.04", os: ubuntu, arch: x86_64}
+`
+	mpath := filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(mpath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	srv, err := New(Config{TemplatesDir: t.TempDir(), ManifestPath: mpath, PackageReposPath: reposPath})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := srv.do(httptest.NewRequest(http.MethodGet,
+		"/api/v1/packages/search?os=ubuntu24&names=ros-jazzy-rviz2&names=not-published&q=zz&limit=0", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out httpapi.PackageSearchResults
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Total != 1 || len(out.Packages) != 1 || out.Packages[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v, want exactly ros-jazzy-rviz2", out)
+	}
+}
+
 // A query below the minimum length is a 400, surfaced through the real handler
 // and its error envelope — not just the service layer.
 func TestHandleSearchPackagesQueryTooShort(t *testing.T) {
@@ -904,5 +948,25 @@ func TestHandleListBuilds(t *testing.T) {
 	}
 	if len(out.Builds) != 1 {
 		t.Fatalf("builds = %d, want 1", len(out.Builds))
+	}
+}
+
+// The token entered for a build reaches the service trimmed, and the compose
+// response reports OEP Installer use only when the template has it.
+func TestOEPInstallerTokenMapping(t *testing.T) {
+	t.Parallel()
+	token := "  github_pat_x \n"
+	req := toBuildRequest(httpapi.BuildRequest{Yaml: optStr("y"), OepInstallerToken: &token})
+	if req.OEPInstallerToken != "github_pat_x" {
+		t.Errorf("OEPInstallerToken = %q, want trimmed", req.OEPInstallerToken)
+	}
+	if got := fromComposeResult(&service.ComposeResult{}).OepInstaller; got != nil {
+		t.Errorf("oepInstaller = %+v for a template without it, want nil", got)
+	}
+	got := fromComposeResult(&service.ComposeResult{
+		OEPInstaller: service.OEPInstallerInfo{Uses: true, ServerToken: true},
+	}).OepInstaller
+	if got == nil || !got.Uses || !got.ServerToken {
+		t.Errorf("oepInstaller = %+v, want uses and serverToken", got)
 	}
 }

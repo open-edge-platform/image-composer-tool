@@ -18,9 +18,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/oepinstaller"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/artifact"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
@@ -85,7 +87,11 @@ type build struct {
 	// login it already satisfied once. Set once in StartBuild; nil for a build
 	// reconstructed from disk history (an older record predates this field).
 	retry *retryInput
-	done  chan struct{} // closed when the build finishes
+	// tokenFile is the private file holding the GitHub token entered for this
+	// build, removed when the build process exits; "" when none was entered.
+	// Never persisted.
+	tokenFile string
+	done      chan struct{} // closed when the build finishes
 
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
@@ -299,6 +305,11 @@ func (b *build) setResidual(kind ResidualKind, detail string) {
 type BuildRequest struct {
 	Compose *Selection
 	YAML    string
+	// OEPInstallerToken is a GitHub token entered for this build only, for a
+	// template whose systemConfig.oepInstaller files are in a private
+	// repository. It is never stored: not in the build record, so RetryBuild
+	// cannot resubmit it, and not in a log or template.
+	OEPInstallerToken string
 }
 
 // BuildAccepted is returned when a build is accepted and started.
@@ -323,10 +334,19 @@ type retryInput struct {
 	unsupported bool
 }
 
+// ErrMsgConcurrentBuilds is the message a start refused for want of a free
+// build slot carries (409 BUILD_IN_PROGRESS). The UI shows it as-is wherever a
+// compose is held back by another build, so keep it in step with the web app.
+const ErrMsgConcurrentBuilds = "additional concurrent builds are currently restricted"
+
 // StartBuild resolves the template, starts an os/exec build, and returns a build
 // id. Client errors (bad input, no match) return a 400 *Error; server errors
 // (workspace creation, template write) return a 500 *Error.
 func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
+	if utf8.RuneCountInString(req.OEPInstallerToken) > maxOEPTokenLen {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
+			fmt.Sprintf("oepInstallerToken is longer than %d characters", maxOEPTokenLen))
+	}
 	id := uuid.NewString()
 
 	// Claim the single-build slot before doing any setup. If a build is already
@@ -344,8 +364,10 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		return nil, newError(http.StatusServiceUnavailable, "SERVER_SHUTTING_DOWN",
 			"the server is shutting down and is not accepting new builds")
 	case !ok:
-		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS",
-			fmt.Sprintf("a build is already in progress (%s); only one compose runs at a time", activeID))
+		// The id of the build holding the slot stays in the server log: the
+		// caller is told only that it has to wait, in the same words every time.
+		logger.Logger().Infof("build %s: rejected, build %s holds the slot", id, activeID)
+		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS", ErrMsgConcurrentBuilds)
 	}
 	// Setup is not instantaneous (it resolves the template and writes to disk),
 	// and until tracker.add runs below the build is invisible to the shutdown
@@ -410,6 +432,20 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// to the UI, and the forwarded proxy URLs may carry credentials. Only the
 	// raw cmdArgs reach exec.
 	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir, overlay)
+	// A token entered for this build reaches it as the path of a private file,
+	// so only the path is on the command line that b.Command logs. A template
+	// that downloads nothing from the OEP Installer does not get it.
+	var tokenFile string
+	if req.OEPInstallerToken != "" && mergeErr == nil && s.oepInstallerInfo(merged).Uses {
+		tokenFile, err = s.writeOEPToken(req.OEPInstallerToken)
+		if err != nil {
+			s.releaseBuildSlot(id) // no child spawned; free the slot for the next start
+			logger.Logger().Errorf("build %s: %v", id, err)
+			return nil, newError(http.StatusInternalServerError, "WORKDIR",
+				"cannot store the GitHub token for the build")
+		}
+		cmdArgs = append(cmdArgs, oepinstaller.TokenFileFlag, tokenFile)
+	}
 	b := &build{
 		ID: id,
 		// not-started until runBuild's cmd.Start succeeds and records the process
@@ -426,6 +462,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		Summary:      summary,
 		CreatedAt:    createdAt,
 		retry:        retry,
+		tokenFile:    tokenFile,
 		done:         make(chan struct{}),
 	}
 
@@ -1186,6 +1223,9 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 	// until this returns.
 	defer s.releaseBuildSlot(b.ID)
 	defer b.closeDone()
+	// Runs once the child has exited (or failed to start), before the build is
+	// reported done.
+	defer removeOEPToken(b.tokenFile)
 
 	// ICT builds require root (chroot, mounts), so the build runs under sudo, and
 	// from the repo root since ICT resolves config/osv/... relative to cwd. The
