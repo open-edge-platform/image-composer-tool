@@ -278,3 +278,11 @@ systemConfig:
 		})
 	}
 }
+
+func TestValidateUserTemplateIssues_ReservedProvisioningEnv(t *testing.T) {
+	y := `{"image": {"name": "a", "version": "1"}, "target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+	"systemConfig": {"provisioning": {"scripts": [{"name": "s", "local": "s.sh", "final": "/usr/local/sbin/s.sh", "env": {"SERVICE_RESULT": "x"}}]}}}`
+	if len(ValidateUserTemplateIssues(toJSON(t, y))) == 0 {
+		t.Error("an env name that systemd sets for the failure report must be rejected by the schema")
+	}
+}

@@ -1260,7 +1260,7 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].stage` | string | No | `first-boot` (default) runs once; `every-boot` runs on each boot |
 | `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
 | `scripts[].args` | list of string | No | Command-line arguments passed to the script. Each is 1-256 characters of letters, digits, and `._@%+:/=,-` (no spaces, quotes, `$`, or `;`, which systemd would interpret) |
-| `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters) |
+| `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters). `SERVICE_RESULT`, `EXIT_CODE` and `EXIT_STATUS` are set by systemd for the failure report and cannot be used |
 | `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit, except with `beforeLogin: true`, where it means 3600 s |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
 
@@ -1272,6 +1272,18 @@ cloud-init applies. Each unit is also after and requires the previous one, so a
 failed script stops the scripts after it. Output goes to the journal and console. A `first-boot` unit records success in
 `/var/lib/image-composer-tool/provisioned/<name>`; a failed script leaves no
 stamp and is retried on the next boot.
+
+When a script fails or times out, the console login prompt and the message of
+the day (so SSH logins as well) show `Provisioning script "<name>" failed` with
+the command to read its log, `sudo journalctl -u ict-provision-<NNN>-<name>.service`.
+The notice stays until the script succeeds on a later boot (on an image whose `/etc` is not
+persistent, such as `imageType: img` or an immutable image with a tmpfs overlay, only until the next reboot). A termination by a reboot or shutdown is
+not a failure: a script that reboots the machine to finish a step, as `openedge-cli` does, is not
+reported and runs again after the boot. A unit that fails after its script finished, for example
+when the `rebootAfter` reboot command fails, loses its completion stamp so the script runs again.
+A prompt that is already on screen when the script fails does not change; the message of the day
+shows the notice after login. `/etc/issue.d` and `/etc/motd.d` are created in the image, and
+`additionalFiles` may not make either one a file or write the `ict-provision-*` notice files.
 
 ```yaml
 systemConfig:

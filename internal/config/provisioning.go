@@ -225,6 +225,10 @@ func mergeProvisioningScripts(inherited, own []ProvisioningScript) []Provisionin
 // ProvisioningStampDir records completed first-boot scripts on the deployed system.
 const ProvisioningStampDir = "/var/lib/image-composer-tool/provisioned"
 
+// ProvisioningReportScript records a script's outcome on the deployed system
+// and shows the failure notice at the login prompt and after login.
+const ProvisioningReportScript = "/usr/libexec/ict-provision-report"
+
 // CloudInitMetaDataScript and CloudInitMetaDataUnit are the generated first-boot
 // meta-data helper and its systemd unit (both relative to the image root).
 const (
@@ -246,7 +250,18 @@ const (
 	unattendedUpgradesPath  = "/etc/apt/apt.conf.d/52ict-unattended-upgrades"
 	provisionUnitPrefix     = "/etc/systemd/system/ict-provision-"
 	provisionUnitWantPrefix = "/etc/systemd/system/multi-user.target.wants/ict-provision-"
+	// The failure notices the report script writes at runtime, and removes when
+	// the script of that name succeeds.
+	provisionIssuePrefix = "/etc/issue.d/ict-provision-"
+	provisionMotdPrefix  = "/etc/motd.d/ict-provision-"
+	provisionIssueDir    = "/etc/issue.d"
+	provisionMotdDir     = "/etc/motd.d"
 )
+
+// provisioningDirsNotFiles are the directories the failure notices are written
+// to. They may not themselves become files, or the notices could not be written;
+// other files inside them are fine.
+var provisioningDirsNotFiles = []string{provisionIssueDir, provisionMotdDir}
 
 // Files the provisioning writers generate inside the image. A script's final
 // path may not land on them: the generated content would replace the script
@@ -260,6 +275,7 @@ var (
 		unattendedUpgradesPath,
 		CloudInitConfigDir + "/" + CloudInitDatasourceFile,
 		CloudInitMetaDataScript,
+		ProvisioningReportScript,
 		KeyOnlySudoersFile,
 		"/etc/systemd/system/" + CloudInitMetaDataUnit,
 		"/etc/systemd/system/multi-user.target.wants/" + CloudInitMetaDataUnit,
@@ -271,6 +287,8 @@ var (
 	reservedProvisioningPrefixes = []string{
 		provisionUnitPrefix,
 		provisionUnitWantPrefix,
+		provisionIssuePrefix,
+		provisionMotdPrefix,
 	}
 )
 
@@ -302,7 +320,7 @@ func IsReservedProvisioningPath(final string) bool {
 			return true
 		}
 	}
-	return false
+	return slices.Contains(provisioningDirsNotFiles, final)
 }
 
 // generatedProvisioningPaths returns the in-image paths the enabled
@@ -333,11 +351,19 @@ func (t *ImageTemplate) generatedProvisioningPaths() (paths, prefixes []string) 
 	}) {
 		paths = append(paths, KeyOnlySudoersFile)
 	}
-	if len(sc.Provisioning.Scripts) > 0 {
-		paths = append(paths, ProvisioningStampDir)
-		prefixes = append(prefixes, provisionUnitPrefix, provisionUnitWantPrefix)
+	if t.hasProvisioningUnits() {
+		paths = append(paths, ProvisioningStampDir, ProvisioningReportScript)
+		prefixes = append(prefixes, provisionUnitPrefix, provisionUnitWantPrefix,
+			provisionIssuePrefix, provisionMotdPrefix)
 	}
 	return paths, prefixes
+}
+
+// hasProvisioningUnits reports whether provisioning units will be generated.
+// The OEP Installer's first-boot script is added after additionalFiles are
+// validated, so a template that has only an oepInstaller section counts too.
+func (t *ImageTemplate) hasProvisioningUnits() bool {
+	return len(t.SystemConfig.Provisioning.Scripts) > 0 || !t.SystemConfig.OEPInstaller.IsEmpty()
 }
 
 // validateAdditionalFilesNotGenerated rejects an additionalFiles entry whose
@@ -350,6 +376,13 @@ func (t *ImageTemplate) validateAdditionalFilesNotGenerated() error {
 	for _, f := range t.SystemConfig.AdditionalFiles {
 		clean := filepath.Clean("/" + f.Final)
 		for _, dest := range []string{clean, clean + "/" + filepath.Base(f.Local)} {
+			// The copier drops a trailing slash, so when a notice directory is not in
+			// the image yet, a copy to it (or of a file named like it into its parent)
+			// creates a regular file, and the notices could not be written.
+			if t.hasProvisioningUnits() && slices.Contains(provisioningDirsNotFiles, dest) {
+				return fmt.Errorf("systemConfig.additionalFiles %q installs to %q, a directory image-composer-tool "+
+					"writes provisioning failure notices into; choose a file path inside it instead", f.Local, dest)
+			}
 			for _, p := range paths {
 				if dest == p || strings.HasPrefix(dest, p+"/") {
 					return fmt.Errorf("systemConfig.additionalFiles %q installs to %q, which image-composer-tool "+
@@ -378,6 +411,10 @@ var provisioningScriptNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,
 
 // provisioningEnvNameRe is a portable environment variable name.
 var provisioningEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// provisioningReservedEnv are set by systemd for the failure hook; a script's
+// Environment= would override them and change how a failure is classified.
+var provisioningReservedEnv = []string{"SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS"}
 
 // provisioningValueRe keeps an argument or environment value safe to place in
 // a systemd unit: no whitespace, quotes, backslashes, $ (expanded by systemd)
@@ -544,6 +581,10 @@ func validateProvisioningScriptParams(s ProvisioningScript) error {
 		if !provisioningEnvNameRe.MatchString(k) {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: invalid env name %q: must match %s",
 				s.Name, k, provisioningEnvNameRe.String())
+		}
+		if slices.Contains(provisioningReservedEnv, k) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s is set by systemd for the "+
+				"failure report and cannot be overridden", s.Name, k)
 		}
 		if !provisioningValueRe.MatchString(v) {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s must be at most 256 characters of "+
