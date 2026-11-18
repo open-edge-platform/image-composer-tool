@@ -852,6 +852,7 @@ function MergedPane({
                   currentIsFloating={lock.currentIsFloating}
                   pinnedFrom={pinnedFromFor(h.name)}
                   browsedRepoId={selectedRepo?.id}
+                  onBrowseRepo={onBrowseRepo}
                   resolvedVersion={liveResolved[h.name]?.version}
                   resolvedRepo={liveResolved[h.name]?.repository}
                   onToggle={(checked) => {

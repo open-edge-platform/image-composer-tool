@@ -198,8 +198,9 @@ describe('a package already selected from a different repository than the one be
     await screen.findByText('vim')
     // The header says what's pinned and where from; the note, what a chip
     // here would do instead.
-    expect(screen.getByText('Pinned to').textContent).toBe('Pinned to 9.1')
-    expect(screen.getByText('via Intel ECI')).toBeTruthy()
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.getByText('Intel ECI', { selector: 'button' })).toBeTruthy()
     expect(screen.getByText('Picking a version here pins Ubuntu Base instead of Intel ECI.')).toBeTruthy()
     const chip = screen.getByRole('button', { name: '9.0' })
     expect(chip.className).not.toContain('bg-[#0071c5]')
@@ -220,7 +221,8 @@ describe('a package already selected from a different repository than the one be
     await screen.findByText('vim')
     // The pin is one of this repo's chips, highlighted, so the header
     // doesn't repeat it.
-    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.queryByTitle('Pinned version')).toBeNull()
     expect(screen.queryByText(/Picking a version here pins/)).toBeNull()
     const chip = screen.getByRole('button', { name: '9.1' })
     expect(chip.className).toContain('bg-[#0071c5]')

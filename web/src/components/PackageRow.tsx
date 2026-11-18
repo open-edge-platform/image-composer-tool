@@ -46,6 +46,9 @@ interface PackageRowProps {
   // catalog. "Via" never names it: every row there comes from it, so it
   // would say nothing. Unset where rows come from several repositories.
   browsedRepoId?: string
+  // Switches the browsed repository, so "via" can link to the repository a
+  // version comes from. Unset where there's nothing to switch.
+  onBrowseRepo?: (repoId: string) => void
   // Offered only by the Selected rail, for a row that's unpinned (a
   // locked-but-floating template entry, or a floating user pick) and hasn't
   // been checked against the currently-checked repos yet. Fires a real
@@ -91,6 +94,7 @@ export function PackageRow({
   currentIsFloating,
   pinnedFrom,
   browsedRepoId,
+  onBrowseRepo,
   onResolve,
   resolving,
   resolvedVersion,
@@ -99,43 +103,40 @@ export function PackageRow({
   disabledReason,
 }: PackageRowProps) {
   const checked = locked || selection != null
-  // What the build installs, said beside the name: the user's own pick
-  // first, since it overrides the template, then the template's own entry.
-  // A catalog row nothing selects shows just its version instead.
-  const status: { label: string; version?: string; repo?: string } | undefined =
-    selection != null
-      ? selection.version !== ''
-        ? { label: 'Pinned to', version: selection.version, repo: selection.repo }
-        : resolvedVersion
-          ? { label: 'Resolved to', version: resolvedVersion, repo: resolvedRepo }
-          : { label: 'Unpinned' }
-      : locked
-        ? currentVersion && !currentIsFloating
-          ? { label: 'Pinned to', version: currentVersion }
-          : currentVersion
-            ? { label: 'Resolved to', version: currentVersion, repo: resolvedRepo }
-            : { label: 'Unpinned' }
+  // Whether the package is pinned, and the version a build would install:
+  // the user's own pick first, since it overrides the template, then the
+  // template's own entry. Undefined for a catalog row nothing selects.
+  const pin =
+    selection != null && selection.version !== ''
+      ? { version: selection.version, repo: selection.repo as string | undefined }
+      : locked && selection == null && currentVersion && !currentIsFloating
+        ? { version: currentVersion, repo: undefined }
         : undefined
-  // A pin this row's own chips include shows as that chip, highlighted, so
-  // saying it again beside the name adds nothing: the header names a pin
-  // only when it comes from another repository. (A template pin is matched
-  // on version alone, the way its chip is marked.)
-  const pinShownByChip =
-    // A bare "Unpinned" likewise: the Unpinned chip shows it, highlighted.
-    status?.label === 'Unpinned' ||
-    (status?.label === 'Pinned to' &&
-      versions.some((v) => v.version === status.version && (status.repo === undefined || v.repository === status.repo)))
-  // Where that version comes from. A template pin from another repository
-  // links there (pinnedFrom); otherwise it's the pick's or the resolution's
-  // own repository when known, and the row's own repositories failing that.
-  const templatePinElsewhere = !!(locked && selection == null && pinnedFrom && currentVersion)
-  const repoNames = templatePinElsewhere
-    ? pinnedFrom!.repoLabel
-        ? [pinnedFrom.repoLabel]
-        : []
-    : (status?.repo ? [status.repo] : [...new Set(versions.map((v) => v.repository).filter(Boolean))])
-        .filter((id) => id !== browsedRepoId)
-        .map(repoLabelFor)
+  const unpinned = (selection != null && selection.version === '') || (locked && selection == null && !!currentIsFloating)
+  // What Unpinned currently gives: the version it resolves to, once known.
+  const resolvesTo = !unpinned
+    ? undefined
+    : selection != null
+      ? resolvedVersion
+        ? { version: resolvedVersion, repo: resolvedRepo }
+        : undefined
+      : currentVersion
+        ? { version: currentVersion, repo: resolvedRepo }
+        : undefined
+  const tag = pin ? 'Pinned' : unpinned ? 'Unpinned' : undefined
+  // That version is highlighted among the row's own chips when it's one of
+  // them; otherwise the header shows it, with where it comes from. (A
+  // template pin is matched on version alone, the way its chip is marked.)
+  const effective = pin ?? resolvesTo
+  const effectiveShownByChip =
+    !!effective &&
+    versions.some((v) => v.version === effective.version && (effective.repo === undefined || v.repository === effective.repo))
+  const templatePinElsewhere = !!(locked && selection == null && pinnedFrom && pin)
+  // "Via" for a catalog row nothing selects: its own repositories, never the
+  // one being browsed, which every row there comes from.
+  const repoNames = [...new Set(versions.map((v) => v.repository).filter(Boolean))]
+    .filter((id) => id !== browsedRepoId)
+    .map(repoLabelFor)
   // An override only ever exists on a locked row once the user has
   // explicitly picked a version — the template's own inclusion never
   // becomes a real addedPackages entry on its own.
@@ -200,37 +201,42 @@ export function PackageRow({
               <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
                 {name}
               </span>
-              {pinShownByChip ? null : status ? (
-                <span className="text-[11px] text-slate-500">
-                  {status.label}
-                  {status.version && <span className="font-mono"> {status.version}</span>}
+              {tag && (
+                <span className="rounded bg-slate-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  {tag}
                 </span>
-              ) : (
-                <span className="font-mono text-[11px] text-slate-500">{version}</span>
               )}
-              {templatePinElsewhere && pinnedFrom?.repoLabel && pinnedFrom.onBrowse ? (
-                // The template's pin comes from another repository: "via"
-                // links there, where that version is one of the chips.
-                <span className="text-[11px] text-slate-400">
-                  via{' '}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      // Inside the row's <label>: don't toggle the checkbox.
-                      e.preventDefault()
-                      e.stopPropagation()
-                      pinnedFrom.onBrowse!()
-                    }}
-                    title={`Browse ${pinnedFrom.repoLabel}, where the template's pinned version comes from`}
-                    className="text-[#0071c5] hover:underline"
-                  >
-                    {pinnedFrom.repoLabel}
-                  </button>
+              {!tag && <span className="font-mono text-[11px] text-slate-500">{version}</span>}
+              {effective && !effectiveShownByChip && (
+                // No chip here shows the version a build would install, so
+                // say it, solid for a pin, dashed for what Unpinned resolves to.
+                <span
+                  className={chipClass({ active: !!pin, dashed: !pin })}
+                  title={pin ? 'Pinned version' : 'The version Unpinned currently resolves to'}
+                >
+                  {effective.version}
                 </span>
+              )}
+              {effective && !effectiveShownByChip ? (
+                <ViaRepo
+                  label={
+                    templatePinElsewhere
+                      ? pinnedFrom?.repoLabel
+                      : effective.repo && effective.repo !== browsedRepoId
+                        ? repoLabelFor(effective.repo)
+                        : undefined
+                  }
+                  onBrowse={
+                    templatePinElsewhere
+                      ? pinnedFrom?.onBrowse
+                      : effective.repo && onBrowseRepo
+                        ? () => onBrowseRepo(effective.repo!)
+                        : undefined
+                  }
+                />
               ) : (
-                repoNames.length > 0 && (
-                  <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
-                )
+                !tag &&
+                repoNames.length > 0 && <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
               )}
             </span>
             {description && (
@@ -296,6 +302,7 @@ export function PackageRow({
             }
             overridden={overridden}
             onRevert={() => onToggle(false)}
+            resolvesTo={resolvesTo}
             disabled={disabled}
           />
         </span>
@@ -325,6 +332,7 @@ function VersionChips({
   overridden = false,
   onRevert,
   replaces,
+  resolvesTo,
   disabled,
 }: {
   versions: PackageVersion[]
@@ -345,6 +353,9 @@ function VersionChips({
   // The template's own build, when its pinned version comes from another
   // repository: each chip here would replace it, so says so.
   replaces?: string
+  // What Unpinned currently resolves to, while it's the row's state: that
+  // chip is marked dashed, beside the selected Unpinned chip.
+  resolvesTo?: { version: string; repo?: string }
   disabled: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -469,7 +480,10 @@ function VersionChips({
               // nothing.
               active: (pinned === v.version && pinnedRepo === v.repository) || isRedundant,
               disabled,
-              ring: isCurrent,
+              dashed:
+                !!resolvesTo &&
+                v.version === resolvesTo.version &&
+                (resolvesTo.repo === undefined || v.repository === resolvesTo.repo),
             })}
           >
             {v.version}
@@ -494,23 +508,55 @@ function VersionChips({
 
 // active: the chip in effect — a real selection, the template's own choice
 // (its pin, or Unpinned when it leaves the package unpinned), or Unpinned
-// when nothing is picked — full blue fill. disabled: not clickable; on an
-// active chip this dims the same blue rather than switching to grey. ring
-// flags "this is what the row currently resolves to" on a chip that isn't
-// active.
+// when nothing is picked — full blue fill. dashed: the version Unpinned
+// currently resolves to, while it's in effect — a dashed outline, the same
+// mark the Selected panel uses for an unpinned version. disabled: not
+// clickable; on an active chip this dims the same blue rather than
+// switching to grey.
 function chipClass({
   active = false,
   disabled = false,
-  ring = false,
+  dashed = false,
 }: {
   active?: boolean
   disabled?: boolean
-  ring?: boolean
+  dashed?: boolean
 }): string {
   const base = 'rounded-full px-2 py-0.5 font-mono text-[11px] font-medium '
-  const fill = active ? 'bg-[#0071c5] text-white' : 'bg-[#e6f2fa] text-[#0071c5]'
+  const fill = active
+    ? 'bg-[#0071c5] text-white'
+    : dashed
+      ? 'border border-dashed border-[#0071c5] bg-white text-[#0071c5]'
+      : 'bg-[#e6f2fa] text-[#0071c5]'
   const hover = disabled || active ? '' : ' hover:bg-[#d3e9f8]'
   const cursor = disabled ? ' cursor-not-allowed opacity-70' : ''
-  const ringClass = !active && ring ? ' ring-1 ring-[#0071c5]' : ''
-  return base + fill + hover + cursor + ringClass
+  return base + fill + hover + cursor
+}
+
+// ViaRepo names the repository a version shown beside a package's name
+// comes from, as a link that browses it when there's a way to.
+function ViaRepo({ label, onBrowse }: { label?: string; onBrowse?: () => void }) {
+  if (!label) return null
+  return (
+    <span className="text-[11px] text-slate-400">
+      via{' '}
+      {onBrowse ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            // Inside the row's <label>: don't toggle the checkbox.
+            e.preventDefault()
+            e.stopPropagation()
+            onBrowse()
+          }}
+          title={`Browse ${label}, where this version comes from`}
+          className="text-[#0071c5] hover:underline"
+        >
+          {label}
+        </button>
+      ) : (
+        label
+      )}
+    </span>
+  )
 }

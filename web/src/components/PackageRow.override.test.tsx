@@ -110,12 +110,17 @@ describe('PackageRow — which chip reads as selected', () => {
   })
 })
 
+// The Pinned/Unpinned tag beside the name, and the version chip the header
+// shows when none of the row's own chips does.
+const tagText = () => screen.queryByText(/^(Pinned|Unpinned)$/, { selector: 'span' })?.textContent
+const headerChip = () =>
+  screen.queryByTitle('Pinned version') ?? screen.queryByTitle('The version Unpinned currently resolves to')
+
 describe('PackageRow — what the header says the build installs', () => {
-  const header = () => screen.getByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' }).textContent
 
   it('leaves a template pin on screen to its chip, selected but not clickable', () => {
     renderRow({ currentIsFloating: false })
-    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
+    expect(headerChip()).toBeNull()
     const own = chip(/^0\.42-1ppa1~resolute3$/)
     expect(own.getAttribute('aria-pressed')).toBe('true')
     expect(own.disabled).toBe(true)
@@ -127,11 +132,11 @@ describe('PackageRow — what the header says the build installs', () => {
       currentIsFloating: false,
       selection: { name: 'spice-client-gtk', version: '0.42-4build1', repo: 'ubuntu-resolute-base' },
     })
-    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
+    expect(headerChip()).toBeNull()
     expect(chip(/^0\.42-4build1$/).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('says "Pinned to" a pin from another repository, which no chip here shows', () => {
+  it('shows a pin from another repository as a chip beside the name', () => {
     // ffmpeg, browsing Ubuntu base: the template's pin is the snapshot's build.
     render(
       <PackageRow
@@ -147,7 +152,9 @@ describe('PackageRow — what the header says the build installs', () => {
         currentIsFloating={false}
       />,
     )
-    expect(header()).toBe('Pinned to 7:9.0.1-1ppa1~resolute1')
+    expect(tagText()).toBe('Pinned')
+    expect(headerChip()?.textContent).toBe('7:9.0.1-1ppa1~resolute1')
+    expect(headerChip()?.getAttribute('title')).toBe('Pinned version')
   })
 
   it('keeps a pinned chip visible even when it is past the first few versions', () => {
@@ -165,10 +172,10 @@ describe('PackageRow — what the header says the build installs', () => {
       />,
     )
     expect(chip(/^1:6\.19-1$/).getAttribute('aria-pressed')).toBe('true')
-    expect(screen.queryByText(/^Pinned to/, { selector: 'span' })).toBeNull()
+    expect(headerChip()).toBeNull()
   })
 
-  it('says "Resolved to" for an unpinned template package, and marks Unpinned selected', () => {
+  it('tags an unpinned template package, and marks Unpinned selected and its version dashed', () => {
     // adb, unpinned in the template, resolving to Ubuntu's build.
     render(
       <PackageRow
@@ -184,13 +191,15 @@ describe('PackageRow — what the header says the build installs', () => {
         currentIsFloating
       />,
     )
-    expect(header()).toBe('Resolved to 1:34.0.5-12build1')
+    expect(tagText()).toBe('Unpinned')
+    expect(headerChip()).toBeNull()
+    expect(chip(/^1:34\.0\.5-12build1$/).className).toContain('border-dashed')
     const unpinned = chip(/^Unpinned$/)
     expect(unpinned.getAttribute('aria-pressed')).toBe('true')
     expect(unpinned.className).toContain('bg-[#0071c5]')
   })
 
-  it('says "Resolved to" for an unpinned pick, naming where it resolves from', () => {
+  it('shows what an unpinned pick resolves to from another repository as a dashed chip', () => {
     render(
       <PackageRow
         name="vim"
@@ -204,7 +213,9 @@ describe('PackageRow — what the header says the build installs', () => {
         resolvedRepo="snapshot"
       />,
     )
-    expect(header()).toBe('Resolved to 2:9.2-1ppa1')
+    expect(tagText()).toBe('Unpinned')
+    expect(headerChip()?.textContent).toBe('2:9.2-1ppa1')
+    expect(headerChip()?.className).toContain('border-dashed')
     expect(screen.getByText('via Snapshot')).toBeTruthy()
   })
 
@@ -220,7 +231,7 @@ describe('PackageRow — what the header says the build installs', () => {
         onChooseVersion={() => {}}
       />,
     )
-    expect(screen.queryByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' })).toBeNull()
+    expect(tagText()).toBeUndefined()
     expect(screen.getAllByText('3.3.0-4').length).toBeGreaterThan(0)
   })
 })
@@ -259,7 +270,6 @@ describe('PackageRow — the template line once overridden', () => {
 
 describe('PackageRow — browsing one repository', () => {
   const via = () => screen.queryByText(/^via /, { selector: 'span' })
-  const headerSpan = () => screen.queryByText(/^(Pinned to|Resolved to|Unpinned)/, { selector: 'span' })
 
   it('names neither the pin nor the browsed repo when its chip shows the pin', () => {
     // ffmpeg, browsing the snapshot its template pin comes from.
@@ -278,7 +288,8 @@ describe('PackageRow — browsing one repository', () => {
         browsedRepoId="snapshot"
       />,
     )
-    expect(headerSpan()).toBeNull()
+    expect(tagText()).toBe('Pinned')
+    expect(headerChip()).toBeNull()
     expect(via()).toBeNull()
     expect(chip(/^7:9\.0\.1-1ppa1~resolute1$/).getAttribute('aria-pressed')).toBe('true')
   })
@@ -299,7 +310,8 @@ describe('PackageRow — browsing one repository', () => {
         browsedRepoId="base"
       />,
     )
-    expect(headerSpan()).toBeNull()
+    expect(tagText()).toBe('Unpinned')
+    expect(headerChip()).toBeNull()
     expect(via()).toBeNull()
     expect(chip(/^Unpinned$/).getAttribute('aria-pressed')).toBe('true')
   })
@@ -319,7 +331,55 @@ describe('PackageRow — browsing one repository', () => {
         browsedRepoId="base"
       />,
     )
-    expect(headerSpan()?.textContent).toBe('Resolved to 2:9.2-1ppa1')
+    expect(headerChip()?.textContent).toBe('2:9.2-1ppa1')
     expect(via()?.textContent).toBe('via Snapshot')
+  })
+})
+
+describe('PackageRow — the version Unpinned resolves to', () => {
+  it('marks it dashed among the chips when this repo publishes it', () => {
+    render(
+      <PackageRow
+        name="vim"
+        version="2:9.1.0016-1"
+        versions={[
+          { version: '2:9.1.0016-1', repository: 'base' },
+          { version: '2:9.1.0000-1', repository: 'base' },
+        ]}
+        repoLabelFor={(id) => id}
+        selection={{ name: 'vim', version: '', repo: 'base' }}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        resolvedVersion="2:9.1.0016-1"
+        resolvedRepo="base"
+        browsedRepoId="base"
+      />,
+    )
+    expect(headerChip()).toBeNull()
+    expect(chip(/^2:9\.1\.0016-1$/).className).toContain('border-dashed')
+    expect(chip(/^2:9\.1\.0016-1$/).getAttribute('aria-pressed')).toBe('false')
+    expect(chip(/^2:9\.1\.0000-1$/).className).not.toContain('border-dashed')
+    expect(chip(/^Unpinned$/).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('links "via" to the repo it resolves from, when that is another one', () => {
+    const onBrowseRepo = vi.fn()
+    render(
+      <PackageRow
+        name="vim"
+        version="2:9.1.0016-1"
+        versions={[{ version: '2:9.1.0016-1', repository: 'base' }]}
+        repoLabelFor={(id) => ({ base: 'Ubuntu Base', snapshot: 'Snapshot' })[id] ?? id}
+        selection={{ name: 'vim', version: '', repo: 'base' }}
+        onToggle={() => {}}
+        onChooseVersion={() => {}}
+        resolvedVersion="2:9.2-1ppa1"
+        resolvedRepo="snapshot"
+        browsedRepoId="base"
+        onBrowseRepo={onBrowseRepo}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Snapshot' }))
+    expect(onBrowseRepo).toHaveBeenCalledWith('snapshot')
   })
 })
