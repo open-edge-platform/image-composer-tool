@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1181,6 +1182,162 @@ func TestGenerateAptPreferencesAppliesAptPolicy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGenerateAptPreferencesRestrictsToAllowPackages(t *testing.T) {
+	ppa := PackageRepository{ID: "ppa", Codename: "noble", URL: "https://ppa.example.com/ppa/ubuntu",
+		Priority: 1001, AllowPackages: []string{"firefox", "firefox-locale-en"}}
+	tests := []struct {
+		name        string
+		repos       []PackageRepository
+		immutable   bool
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name:  "only listed packages get the repository priority",
+			repos: []PackageRepository{ppa},
+			wantContain: []string{
+				"Package: firefox* firefox-locale-en*\nPin: origin ppa.example.com\nPin-Priority: 1001\n",
+			},
+			// No catch-all for the repository: neither the forced priority nor a block.
+			wantAbsent: []string{"Package: *", "Pin-Priority: -1"},
+		},
+		{
+			// An allowlisted suite on the same host as the OS archive (backports)
+			// must not stop ordinary updates from the rest of that host.
+			name: "allowlisted backports suite does not affect the rest of its host",
+			repos: []PackageRepository{
+				{ID: "backports", Codename: "noble-backports", URL: "http://archive.example.com/ubuntu",
+					Priority: 2000, AllowPackages: []string{"linux-firmware"}},
+				{ID: "archive", Codename: "noble", URL: "http://archive.example.com/ubuntu", Priority: 500},
+			},
+			wantContain: []string{
+				"Package: linux-firmware*\nPin: origin archive.example.com\nPin-Priority: 2000\n",
+				"Package: *\nPin: origin archive.example.com\nPin-Priority: 500\n",
+			},
+			wantAbsent: []string{"Pin-Priority: -1"},
+		},
+		{
+			name:      "immutable image keeps the whole-repository no-upgrade pin",
+			repos:     []PackageRepository{ppa},
+			immutable: true,
+			wantContain: []string{
+				"Package: *\nPin: origin ppa.example.com\nPin-Priority: 50\n",
+			},
+			wantAbsent: []string{"firefox", "Pin-Priority: -1"},
+		},
+		{
+			name: "repository without allowPackages keeps the catch-all pin",
+			repos: []PackageRepository{
+				{ID: "plain", Codename: "noble", URL: "https://plain.example.com/apt", Priority: 990}},
+			wantContain: []string{"Package: *\nPin: origin plain.example.com\nPin-Priority: 990\n"},
+			wantAbsent:  []string{"Pin-Priority: -1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{
+				PackageRepositories: tt.repos,
+				SystemConfig:        SystemConfig{Immutability: ImmutabilityConfig{Enabled: tt.immutable}},
+			}
+			if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+				t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+			}
+			var all strings.Builder
+			for _, f := range tmpl.SystemConfig.AdditionalFiles {
+				data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+				if err != nil {
+					t.Fatalf("reading %s: %v", f.Local, err)
+				}
+				all.Write(data)
+			}
+			for _, want := range tt.wantContain {
+				if !strings.Contains(all.String(), want) {
+					t.Errorf("preferences missing %q\n%s", want, all.String())
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(all.String(), absent) {
+					t.Errorf("preferences unexpectedly contain %q\n%s", absent, all.String())
+				}
+			}
+		})
+	}
+}
+
+// The build-time allowPackages filter takes a literal entry as a name prefix,
+// so the pin must cover the same names or the block would reject packages the
+// build accepted. Globs are kept as given.
+func TestAllowPackagePinPatterns(t *testing.T) {
+	got := allowPackagePinPatterns([]string{"curl", "libfoo-*", "lib?bar", "pkg[12]"})
+	want := []string{"curl*", "libfoo-*", "lib?bar", "pkg[12]"}
+	if !slices.Equal(got, want) {
+		t.Errorf("allowPackagePinPatterns = %v, want %v", got, want)
+	}
+}
+
+// Without IDs, repositories on the same host and suite map to one filename.
+// Each must keep its own pin file, or the second would replace the first and
+// the first one's packages would end up blocked.
+func TestGenerateAptPreferencesKeepsRepositoriesWithSameFilename(t *testing.T) {
+	tmpl := &ImageTemplate{PackageRepositories: []PackageRepository{
+		{Codename: "noble", URL: "https://ppa.example.com/a/ubuntu", Priority: 1001, AllowPackages: []string{"alpha"}},
+		{Codename: "noble", URL: "https://ppa.example.com/b/ubuntu", Priority: 1001, AllowPackages: []string{"beta"}},
+		{Codename: "noble", URL: "https://ppa.example.com/c/ubuntu", Priority: 1001, AllowPackages: []string{"gamma"}},
+	}}
+	if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+		t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+	}
+	if got := len(tmpl.SystemConfig.AdditionalFiles); got != 3 {
+		t.Fatalf("got %d preference files, want 3: %+v", got, tmpl.SystemConfig.AdditionalFiles)
+	}
+	finals := map[string]bool{}
+	var all strings.Builder
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		finals[f.Final] = true
+		data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Local, err)
+		}
+		all.Write(data)
+	}
+	if len(finals) != 3 {
+		t.Errorf("preference files share a destination: %v", finals)
+	}
+	for _, pkg := range []string{"alpha*", "beta*", "gamma*"} {
+		if !strings.Contains(all.String(), "Package: "+pkg+"\n") {
+			t.Errorf("no pin for %s in:\n%s", pkg, all.String())
+		}
+	}
+	// A repository's own file name is unchanged when nothing collides.
+	if !finals["/etc/apt/preferences.d/noble-ppa-example-com"] {
+		t.Errorf("first repository's file name changed: %v", finals)
+	}
+}
+
+// A suffixed name must not land on another repository's own file name or ID.
+func TestGenerateAptPreferencesSuffixAvoidsExistingNames(t *testing.T) {
+	tmpl := &ImageTemplate{PackageRepositories: []PackageRepository{
+		{Codename: "noble", URL: "https://ppa.example.com/a/ubuntu", Priority: 1001, AllowPackages: []string{"alpha"}},
+		{Codename: "noble", URL: "https://ppa.example.com/b/ubuntu", Priority: 1001, AllowPackages: []string{"beta"}},
+		{ID: "noble-ppa-example-com-2", Codename: "noble", URL: "https://ppa.example.com/c/ubuntu",
+			Priority: 1001, AllowPackages: []string{"gamma"}},
+	}}
+	if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+		t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+	}
+	finals := map[string]bool{}
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		finals[f.Final] = true
+	}
+	if len(tmpl.SystemConfig.AdditionalFiles) != 3 || len(finals) != 3 {
+		t.Fatalf("want 3 distinct preference files, got %d files, %d paths: %v",
+			len(tmpl.SystemConfig.AdditionalFiles), len(finals), finals)
+	}
+	if !finals["/etc/apt/preferences.d/noble-ppa-example-com-2"] {
+		t.Errorf("the repository with ID noble-ppa-example-com-2 lost its file name: %v", finals)
 	}
 }
 
