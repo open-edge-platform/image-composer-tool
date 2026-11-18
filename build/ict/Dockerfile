@@ -96,7 +96,16 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Packages are grouped by what they are for. Five allowlisted commands have no
 # Ubuntu package (tdnf, yum, opkg, snap, run); the step after this one gives
 # them stubs.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# qemu-user-static does not exist on Ubuntu 26.04 and later, where
+# qemu-user-binfmt provides the same programs. QEMU_PKG picks whichever apt can
+# install, so the image builds on either base.
+RUN apt-get update && \
+    QEMU_PKG=qemu-user-static && \
+    if ! apt-cache policy qemu-user-static | grep -Eq 'Candidate: [^(]'; then \
+      QEMU_PKG=qemu-user-binfmt; \
+    fi && \
+    apt-get install -y --no-install-recommends \
     \
     # core OS utilities (coreutils, util-linux, procps, etc.)
     bash \
@@ -180,7 +189,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # so install them here instead.
     arch-test \
     debian-archive-keyring \
-    qemu-user-static \
+    $QEMU_PKG \
     \
     # misc
     lsof \
