@@ -751,8 +751,8 @@ function PackageSearch({
         )}
       </div>
       <p className="mb-4 mt-1.5 text-sm text-slate-500">
-        Search across all repositories. Pick &quot;Unpinned&quot; or a specific
-        version to add it.
+        Search across all repositories. Tick a package to add it unpinned, or
+        pick a version to pin it.
       </p>
     </>
   )

@@ -124,13 +124,9 @@ export function PackageRow({
         ? { version: currentVersion, repo: resolvedRepo }
         : undefined
   const tag = pin ? 'Pinned' : unpinned ? 'Unpinned' : undefined
-  // That version is highlighted among the row's own chips when it's one of
-  // them; otherwise the header shows it, with where it comes from. (A
-  // template pin is matched on version alone, the way its chip is marked.)
+  // The version a build would install, shown beside the tag. It's also
+  // marked among the row's own chips when it's one of them.
   const effective = pin ?? resolvesTo
-  const effectiveShownByChip =
-    !!effective &&
-    versions.some((v) => v.version === effective.version && (effective.repo === undefined || v.repository === effective.repo))
   const templatePinElsewhere = !!(locked && selection == null && pinnedFrom && pin)
   // "Via" for a catalog row nothing selects: its own repositories, never the
   // one being browsed, which every row there comes from.
@@ -160,11 +156,17 @@ export function PackageRow({
   // repo-agnostic on purpose — it isn't pinned to any one repository's
   // version list, so a version match alone is enough regardless of which
   // repo it's being re-clicked from.
+  // Choosing the pinned chip again unpins the package, which stays added: a
+  // package with no version chosen is unpinned, so there's no separate
+  // Unpinned chip. On a template package it drops the override instead, so
+  // the template's own entry applies again. (Its own pin can't be unpinned
+  // from here: an unpinned entry in a delta leaves the template's pin in
+  // place.) Removing the package is the checkbox's job.
   const chooseVersion = (v: PackageVersion) => {
-    const sameAsSelection =
-      selection != null && selection.version === v.version && (v.version === '' || selection.repo === v.repository)
+    const sameAsSelection = selection != null && selection.version === v.version && selection.repo === v.repository
     if (sameAsSelection) {
-      onToggle(false)
+      if (locked) onToggle(false)
+      else onChooseVersion({ version: '', repository: selection.repo })
       return
     }
     onChooseVersion(v)
@@ -195,7 +197,7 @@ export function PackageRow({
           Edge Pack domains), and only the space the row itself gets decides
           whether the version chips fit beside the name instead of under it. */}
       <span className="@container min-w-0 flex-1">
-        <span className="flex flex-col @2xl:flex-row @2xl:items-start @2xl:gap-4">
+        <span className="flex flex-col">
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-baseline gap-1.5">
               <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
@@ -207,9 +209,9 @@ export function PackageRow({
                 </span>
               )}
               {!tag && <span className="font-mono text-[11px] text-slate-500">{version}</span>}
-              {effective && !effectiveShownByChip && (
-                // No chip here shows the version a build would install, so
-                // say it, solid for a pin, dashed for what Unpinned resolves to.
+              {effective && (
+                // The version a build would install, solid for a pin, dashed
+                // for what an unpinned package currently resolves to.
                 <span
                   className={chipClass({ active: !!pin, dashed: !pin })}
                   title={pin ? 'Pinned version' : 'The version Unpinned currently resolves to'}
@@ -217,7 +219,7 @@ export function PackageRow({
                   {effective.version}
                 </span>
               )}
-              {effective && !effectiveShownByChip ? (
+              {effective ? (
                 <ViaRepo
                   label={
                     templatePinElsewhere
@@ -391,49 +393,8 @@ function VersionChips({
   // own empty-versions fallback synthesizing a single entry with a real
   // version but no repository.
   const noRepoKnown = versions.every((v) => !v.repository)
-  // Latest is the row's current state when it's the pick, or when nothing is
-  // picked and the template's own entry floats with no known version to
-  // mark instead — worth highlighting the same way an explicit pin would be.
-  // A version picked over a floating template entry is the current state
-  // then, so Latest isn't.
-  const latestIsCurrent = pinned === '' || (pinned === undefined && currentIsFloating === true)
-  // Latest is the template's own choice for an unpinned template entry, so
-  // it changes nothing — unless an override is in place, which it drops.
-  const latestIsTemplates = currentIsFloating === true && !overridden
-
   return (
-    <span className="mt-1.5 flex flex-wrap items-center gap-1.5 @2xl:mt-0 @2xl:max-w-[50%] @2xl:shrink-0 @2xl:justify-end">
-      <button
-        type="button"
-        disabled={disabled || latestIsTemplates || noRepoKnown}
-        title={
-          noRepoKnown
-            ? 'Resolve this package to enable picking a version'
-            : latestIsTemplates
-              ? "Already the template's own (unpinned) choice"
-              : currentIsFloating
-                ? "The template's own (unpinned) choice — choose it to drop your override"
-                : 'No version pin: the build installs the newest version from the highest-priority repository'
-        }
-        onClick={(e) => {
-          stop(e)
-          if (disabled || latestIsTemplates || noRepoKnown) return
-          if (currentIsFloating && overridden) {
-            onRevert?.()
-            return
-          }
-          onChoose({ version: '', repository: versions[0]?.repository ?? '' })
-        }}
-        aria-pressed={latestIsCurrent}
-        className={chipClass({
-          active: latestIsCurrent,
-          // The template's own choice, so not clickable, but it reads as
-          // selected rather than greyed out.
-          disabled: disabled || (latestIsTemplates ? false : noRepoKnown),
-        })}
-      >
-        Unpinned
-      </button>
+    <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
       {shown.map((v) => {
         const isCurrent = v.version === currentVersion
         // Only truly redundant when the template already pins this exact
@@ -448,13 +409,18 @@ function VersionChips({
         // pin instead, so it drops the override rather than being disabled.
         const isRedundant = isCurrent && !currentIsFloating && !overridden
         const revertsToTemplate = isCurrent && !currentIsFloating && overridden
+        const selectedHere = pinned === v.version && pinnedRepo === v.repository
         return (
           <button
             key={`${v.repository} ${v.version}`}
             type="button"
-            disabled={disabled || isRedundant}
+            disabled={disabled || isRedundant || noRepoKnown}
             title={
-              isRedundant
+              noRepoKnown
+                ? 'Resolve this package to enable picking a version'
+                : selectedHere
+                  ? `${v.version} from ${repoLabelFor(v.repository)} — ${overridden ? 'your override; choose it again to drop it' : 'pinned; choose it again to unpin'}`
+                  : isRedundant
                 ? `${v.version} from ${repoLabelFor(v.repository)} — already pinned by the template`
                 : revertsToTemplate
                   ? `${v.version} from ${repoLabelFor(v.repository)} — the template's own pin; choose it to drop your override`
@@ -466,7 +432,7 @@ function VersionChips({
             }
             onClick={(e) => {
               stop(e)
-              if (disabled || isRedundant) return
+              if (disabled || isRedundant || noRepoKnown) return
               if (revertsToTemplate) {
                 onRevert?.()
                 return
