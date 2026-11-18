@@ -352,9 +352,17 @@ install samples on top of the blueprint with `openedge-cli install
   place after a reboot, including on an immutable image whose `/etc` persists.
 - **Proxy.** The unit inherits the image's proxy settings (`http_proxy`,
   `https_proxy`, `no_proxy`).
-- **Retries and reboots.** The unit runs on every boot until the command exits
-  `0`. When `openedge-cli` reboots the system itself (the `reboot` module), the
-  unit runs `install` again after the reboot.
+- **Retries and reboots.** When `openedge-cli` reboots the system itself (the
+  `reboot` module), the unit is stopped by the shutdown and runs `install` again
+  after the reboot. When the command exits non-zero for any other reason, the
+  unit records the failure and is not run again at boot. The login prompt and
+  the message of the day name the unit's journal and tell an administrator to
+  fix the problem and run `sudo /usr/libexec/ict-provision-report retry
+  oep-installer`, which runs the unit again as the configured user with the
+  temporary sudo grant. A user with sudo can run `~/.local/bin/openedge-cli
+  resume` instead. An `imageType: img` image (a RAM root file system) keeps no
+  state across boots, so there the unit sets neither `stopOnFailure` nor a hint
+  and runs again at every boot until it succeeds.
 
 This relies on behavior `openedge-cli` already has. Please confirm:
 

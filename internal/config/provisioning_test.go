@@ -100,6 +100,39 @@ func TestParseProvisioningSections(t *testing.T) {
 	}
 }
 
+// The ISO build writes the template to template-dump.yaml and the live installer
+// loads it again to generate the target's units, so a script's failure handling
+// must survive that round trip.
+func TestStopOnFailureSurvivesTemplateDump(t *testing.T) {
+	t.Parallel()
+	yamlText := strings.Replace(provisioningTemplateYAML, "        rebootAfter: true\n",
+		"        stopOnFailure: true\n        recoveryHint: \"as edge run ~/.local/bin/openedge-cli resume\"\n", 1)
+	if yamlText == provisioningTemplateYAML {
+		t.Fatal("test input not found in the template")
+	}
+	tmpl, err := parseYAMLTemplate([]byte(yamlText), false)
+	if err != nil {
+		t.Fatalf("parseYAMLTemplate: %v", err)
+	}
+	dump, err := yaml.Marshal(tmpl.SystemConfig.Provisioning)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var again ProvisioningConfig
+	if err := yaml.Unmarshal(dump, &again); err != nil {
+		t.Fatalf("the dump does not load again: %v", err)
+	}
+	var got ProvisioningScript
+	for _, sc := range again.Scripts {
+		if sc.Name == "second" {
+			got = sc
+		}
+	}
+	if !got.StopOnFailure || got.RecoveryHint != "as edge run ~/.local/bin/openedge-cli resume" {
+		t.Errorf("failure handling lost in the template dump: %+v", got)
+	}
+}
+
 func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, find, replace string }{
@@ -236,6 +269,7 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"arg with $", func(s *ProvisioningScript) { s.Args = []string{"$HOME"} }, false, true},
 		{"arg with ;", func(s *ProvisioningScript) { s.Args = []string{"a;b"} }, false, true},
 		{"env name with a dash", func(s *ProvisioningScript) { s.Env = map[string]string{"A-B": "x"} }, false, true},
+		{"env name reserved by systemd", func(s *ProvisioningScript) { s.Env = map[string]string{"SERVICE_RESULT": "success"} }, false, true},
 		{"env name starting with a digit", func(s *ProvisioningScript) { s.Env = map[string]string{"1A": "x"} }, false, true},
 		{"env value with a quote", func(s *ProvisioningScript) { s.Env = map[string]string{"A": `x"y`} }, false, true},
 		{"negative timeoutSec", func(s *ProvisioningScript) { s.TimeoutSec = -1 }, false, true},
@@ -243,6 +277,27 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"rebootAfter on an every-boot script", func(s *ProvisioningScript) {
 			s.Stage = ProvisioningStageEveryBoot
 			s.RebootAfter = true
+		}, false, true},
+		{"stopOnFailure with a hint", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = "as edge run ~/.local/bin/openedge-cli resume"
+		}, false, false},
+		{"stopOnFailure on an every-boot script", func(s *ProvisioningScript) {
+			s.Stage = ProvisioningStageEveryBoot
+			s.StopOnFailure = true
+		}, false, true},
+		{"hint without stopOnFailure", func(s *ProvisioningScript) { s.RecoveryHint = "fix it" }, false, true},
+		{"hint with a backslash", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = `fix \n it`
+		}, false, true},
+		{"hint with a newline", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = "fix\nit"
+		}, false, true},
+		{"hint too long", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = strings.Repeat("x", 201)
 		}, false, true},
 		{"env value too long", func(s *ProvisioningScript) { s.Env = map[string]string{"A": strings.Repeat("x", 257)} }, false, true},
 	}
@@ -346,6 +401,30 @@ func TestValidateProvisioningScriptsNestedFinal(t *testing.T) {
 	}
 }
 
+func TestStopOnFailureRejectedOnInitrdImages(t *testing.T) {
+	t.Parallel()
+	mk := func(imageType string, stop bool) *ImageTemplate {
+		return &ImageTemplate{
+			Target: TargetInfo{ImageType: imageType},
+			SystemConfig: SystemConfig{Provisioning: ProvisioningConfig{Scripts: []ProvisioningScript{
+				{Name: "s", Local: "s.sh", Final: "/usr/local/sbin/s.sh", StopOnFailure: stop},
+			}}},
+		}
+	}
+	if err := mk(ImageTypeInitrd, true).validateMergedProvisioning(); err == nil ||
+		!strings.Contains(err.Error(), "stopOnFailure") {
+		t.Errorf("stopOnFailure on an img image: err = %v, want a rejection", err)
+	}
+	for _, tt := range []struct {
+		imageType string
+		stop      bool
+	}{{ImageTypeInitrd, false}, {"raw", true}, {"iso", true}} {
+		if err := mk(tt.imageType, tt.stop).validateMergedProvisioning(); err != nil {
+			t.Errorf("imageType %q stopOnFailure=%v: unexpected error %v", tt.imageType, tt.stop, err)
+		}
+	}
+}
+
 func TestValidateProvisioningScriptsReservedFinal(t *testing.T) {
 	t.Parallel()
 	for _, final := range []string{
@@ -365,6 +444,16 @@ func TestValidateProvisioningScriptsReservedFinal(t *testing.T) {
 		CloudInitMetaDataScript,
 		"/etc/systemd/system/" + CloudInitMetaDataUnit,
 		"/etc/systemd/system/multi-user.target.wants/" + CloudInitMetaDataUnit,
+		// The report script, the failure markers and the failure notices.
+		ProvisioningReportScript,
+		ProvisioningFailedDir + "/x",
+		"/etc/motd.d/ict-provision-a",
+		"/etc/issue.d/ict-provision-a.issue",
+		// The notice directories themselves, which would stop the notices being written.
+		"/etc/motd.d",
+		"/etc/issue.d",
+		// The state directory that holds the stamps and failure markers.
+		"/var/lib/image-composer-tool",
 	} {
 		err := validateProvisioningScripts([]ProvisioningScript{{Name: "x", Local: "x.sh", Final: final}})
 		if err == nil || !strings.Contains(err.Error(), "generated by image-composer-tool") {
@@ -1047,6 +1136,32 @@ func TestValidateAdditionalFilesNotGenerated(t *testing.T) {
 			AdditionalFileInfo{Local: "/x/f", Final: ProvisioningStampDir + "/s"}, true},
 		{"provisioning unit name", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
 			AdditionalFileInfo{Local: "/x/f", Final: "/etc/systemd/system/ict-provision-000-s.service"}, true},
+		{"report script", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: ProvisioningReportScript}, true},
+		{"failure notice in the message of the day", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d/ict-provision-s"}, true},
+		{"failure notice at the login prompt", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: "/etc/issue.d/ict-provision-s.issue"}, true},
+		{"state directory as a file", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/f", Final: "/var/lib/image-composer-tool"}, true},
+		{"file named like the state directory copied into /var/lib", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/image-composer-tool", Final: "/var/lib/"}, true},
+		{"unrelated file in /var/lib", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/other", Final: "/var/lib/other"}, false},
+		{"notice directory as a file", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d"}, true},
+		{"notice directory as a file with only an oepInstaller section",
+			SystemConfig{OEPInstaller: OEPInstallerConfig{User: "edge"}},
+			AdditionalFileInfo{Local: "/x/f", Final: "/etc/issue.d"}, true},
+		// The copier drops the trailing slash, so with the directory absent this
+		// would create a regular file too.
+		{"notice directory with a trailing slash", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/10-site", Final: "/etc/motd.d/"}, true},
+		{"file named like a notice directory copied into /etc", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/issue.d", Final: "/etc/"}, true},
+		{"file inside the notice directory", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/10-site", Final: "/etc/motd.d/10-site"}, false},
+		{"notice directory as a file, no provisioning", SystemConfig{},
+			AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d"}, false},
+		{"other file in the message-of-the-day directory", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d/10-site"}, false},
+		// The OEP Installer's script is added after additionalFiles are validated.
+		{"report script with only an oepInstaller section",
+			SystemConfig{OEPInstaller: OEPInstallerConfig{User: "edge"}},
+			AdditionalFileInfo{Local: "/x/f", Final: ProvisioningReportScript}, true},
 		{"key-only sudoers", SystemConfig{Users: keyOnlyAdmin},
 			AdditionalFileInfo{Local: "/x/f", Final: KeyOnlySudoersFile}, true},
 		{"sudoers with a password set", SystemConfig{Users: []UserConfig{{Name: "a", Sudo: true, Password: "x",
