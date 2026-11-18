@@ -25,6 +25,8 @@ const (
 	ProvisioningTriggerUnit = "ict-provision-start.service"
 	// StampDir records completed first-boot scripts on the deployed system.
 	StampDir = config.ProvisioningStampDir
+	// FailedDir records failed scripts on the deployed system.
+	FailedDir = config.ProvisioningFailedDir
 )
 
 // noticeDirs are the image directories the failure notices are written to.
@@ -47,7 +49,10 @@ func ProvisioningUnitName(index int, script config.ProvisioningScript) string {
 // so a failed script stops the scripts after it. A first-boot script's unit
 // writes a stamp file only when the script succeeds, so a failed script is
 // retried on the next boot; every-boot scripts run on each boot. A failed
-// script is also shown at the login prompt and after login until it succeeds.
+// script is also recorded and shown at the login prompt and after login until
+// it succeeds. A script with StopOnFailure is not retried at all: its unit fails
+// to start on later boots, and blocks the scripts after it, until an
+// administrator retries it.
 //
 // By default the units run after network-online.target and, when cloud-init is
 // running, after cloud-final.service, started at boot by an enabled trigger
@@ -176,6 +181,12 @@ func writeUnitSection(b *strings.Builder, script config.ProvisioningScript, afte
 	if isFirstBoot(script) {
 		fmt.Fprintf(b, "ConditionPathExists=!%s/%s\n", StampDir, script.Name)
 	}
+	if script.StopOnFailure {
+		// An Assert, not a Condition: a failed condition only skips the unit and
+		// the units that require it would still run, while a failed assertion fails
+		// the start job and keeps them blocked until the failure is cleared.
+		fmt.Fprintf(b, "AssertPathExists=!%s/%s\n", FailedDir, script.Name)
+	}
 }
 
 // writeServiceSection writes the [Service] body after Type= and RemainAfterExit=.
@@ -205,7 +216,11 @@ func writeServiceSection(b *strings.Builder, script config.ProvisioningScript, b
 	}
 	// Runs after a failed or timed-out start; the leading "-" keeps a problem
 	// in the report from changing the unit's result.
-	fmt.Fprintf(b, "ExecStopPost=-%s failed %s %%n\n", config.ProvisioningReportScript, script.Name)
+	mode := "retry"
+	if script.StopOnFailure {
+		mode = "stop"
+	}
+	fmt.Fprintf(b, "ExecStopPost=-%s failed %s %%n %s\n", config.ProvisioningReportScript, script.Name, mode)
 	b.WriteString("StandardOutput=journal+console\nStandardError=journal+console\n")
 }
 

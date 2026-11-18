@@ -1263,6 +1263,7 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters). `SERVICE_RESULT`, `EXIT_CODE` and `EXIT_STATUS` are set by systemd for the failure report and cannot be used |
 | `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit, except with `beforeLogin: true`, where it means 3600 s |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
+| `scripts[].stopOnFailure` | bool | No | Do not run a failed script again on later boots (default: retry at the next boot). `first-boot` scripts only, and not with `imageType: img`, whose root file system is recreated at every boot. The unit fails to start on later boots, so the scripts after it stay blocked, until an administrator runs `sudo /usr/libexec/ict-provision-report retry <name>`, which runs it again. The notice is in `/etc`, so where `/etc` is not persistent it disappears at the next reboot while the script stays blocked |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
 execution order), started at boot by `ict-provision-start.service`. Units run after
@@ -1277,7 +1278,9 @@ When a script fails or times out, the console login prompt and the message of
 the day (so SSH logins as well) show `Provisioning script "<name>" failed` with
 the command to read its log, `sudo journalctl -u ict-provision-<NNN>-<name>.service`.
 The notice stays until the script succeeds on a later boot (on an image whose `/etc` is not
-persistent, such as `imageType: img` or an immutable image with a tmpfs overlay, only until the next reboot). A termination by a reboot or shutdown is
+persistent, such as `imageType: img` or an immutable image with a tmpfs overlay, only until the next
+reboot). A script with `stopOnFailure` is not run again at boot (its unit shows as failed and the
+scripts after it do not start); its notice shows the `retry` command instead. A termination by a reboot or shutdown is
 not a failure: a script that reboots the machine to finish a step, as `openedge-cli` does, is not
 reported and runs again after the boot. A unit that fails after its script finished, for example
 when the `rebootAfter` reboot command fails, loses its completion stamp so the script runs again.

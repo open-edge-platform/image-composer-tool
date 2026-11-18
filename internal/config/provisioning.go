@@ -85,6 +85,11 @@ type ProvisioningScript struct {
 	TimeoutSec int `yaml:"timeoutSec,omitempty"`
 	// RebootAfter reboots the system once the script has succeeded.
 	RebootAfter bool `yaml:"rebootAfter,omitempty"`
+	// StopOnFailure keeps a failed first-boot script from running again on later
+	// boots: its unit does not start until an administrator runs it again with
+	// ict-provision-report retry. Without it a failed first-boot script is
+	// retried at the next boot.
+	StopOnFailure bool `yaml:"stopOnFailure,omitempty"`
 }
 
 // ProvisioningConfig holds boot-time provisioning scripts.
@@ -225,6 +230,10 @@ func mergeProvisioningScripts(inherited, own []ProvisioningScript) []Provisionin
 // ProvisioningStampDir records completed first-boot scripts on the deployed system.
 const ProvisioningStampDir = "/var/lib/image-composer-tool/provisioned"
 
+// ProvisioningFailedDir holds one marker per provisioning script that failed.
+// A marker exists until the script succeeds or the user clears it.
+const ProvisioningFailedDir = "/var/lib/image-composer-tool/provisioning-failed"
+
 // ProvisioningReportScript records a script's outcome on the deployed system
 // and shows the failure notice at the login prompt and after login.
 const ProvisioningReportScript = "/usr/libexec/ict-provision-report"
@@ -250,18 +259,25 @@ const (
 	unattendedUpgradesPath  = "/etc/apt/apt.conf.d/52ict-unattended-upgrades"
 	provisionUnitPrefix     = "/etc/systemd/system/ict-provision-"
 	provisionUnitWantPrefix = "/etc/systemd/system/multi-user.target.wants/ict-provision-"
-	// The failure notices the report script writes at runtime, and removes when
-	// the script of that name succeeds.
+	// provisionNoticePrefixes are the failure notices the report script writes at
+	// runtime, and removes when the script of that name succeeds.
 	provisionIssuePrefix = "/etc/issue.d/ict-provision-"
 	provisionMotdPrefix  = "/etc/motd.d/ict-provision-"
 	provisionIssueDir    = "/etc/issue.d"
 	provisionMotdDir     = "/etc/motd.d"
 )
 
-// provisioningDirsNotFiles are the directories the failure notices are written
-// to. They may not themselves become files, or the notices could not be written;
-// other files inside them are fine.
-var provisioningDirsNotFiles = []string{provisionIssueDir, provisionMotdDir}
+// ImageTypeInitrd is the imageType whose root file system lives in RAM.
+const ImageTypeInitrd = "img"
+
+// provisioningDirsNotFiles are directories the report script writes into at
+// runtime: the failure notices, and the state directory that holds the stamps
+// and failure markers. None may itself become a file, or those writes would fail;
+// other files inside the notice directories are fine.
+var provisioningDirsNotFiles = []string{provisionIssueDir, provisionMotdDir, provisioningStateDir}
+
+// provisioningStateDir is the parent of the stamp and failure-marker directories.
+const provisioningStateDir = "/var/lib/image-composer-tool"
 
 // Files the provisioning writers generate inside the image. A script's final
 // path may not land on them: the generated content would replace the script
@@ -282,6 +298,7 @@ var (
 	}
 	reservedProvisioningDirs = []string{
 		ProvisioningStampDir,
+		ProvisioningFailedDir,
 		CloudInitSeedDir,
 	}
 	reservedProvisioningPrefixes = []string{
@@ -352,7 +369,7 @@ func (t *ImageTemplate) generatedProvisioningPaths() (paths, prefixes []string) 
 		paths = append(paths, KeyOnlySudoersFile)
 	}
 	if t.hasProvisioningUnits() {
-		paths = append(paths, ProvisioningStampDir, ProvisioningReportScript)
+		paths = append(paths, ProvisioningStampDir, ProvisioningFailedDir, ProvisioningReportScript)
 		prefixes = append(prefixes, provisionUnitPrefix, provisionUnitWantPrefix,
 			provisionIssuePrefix, provisionMotdPrefix)
 	}
@@ -376,12 +393,13 @@ func (t *ImageTemplate) validateAdditionalFilesNotGenerated() error {
 	for _, f := range t.SystemConfig.AdditionalFiles {
 		clean := filepath.Clean("/" + f.Final)
 		for _, dest := range []string{clean, clean + "/" + filepath.Base(f.Local)} {
-			// The copier drops a trailing slash, so when a notice directory is not in
-			// the image yet, a copy to it (or of a file named like it into its parent)
-			// creates a regular file, and the notices could not be written.
+			// The copier drops a trailing slash, so when the notice directory is not
+			// in the image yet, a copy to it (or of a file named like it into its
+			// parent) creates a regular file, and the notices could not be written.
 			if t.hasProvisioningUnits() && slices.Contains(provisioningDirsNotFiles, dest) {
 				return fmt.Errorf("systemConfig.additionalFiles %q installs to %q, a directory image-composer-tool "+
-					"writes provisioning failure notices into; choose a file path inside it instead", f.Local, dest)
+					"writes provisioning state or failure notices into; choose a file path inside it instead",
+					f.Local, dest)
 			}
 			for _, p := range paths {
 				if dest == p || strings.HasPrefix(dest, p+"/") {
@@ -594,6 +612,10 @@ func validateProvisioningScriptParams(s ProvisioningScript) error {
 	if s.TimeoutSec < 0 {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: timeoutSec must be >= 0", s.Name)
 	}
+	if s.StopOnFailure && s.Stage == ProvisioningStageEveryBoot {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: stopOnFailure needs stage %q; "+
+			"an every-boot script is meant to run on every boot", s.Name, ProvisioningStageFirstBoot)
+	}
 	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+
 			"an every-boot script would reboot on every boot", s.Name, ProvisioningStageFirstBoot)
@@ -717,6 +739,13 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 	}
 	if err := t.validateOEPInstaller(); err != nil {
 		return err
+	}
+	// An img image is a RAM root file system: /var is recreated on every boot, so
+	// neither the stamps nor a failure marker would survive a reboot.
+	if t.Target.ImageType == ImageTypeInitrd &&
+		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool { return s.StopOnFailure }) {
+		return fmt.Errorf("systemConfig.provisioning.scripts: stopOnFailure needs state that survives a reboot, "+
+			"which an imageType %q image (a RAM root file system) does not keep", ImageTypeInitrd)
 	}
 	if t.SystemConfig.Provisioning.RunsBeforeLogin() &&
 		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool {

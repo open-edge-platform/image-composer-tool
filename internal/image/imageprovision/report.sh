@@ -3,8 +3,14 @@
 # login prompt and after login.
 #
 # Called by the script's unit:
-#   failed NAME UNIT   ExecStopPost: records a failure
-#   ok NAME            ExecStartPost: removes a recorded failure
+#   failed NAME UNIT retry|stop  ExecStopPost: records a failure
+#   ok NAME                      ExecStartPost: removes a recorded failure
+# Run by an administrator after a failure:
+#   retry NAME   removes the failure and runs the unit again
+#
+# With "stop" the unit does not start on later boots while its failure is
+# recorded, and the units that require it stay blocked; with "retry" it runs
+# again at the next boot.
 set -u
 
 # This runs as root with the script's environment, and a template may set the
@@ -17,7 +23,7 @@ export PATH
 
 state=/var/lib/image-composer-tool
 etc=/etc
-usage="usage: $0 failed NAME UNIT | ok NAME"
+usage="usage: $0 failed NAME UNIT retry|stop | ok NAME | retry NAME"
 cmd="${1:-}"
 name="${2:-}"
 case "$name" in
@@ -26,11 +32,54 @@ case "$name" in
 	exit 2
 	;;
 esac
+marker="$state/provisioning-failed/$name"
 issue="$etc/issue.d/ict-provision-$name.issue"
 motd="$etc/motd.d/ict-provision-$name"
 
+forget() { rm -f "$marker" "$issue" "$motd"; }
+
 case "$cmd" in
-ok) rm -f "$issue" "$motd" ;;
+ok) forget ;;
+retry)
+	unit="$(cat "$marker" 2>/dev/null)" || unit=""
+	if [ -z "$unit" ]; then
+		echo "No failure is recorded for $name." >&2
+		exit 1
+	fi
+	# The unit does not start while the failure marker exists. The notices stay
+	# until the script succeeds (the unit's ok hook removes them). If systemd
+	# refuses the start (for example a script this one requires failed in this
+	# boot), the unit never runs, so put the marker back: otherwise the next boot
+	# would run it unattended. systemd gives a unit a new invocation ID each time
+	# it really starts, so an unchanged ID after a failed start means a rejection.
+	# If an ID cannot be read, assume a rejection: a script that stays blocked can
+	# be retried again, while one that runs unattended cannot be taken back.
+	before="$(systemctl show -p InvocationID --value "$unit" 2>/dev/null)"
+	before_rc=$?
+	# Move the marker aside instead of deleting it, so that it can be put back
+	# whole. The name starts with a dot, which no script name does.
+	saved="$state/provisioning-failed/.$name.retry"
+	mv -f "$marker" "$saved" || exit 1
+	echo "Running $unit again. Follow it with: sudo journalctl -fu $unit"
+	systemctl start "$unit"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		rm -f "$saved"
+		exit 0
+	fi
+	# The unit ran, then failed or was stopped (for example by the reboot it asked
+	# for, which cancels the start job): its own hooks decided what to record.
+	after="$(systemctl show -p InvocationID --value "$unit" 2>/dev/null)"
+	after_rc=$?
+	if [ "$before_rc" -eq 0 ] && [ "$after_rc" -eq 0 ] && [ "$after" != "$before" ]; then
+		rm -f "$saved"
+	elif [ -e "$marker" ]; then
+		rm -f "$saved"
+	elif ! mv -f "$saved" "$marker"; then
+		echo "ict-provision-report: cannot restore the failure record of $name; it is in $saved" >&2
+	fi
+	exit "$rc"
+	;;
 failed)
 	[ "${SERVICE_RESULT:-success}" != success ] || exit 0
 	# Stopped because the system is rebooting or shutting down, for example when
@@ -50,16 +99,32 @@ failed)
 	stamp="$state/provisioned/$name"
 	rm -f "$stamp"
 	unit="${3:-ict-provision-$name.service}"
+	mode="${4:-retry}"
+	# Record the failure first, atomically. A script that must not be retried is
+	# only blocked when both the marker and the notice were written: if either
+	# cannot be, fall back to retrying at the next boot instead of blocking it
+	# without telling anyone.
+	tmp="$state/provisioning-failed/.$name.tmp"
+	if ! { mkdir -p "$state/provisioning-failed" &&
+		printf '%s\n' "$unit" >"$tmp" && mv -f "$tmp" "$marker"; }; then
+		rm -f "$tmp"
+		echo "ict-provision-report: cannot record the failure of $name in $state" >&2
+		mode=retry
+	fi
 	mkdir -p "$etc/issue.d" "$etc/motd.d"
 	notice() {
 		printf '\n*** Provisioning script "%s" failed. ***\n' "$name"
 		printf 'Please look at the journal logs: sudo journalctl -u %s\n' "$unit"
 		if [ -e "$stamp" ]; then
-			# The unit stays skipped while the stamp exists.
-			printf 'It cannot run again until its completion record is removed: %s\n\n' "$stamp"
+			# The unit stays skipped while the stamp exists, so neither a retry at
+			# boot nor the retry command would run it.
+			printf 'It cannot run again until its completion record is removed: %s\n' "$stamp"
+		elif [ "$mode" = stop ]; then
+			printf 'It does not run again at boot. After fixing the problem, run it again: sudo %s retry %s\n' "$0" "$name"
 		else
-			printf 'It runs again at the next boot if the scripts before it succeed.\n\n'
+			printf 'It runs again at the next boot if the scripts before it succeed.\n'
 		fi
+		printf '\n'
 	}
 	# Write each notice to a new temporary file in /etc (which neither agetty nor
 	# pam_motd reads) and move it into place only when the write succeeded, so a
@@ -77,6 +142,8 @@ failed)
 	done
 	if [ "$written" -eq 0 ]; then
 		echo "ict-provision-report: cannot write the failure notice for $name" >&2
+		# A script that is not retried must not stay blocked with no notice.
+		rm -f "$marker"
 		exit 1
 	fi
 	;;
