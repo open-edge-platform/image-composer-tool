@@ -827,3 +827,65 @@ func TestStopGPGComponents_ComponentParsing(t *testing.T) {
 		})
 	}
 }
+
+func TestQemuUserPackage(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	const policyAvailable = "qemu-user-static:\n  Installed: (none)\n  Candidate: 1:8.2.2+ds-0ubuntu1\n  Version table:\n"
+	const policyVirtual = "qemu-user-static:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n"
+
+	tests := []struct {
+		name string
+		cmds []shell.MockCommand
+		want string
+	}{
+		{
+			name: "package available (Ubuntu 24.04, Debian)",
+			cmds: []shell.MockCommand{
+				{Pattern: "command -v apt-cache", Output: "/usr/bin/apt-cache", Error: nil},
+				{Pattern: "apt-cache policy qemu-user-static", Output: policyAvailable, Error: nil},
+			},
+			want: "qemu-user-static",
+		},
+		{
+			name: "virtual package only (Ubuntu 26.04)",
+			cmds: []shell.MockCommand{
+				{Pattern: "command -v apt-cache", Output: "/usr/bin/apt-cache", Error: nil},
+				{Pattern: "apt-cache policy qemu-user-static", Output: policyVirtual, Error: nil},
+			},
+			want: "qemu-user-binfmt",
+		},
+		{
+			name: "apt-cache succeeds with empty output",
+			cmds: []shell.MockCommand{
+				{Pattern: "command -v apt-cache", Output: "/usr/bin/apt-cache", Error: nil},
+				{Pattern: "apt-cache policy qemu-user-static", Output: "", Error: nil},
+			},
+			want: "qemu-user-binfmt",
+		},
+		{
+			name: "host without apt-cache (yum, tdnf)",
+			cmds: []shell.MockCommand{
+				{Pattern: "command -v apt-cache", Output: "", Error: fmt.Errorf("exit status 1")},
+			},
+			want: "qemu-user-static",
+		},
+		{
+			name: "apt-cache policy fails",
+			cmds: []shell.MockCommand{
+				{Pattern: "command -v apt-cache", Output: "/usr/bin/apt-cache", Error: nil},
+				{Pattern: "apt-cache policy qemu-user-static", Output: "", Error: fmt.Errorf("exit status 100")},
+			},
+			want: "qemu-user-static",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shell.Default = shell.NewMockExecutor(tt.cmds)
+			if got := system.QemuUserPackage(); got != tt.want {
+				t.Errorf("QemuUserPackage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

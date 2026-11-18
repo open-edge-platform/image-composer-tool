@@ -1,0 +1,62 @@
+# Runs the tool natively on an Ubuntu 26.04 host. The other workflows pin
+# ubuntu-24.04 or run inside containers, so a host-only break on 26.04 (such as
+# a package that was renamed or dropped) would otherwise go unnoticed until a
+# user reports it.
+name: Ubuntu 26.04 Host
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'image-templates/ubuntu26/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ubuntu26-host.yml'
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'  # weekly, to catch changes in the runner image or in 26.04 itself
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu26-host:
+    name: Host dependencies and smoke build on Ubuntu 26.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Confirm the host is Ubuntu 26.04
+        run: grep -q 'VERSION_ID="26.04"' /etc/os-release
+
+      - name: Run host-sensitive unit tests
+        run: go test ./internal/utils/system/... ./internal/chroot/deb/... ./internal/provider/ubuntu/... ./internal/provider/elxr/...
+
+      - name: Build the tool
+        run: go build -o image-composer-tool ./cmd/image-composer-tool
+
+      # Pre-processing installs the host dependencies, which is where the
+      # qemu-user-static failure on 26.04 happened. A successful build of the
+      # smallest Ubuntu 26.04 template proves the whole host setup works.
+      - name: Smoke build of the Ubuntu 26.04 minimal template
+        shell: bash
+        run: |
+          sudo -E ./image-composer-tool build image-templates/ubuntu26/ubuntu26-x86_64-minimal-raw.yml \
+            2>&1 | tee "$RUNNER_TEMP/smoke-build.log"
+          grep -q "image build completed successfully" "$RUNNER_TEMP/smoke-build.log"

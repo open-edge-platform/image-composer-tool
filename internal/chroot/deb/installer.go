@@ -68,19 +68,21 @@ func (debInstaller *DebInstaller) validateCrossArchDeps(targetArch string) error
 		pkg  string   // apt package that provides it
 	}
 
-	qemuCmdByArch := map[string]string{
-		"arm64": "qemu-aarch64-static",
-		"amd64": "qemu-x86_64-static",
+	// qemu-user-static ships the *-static binaries; qemu-user-binfmt (Ubuntu
+	// 26.04+) ships the dynamic ones, so accept either.
+	qemuCmdsByArch := map[string][]string{
+		"arm64": {"qemu-aarch64-static", "qemu-aarch64"},
+		"amd64": {"qemu-x86_64-static", "qemu-x86_64"},
 	}
 
-	qemuCmd, ok := qemuCmdByArch[targetArch]
+	qemuCmds, ok := qemuCmdsByArch[targetArch]
 	if !ok {
 		return fmt.Errorf("unsupported target architecture for cross-architecture dependency validation: %s", targetArch)
 	}
 
 	deps := []crossArchDep{
 		{name: "arch-test", cmds: []string{"arch-test"}, pkg: "arch-test"},
-		{name: qemuCmd, cmds: []string{qemuCmd}, pkg: "qemu-user-static"},
+		{name: qemuCmds[0], cmds: qemuCmds, pkg: system.QemuUserPackage()},
 		{name: "binfmt-support", cmds: []string{"update-binfmts"}, pkg: "binfmt-support"},
 	}
 

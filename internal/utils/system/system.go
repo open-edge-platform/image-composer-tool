@@ -160,3 +160,46 @@ func StopGPGComponents(chrootPath string) error {
 
 	return nil
 }
+
+// QemuUserPackage returns the package that provides qemu user-mode emulation
+// and binfmt registration on the host. Ubuntu 26.04 and later no longer ship
+// qemu-user-static; it is only a virtual package there, provided by
+// qemu-user-binfmt, so "apt install qemu-user-static" has no installation
+// candidate. Older releases and Debian still use qemu-user-static.
+//
+// qemu-user-binfmt is chosen only on an apt host where apt reports no
+// installable qemu-user-static; everywhere else the legacy name is kept.
+func QemuUserPackage() string {
+	const (
+		legacyPkg = "qemu-user-static"
+		binfmtPkg = "qemu-user-binfmt"
+	)
+	hasApt, err := shell.IsCommandExist("apt-cache", shell.HostPath)
+	if err != nil || !hasApt {
+		return legacyPkg
+	}
+	// "apt-cache show" can succeed for a package that is only virtual, so read
+	// the candidate version instead.
+	output, err := shell.ExecCmdSilent("apt-cache policy "+legacyPkg, false, shell.HostPath, nil)
+	if err != nil {
+		return legacyPkg
+	}
+	if !hasInstallCandidate(output) {
+		log.Debugf("%s has no installation candidate on this host, using %s", legacyPkg, binfmtPkg)
+		return binfmtPkg
+	}
+	return legacyPkg
+}
+
+// hasInstallCandidate reports whether "apt-cache policy" output names an
+// installable candidate version.
+func hasInstallCandidate(policyOutput string) bool {
+	for _, line := range strings.Split(policyOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "Candidate:"); ok {
+			v = strings.TrimSpace(v)
+			return v != "" && v != "(none)"
+		}
+	}
+	return false
+}
