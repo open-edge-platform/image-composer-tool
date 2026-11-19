@@ -237,19 +237,19 @@ func (p *eLxr) PostProcess(template *config.ImageTemplate, err error) error {
 
 func (p *eLxr) installHostDependency() error {
 	var dependencyInfo = map[string]string{
-		"mmdebstrap":        "mmdebstrap",       // For the chroot env build
-		"mkfs.fat":          "dosfstools",       // For the FAT32 boot partition creation
-		"mformat":           "mtools",           // For writing files to FAT32 partition
-		"xorriso":           "xorriso",          // For ISO image creation
-		"qemu-img":          "qemu-utils",       // For image file format conversion
-		"ukify":             "systemd-ukify",    // For the UKI image creation
-		"grub-mkimage":      "grub-common",      // For ISO image UEFI Grub binary creation
-		"veritysetup":       "cryptsetup",       // For the veritysetup command
-		"sbsign":            "sbsigntool",       // For the UKI image creation
-		"dpkg-scanpackages": "dpkg-dev",         // For DEB repository metadata creation
-		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
-		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
-		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
+		"mmdebstrap":        "mmdebstrap",             // For the chroot env build
+		"mkfs.fat":          "dosfstools",             // For the FAT32 boot partition creation
+		"mformat":           "mtools",                 // For writing files to FAT32 partition
+		"xorriso":           "xorriso",                // For ISO image creation
+		"qemu-img":          "qemu-utils",             // For image file format conversion
+		"ukify":             "systemd-ukify",          // For the UKI image creation
+		"grub-mkimage":      "grub-common",            // For ISO image UEFI Grub binary creation
+		"veritysetup":       "cryptsetup",             // For the veritysetup command
+		"sbsign":            "sbsigntool",             // For the UKI image creation
+		"dpkg-scanpackages": "dpkg-dev",               // For DEB repository metadata creation
+		"bootctl":           "systemd-boot-efi",       // For bootctl on Ubuntu hosts
+		"arch-test":         "arch-test",              // Required by mmdebstrap for foreign-architecture bootstrap
+		"qemu-user":         system.QemuUserPackage(), // For cross-architecture binary execution support (qemu-user-binfmt on Ubuntu 26.04+)
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {
