@@ -192,6 +192,10 @@ export interface ComposeResponse {
   // login. Any entry with satisfied: false must be covered by a credentials
   // entry on the request before a build will start.
   credentials?: CredentialRequirement[]
+  // Ids of the catalog repositories the matched template itself installs from
+  // (its packageRepositories through extends and the default config), before
+  // this request's overrides. The Packages step shows them as in use.
+  templateRepos?: string[]
   // Present when the resolved template downloads OEP Installer files, which
   // may need a GitHub token for a private repository.
   oepInstaller?: OEPInstallerInfo

@@ -242,6 +242,89 @@ func (r PackageRepo) templateRepo() (config.PackageRepository, bool) {
 	return repo, true
 }
 
+// repoRef identifies one repository index: the (url, suite, components) triple
+// a deb build reads, or for rpm the URL alone.
+type repoRef struct {
+	url, codename, component string
+}
+
+// normalizeRepoRef makes a triple comparable. An omitted component becomes
+// "main" because that is what generateAptSourcesContent substitutes
+// (internal/config/apt_sources.go), so an index reading "main" is reading
+// exactly what a build would install from. Components are sorted because they
+// are independent path segments, not an ordered list.
+func normalizeRepoRef(url, codename, component string) repoRef {
+	component = strings.TrimSpace(component)
+	if component == "" {
+		component = "main"
+	}
+	parts := strings.Fields(component)
+	sort.Strings(parts)
+	return repoRef{
+		url:       normalizeRepoURL(url),
+		codename:  strings.TrimSpace(codename),
+		component: strings.Join(parts, " "),
+	}
+}
+
+func normalizeRepoURL(url string) string {
+	return strings.TrimSuffix(strings.TrimSpace(url), "/")
+}
+
+// templateRepoIDs maps a resolved template's packageRepositories to the ids of
+// the catalog repos offered for osID, so the Packages step can show which
+// repositories the template already uses rather than listing them as optional.
+// A deb repository matches on its full index triple, or failing that on URL and
+// suite, which tolerates an entry naming a different component set but never
+// confuses two suites served from one host. An rpm repository has no suite and
+// matches on URL. Entries the catalog does not carry, and the "<URL>"
+// placeholder private repos use, are skipped. Sorted for a stable response.
+func (s *Service) templateRepoIDs(osID string, repos []config.PackageRepository) []string {
+	if len(repos) == 0 {
+		return nil
+	}
+	byRef := make(map[repoRef]string)
+	bySuite := make(map[repoRef]string) // component left empty
+	byRPMURL := make(map[string]string)
+	for _, r := range s.PackageRepos(osID) {
+		if r.Type == repoTypeRPM {
+			byRPMURL[normalizeRepoURL(r.URL)] = r.ID
+		}
+		for _, idx := range r.Index {
+			url := idx.URL
+			if url == "" {
+				url = r.URL
+			}
+			if r.Type == repoTypeRPM {
+				byRPMURL[normalizeRepoURL(url)] = r.ID
+				continue
+			}
+			byRef[normalizeRepoRef(url, idx.Codename, idx.Component)] = r.ID
+			bySuite[repoRef{url: normalizeRepoURL(url), codename: strings.TrimSpace(idx.Codename)}] = r.ID
+		}
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, tr := range repos {
+		if strings.TrimSpace(tr.URL) == "" || strings.Contains(tr.URL, "<URL>") {
+			continue
+		}
+		id, ok := byRef[normalizeRepoRef(tr.URL, tr.Codename, tr.Component)]
+		if !ok {
+			id, ok = bySuite[repoRef{url: normalizeRepoURL(tr.URL), codename: strings.TrimSpace(tr.Codename)}]
+		}
+		if !ok {
+			id, ok = byRPMURL[normalizeRepoURL(tr.URL)]
+		}
+		if ok && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // appliesTo reports whether the repo is offered for a target OS id. A repo with
 // no OS list applies to every known target, and an empty query matches every
 // repo. Callers must reject unknown targets before this point — see

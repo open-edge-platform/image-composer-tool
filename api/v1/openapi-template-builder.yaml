@@ -1750,6 +1750,18 @@ components:
             be given a password or SSH key.
           items:
             $ref: "#/components/schemas/CredentialRequirement"
+        templateRepos:
+          type: array
+          description: |
+            Ids (as published by GET /package-repos) of the repositories the
+            matched template itself installs from: its `packageRepositories`
+            through the whole `extends` chain and the default config, before
+            this request's overrides. Present even when the request carries no
+            overrides, so a client can show these repositories as already in
+            use rather than as optional ones. A template repository the catalog
+            does not list is omitted.
+          items:
+            type: string
         oepInstaller:
           $ref: "#/components/schemas/OEPInstallerInfo"
         summary:
