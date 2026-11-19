@@ -47,6 +47,15 @@ describe('planTemplateUpdates', () => {
     expect(plan).toEqual({ pins: [], unverifiable: [] })
   })
 
+  it('treats a pin with a different epoch as a different version, and keeps it', () => {
+    // Template pins 2:1.0-1; the repo publishes 1:2.0-1 and 1:1.0-1. 1:1.0-1
+    // is not the pin (the epoch outranks the rest), so the pin isn't known to
+    // be published, and 1:2.0-1, older than 2:1.0-1, must not replace it.
+    const epochLock: BaseLock = { ...lock, info: () => ({ locked: true, currentVersion: '2:1.0-1', currentIsFloating: false }) }
+    const plan = planTemplateUpdates(['ffmpeg'], epochLock, { ffmpeg: hit('ffmpeg', '1:2.0-1', '1:1.0-1') })
+    expect(plan).toEqual({ pins: [], unverifiable: ['ffmpeg'] })
+  })
+
   it('keeps a template pin whose version no checked repo publishes, since it may be newer', () => {
     // Ubuntu's own 9.0.0 could be older than the vendor pin 9.0.1-1ppa1.
     const plan = planTemplateUpdates(['ffmpeg'], lock, { ffmpeg: hit('ffmpeg', '7:9.0.0-1') })
