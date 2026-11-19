@@ -24,3 +24,8 @@ updates:
       prefix: "[gha] "
     labels:
       - "github-actions"
+    groups:
+      # init and analyze must run the same version, so bump them together
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
