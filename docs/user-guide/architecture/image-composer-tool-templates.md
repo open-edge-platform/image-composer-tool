@@ -1894,6 +1894,29 @@ Repositories for target OSes the manifest does not offer are deliberately
 absent; the picker can never query them. They should be added alongside the
 manifest combination that makes them reachable.
 
+#### Repositories Only a Template Declares
+
+A template served from outside this repository, through `serve --manifest` and
+`--templates-dir`, can declare a repository the catalog does not carry, such as
+a vendor snapshot or a PPA only that template uses. `POST /templates/compose`
+reports each one too: its id, prefixed `template-`, is in `templateRepos`, and
+`templateOnlyRepos` carries a catalog-shaped entry for it, built from the
+template's own `url`, `codename`, `component`, `priority` and `pkey` and labelled
+by host and the end of its path (for example
+`ppa.launchpadcontent.net …/lp2168017/ubuntu (resolute)`). The id is derived
+from the target and the repository's URL, suite and components, so it is the
+same on every compose.
+
+The Packages step lists such a repository under **Already included** with the
+template's other repositories, and browses and searches it like a catalogued
+one: `GET /packages/search` and `/packages/search/stream` accept its id once a
+compose has returned it. `GET /package-repos` never lists it, so it is not
+offered as optional for other templates, and an unfiltered search does not
+read it. Only repositories named by templates the server itself serves are ever
+fetched this way; a client can name an id a compose returned, never a URL. The
+server must be able to reach the repository for its packages to show; when it
+cannot, the step reports it as unreadable, as for a catalogued repository.
+
 ### See Also
 
 - [ADR: template `extends`](../../architecture-decision-record/adr-template-extends.md) — design rationale and full validation matrix

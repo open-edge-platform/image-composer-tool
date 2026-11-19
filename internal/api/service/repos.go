@@ -104,6 +104,10 @@ type PackageRepo struct {
 	// enabling it fetches packages unverified. Kept out of the wire type like
 	// the fields above; only the derived hasSigningKey flag is published.
 	PKey string `json:"pkey,omitempty"`
+	// AllowPackages restricts which of the repository's packages a build may
+	// take from it, the template's packageRepositories allowPackages: a search
+	// shows only those. Empty means all. Kept out of the wire type like Index.
+	AllowPackages []string `json:"allowPackages,omitempty"`
 }
 
 // HasSigningKey reports whether this repository's packages are ever fetched
@@ -278,17 +282,51 @@ func normalizeRepoURL(url string) string {
 // suite, which tolerates an entry naming a different component set but never
 // confuses two suites served from one host. An rpm repository has no suite and
 // matches on URL. Entries the catalog does not carry, and the "<URL>"
-// placeholder private repos use, are skipped. Sorted for a stable response.
+// placeholder private repos use, are skipped (see templateOnlyRepos for the
+// former). Sorted for a stable response.
 func (s *Service) templateRepoIDs(osID string, repos []config.PackageRepository) []string {
 	if len(repos) == 0 {
 		return nil
 	}
-	byRef := make(map[repoRef]string)
-	bySuite := make(map[repoRef]string) // component left empty
-	byRPMURL := make(map[string]string)
+	catalog := s.catalogMatcher(osID)
+	seen := make(map[string]bool)
+	var out []string
+	for _, tr := range repos {
+		if !usableTemplateRepo(tr) {
+			continue
+		}
+		if id, ok := catalog.match(tr); ok && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// usableTemplateRepo reports whether a template's repository entry names a
+// real repository, rather than being empty or the "<URL>" placeholder private
+// repos use.
+func usableTemplateRepo(tr config.PackageRepository) bool {
+	return strings.TrimSpace(tr.URL) != "" && !strings.Contains(tr.URL, "<URL>")
+}
+
+// catalogMatcher finds the catalog repo a template's repository entry is.
+type catalogMatcher struct {
+	byRef    map[repoRef]string
+	bySuite  map[repoRef]string // component left empty
+	byRPMURL map[string]string
+}
+
+func (s *Service) catalogMatcher(osID string) catalogMatcher {
+	m := catalogMatcher{
+		byRef:    make(map[repoRef]string),
+		bySuite:  make(map[repoRef]string),
+		byRPMURL: make(map[string]string),
+	}
 	for _, r := range s.PackageRepos(osID) {
 		if r.Type == repoTypeRPM {
-			byRPMURL[normalizeRepoURL(r.URL)] = r.ID
+			m.byRPMURL[normalizeRepoURL(r.URL)] = r.ID
 		}
 		for _, idx := range r.Index {
 			url := idx.URL
@@ -296,33 +334,25 @@ func (s *Service) templateRepoIDs(osID string, repos []config.PackageRepository)
 				url = r.URL
 			}
 			if r.Type == repoTypeRPM {
-				byRPMURL[normalizeRepoURL(url)] = r.ID
+				m.byRPMURL[normalizeRepoURL(url)] = r.ID
 				continue
 			}
-			byRef[normalizeRepoRef(url, idx.Codename, idx.Component)] = r.ID
-			bySuite[repoRef{url: normalizeRepoURL(url), codename: strings.TrimSpace(idx.Codename)}] = r.ID
+			m.byRef[normalizeRepoRef(url, idx.Codename, idx.Component)] = r.ID
+			m.bySuite[repoRef{url: normalizeRepoURL(url), codename: strings.TrimSpace(idx.Codename)}] = r.ID
 		}
 	}
-	seen := make(map[string]bool)
-	var out []string
-	for _, tr := range repos {
-		if strings.TrimSpace(tr.URL) == "" || strings.Contains(tr.URL, "<URL>") {
-			continue
-		}
-		id, ok := byRef[normalizeRepoRef(tr.URL, tr.Codename, tr.Component)]
-		if !ok {
-			id, ok = bySuite[repoRef{url: normalizeRepoURL(tr.URL), codename: strings.TrimSpace(tr.Codename)}]
-		}
-		if !ok {
-			id, ok = byRPMURL[normalizeRepoURL(tr.URL)]
-		}
-		if ok && !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
+	return m
+}
+
+func (m catalogMatcher) match(tr config.PackageRepository) (string, bool) {
+	if id, ok := m.byRef[normalizeRepoRef(tr.URL, tr.Codename, tr.Component)]; ok {
+		return id, true
 	}
-	sort.Strings(out)
-	return out
+	if id, ok := m.bySuite[repoRef{url: normalizeRepoURL(tr.URL), codename: strings.TrimSpace(tr.Codename)}]; ok {
+		return id, true
+	}
+	id, ok := m.byRPMURL[normalizeRepoURL(tr.URL)]
+	return id, ok
 }
 
 // appliesTo reports whether the repo is offered for a target OS id. A repo with
