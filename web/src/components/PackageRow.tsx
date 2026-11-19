@@ -222,10 +222,10 @@ export function PackageRow({
               )}
               {!tag && <span className="font-mono text-[11px] text-slate-500">{version}</span>}
               {effective && (
-                // The version a build would install, solid for a pin, dashed
-                // for what an unpinned package currently resolves to.
+                // The version a build would install: plain bold text, not a
+                // chip, so it doesn't read as one more version to choose.
                 <span
-                  className={chipClass({ active: !!pin, dashed: !pin })}
+                  className="font-mono text-[11px] font-bold text-slate-700"
                   title={pin ? 'Pinned version' : 'The version Unpinned currently resolves to'}
                 >
                   {effective.version}
