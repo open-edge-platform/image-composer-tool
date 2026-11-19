@@ -136,6 +136,7 @@ interface AppState {
   // anything (its changes are layered on the template), so it ignores these.
   removedPackages: string[]
   setPackageRemoved: (name: string, removed: boolean) => void
+  clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
   // Gaining the authoring capability starts in Author mode (the user can still
   // switch); losing it drops back to Customize.
@@ -198,6 +199,7 @@ export const useStore = create<AppState>((set) => ({
       // A removed package has no version of its own any more.
       addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
     })),
+  clearRemovedPackages: () => set({ removedPackages: [] }),
   setManifest: (m) => set({ manifest: m }),
   setCapabilities: (c) =>
     set((state) => ({

@@ -26,6 +26,12 @@
   save in place; other browsers download a copy. Templates that use `extends`
   can't be edited in Author mode yet, and building an edited template comes
   next.
+- **Changed**: the Advanced tab's **Selected** panel is now **Changes**. It
+  lists how your packages differ from the template under **Added**,
+  **Modified** (a template package given another version, shown as
+  *old → new*) and, in Author mode, **Removed**. Each can be undone on its
+  own. **Clear** is now **Reset to template defaults**, styled like the Disk
+  step's, and also puts back removed packages.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time

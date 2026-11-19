@@ -59,7 +59,7 @@ interface PackageRowProps {
   // Switches the browsed repository, so "via" can link to the repository a
   // version comes from. Unset where there's nothing to switch.
   onBrowseRepo?: (repoId: string) => void
-  // Offered only by the Selected rail, for a row that's unpinned (a
+  // Offered only by the Changes rail, for a row that's unpinned (a
   // locked-but-floating template entry, or a floating user pick) and hasn't
   // been checked against the currently-checked repos yet. Fires a real
   // lookup so the row can show what it actually resolves to today instead
@@ -166,7 +166,7 @@ export function PackageRow({
   // Clicking the chip that's already the current pick removes it via the
   // same path the checkbox uses, rather than re-adding the identical entry
   // (a no-op) and leaving the only way back "not selected" a trip to the
-  // Selected rail. For a locked row this falls back to the template's own
+  // Changes rail. For a locked row this falls back to the template's own
   // (unoverridden) state rather than removing anything real. Latest is
   // repo-agnostic on purpose — it isn't pinned to any one repository's
   // version list, so a version match alone is enough regardless of which
@@ -407,7 +407,7 @@ function VersionChips({
   }
 
   // Nothing to attribute an override to without at least one real repository
-  // — true for an unpinned row the Selected rail hasn't resolved yet
+  // — true for an unpinned row the Changes rail hasn't resolved yet
   // (versions is empty there by design), and would also catch the caller's
   // own empty-versions fallback synthesizing a single entry with a real
   // version but no repository.

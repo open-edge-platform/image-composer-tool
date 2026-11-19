@@ -36,7 +36,7 @@ interface PackageRepoBrowserProps {
   repos: PackageRepo[]
   os: string
   baseLock: BaseLock
-  // Shared with the Selected rail and the search dropdown (lifted in
+  // Shared with the Changes rail and the search dropdown (lifted in
   // PackagesStep.tsx) so a floating pick resolves to the same version/repo
   // no matter which surface shows it.
   resolver: VersionResolver
@@ -285,7 +285,7 @@ function MergedPane({
   const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
   const templateNamesKey = baseLock.concreteNames.join(',')
   const addedPackages = useStore((s) => s.addedPackages)
-  // Packages under "You are adding" picked from the browsed repo. Looked up
+  // Packages under "Added" or "Modified" picked from the browsed repo. Looked up
   // with the template's names, so "Show only selected" can offer every
   // version the repo has for them too, not just the one picked.
   const browsedAddedNames = addedPackages.filter((p) => p.repo === selectedRepo?.id).map((p) => p.name)
@@ -372,7 +372,7 @@ function MergedPane({
   // YAML records it. The repo a package was picked from stays enabled even if
   // the newest version lives elsewhere: releasing it would change the repo
   // scope the versions were just looked up in. The matched template's own
-  // packages are pinned too, as overrides added under "You are adding" (see
+  // packages are pinned too, as overrides added under "Added" or "Modified" (see
   // planTemplateUpdates for which ones).
   //
   // Nothing changes unless the answer is complete: with a repo unreadable,
