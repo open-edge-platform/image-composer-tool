@@ -190,6 +190,9 @@ export interface ComposeResponse {
   // baseline can be shown beside the delta that modifies it. Absent when there
   // are no overrides, because `yaml` already is the base.
   baseYaml?: string
+  // The matched template file exactly as written, comments included, for
+  // Author mode to edit. Sent only when the session grants authoring.
+  templateYaml?: string
   // The matched template's own package list, before this request's overrides
   // are applied. Present even when the request carries no overrides, so the
   // Packages step can show "already included" packages alongside whatever

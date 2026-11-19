@@ -44,6 +44,9 @@ interface PackageRepoBrowserProps {
   // Edge Pack's — see templateLockedRepos in lib/edgepack.ts). Treated the
   // same as a base repo: checked and unable to be unchecked.
   lockedRepoIds?: Set<string>
+  // Author mode: the template is edited directly, so its own packages can be
+  // removed (see PackageRow's removable).
+  authoring?: boolean
 }
 
 const noLockedRepos = new Set<string>()
@@ -61,6 +64,7 @@ export function PackageRepoBrowser({
   baseLock,
   resolver,
   lockedRepoIds = noLockedRepos,
+  authoring = false,
 }: PackageRepoBrowserProps) {
   const enabledRepos = useStore((s) => s.enabledRepos)
 
@@ -129,6 +133,7 @@ export function PackageRepoBrowser({
           lockedRepoIds={lockedRepoIds}
           frequentOnly={frequentOnly}
           onBrowseRepo={setSelectedRepoId}
+          authoring={authoring}
         />
       </div>
     </div>
@@ -222,6 +227,7 @@ function MergedPane({
   lockedRepoIds,
   frequentOnly,
   onBrowseRepo,
+  authoring,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
@@ -233,6 +239,7 @@ function MergedPane({
   frequentOnly: boolean
   // Switches the Repository dropdown, to go and browse another repository.
   onBrowseRepo: (repoId: string) => void
+  authoring: boolean
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -327,6 +334,8 @@ function MergedPane({
 
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
+  const removedPackages = useStore((s) => s.removedPackages)
+  const setPackageRemoved = useStore((s) => s.setPackageRemoved)
   const setPackages = useStore((s) => s.setPackages)
   const removePackages = useStore((s) => s.removePackages)
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
@@ -848,6 +857,17 @@ function MergedPane({
                   repoLabelFor={repoLabelFor}
                   selection={addedPackages.find((p) => p.name === h.name)}
                   locked={lock.locked}
+                  removable={authoring && lock.locked}
+                  removed={authoring && lock.locked && removedPackages.includes(h.name)}
+                  onRevert={
+                    authoring && lock.locked
+                      ? () =>
+                          removePackage(h.name, {
+                            releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, [h.name], isProtectedRepo),
+                            protectedRepos: lockedRepoIds,
+                          })
+                      : undefined
+                  }
                   currentVersion={currentVersion}
                   currentIsFloating={lock.currentIsFloating}
                   pinnedFrom={pinnedFromFor(h.name)}
@@ -856,6 +876,12 @@ function MergedPane({
                   resolvedVersion={liveResolved[h.name]?.version}
                   resolvedRepo={liveResolved[h.name]?.repository}
                   onToggle={(checked) => {
+                    // Author mode: a template package is removed from the
+                    // template, or put back, rather than added or dropped.
+                    if (authoring && lock.locked) {
+                      setPackageRemoved(h.name, !checked)
+                      return
+                    }
                     if (checked) {
                       setPackage({ name: h.name, version: '', repo: h.repository })
                       // Picked from whichever repo was being browsed, but
@@ -879,6 +905,7 @@ function MergedPane({
                     })
                   }}
                   onChooseVersion={(v) => {
+                    if (authoring) setPackageRemoved(h.name, false)
                     const previous = addedPackages.find((p) => p.name === h.name)
                     const opts =
                       previous && previous.repo !== v.repository

@@ -1748,6 +1748,12 @@ components:
 
             A password supplied in `credentials` is shown as `[REDACTED]` here;
             the copy the build reads keeps the real hash.
+        templateYaml:
+          type: string
+          description: |
+            The matched template file exactly as written, comments included,
+            for the Advanced tab's Author mode to edit. Present only when the
+            session grants the authoring capability.
         baseYaml:
           type: string
           description: |

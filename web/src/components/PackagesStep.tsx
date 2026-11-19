@@ -32,6 +32,9 @@ interface PackagesStepProps {
   // builds, which an overlay cannot run, so the Edge Packs tab is not offered
   // and any Edge Pack package added some other way is flagged.
   overlay?: boolean
+  // Author mode: the template is edited directly, so its own packages can be
+  // removed.
+  authoring?: boolean
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -66,6 +69,7 @@ export function PackagesStep({
   templateRepos = [],
   templateOnlyRepos = noRepos,
   overlay = false,
+  authoring = false,
 }: PackagesStepProps) {
   const [catalogRepos, setRepos] = useState<PackageRepo[] | null>(null)
   // The catalog plus the repositories only the matched template declares,
@@ -249,7 +253,7 @@ export function PackagesStep({
                 that genuinely changes. */}
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
-                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} authoring={authoring} />
               ) : overlay ? (
                 <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
                   Edge Packs are not available for an image built on a baseline image: they need

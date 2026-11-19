@@ -132,6 +132,10 @@ interface AppState {
   // defaults" has something to restore. Without it, resetting would blank the
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
+  // Template packages removed in Author mode, by name. Customize can't remove
+  // anything (its changes are layered on the template), so it ignores these.
+  removedPackages: string[]
+  setPackageRemoved: (name: string, removed: boolean) => void
   setManifest: (m: Manifest) => void
   // Gaining the authoring capability starts in Author mode (the user can still
   // switch); losing it drops back to Customize.
@@ -185,6 +189,15 @@ export const useStore = create<AppState>((set) => ({
   disk: null,
   diskEdited: false,
   diskSeed: null,
+  removedPackages: [],
+  setPackageRemoved: (name, removed) =>
+    set((state) => ({
+      removedPackages: removed
+        ? [...new Set([...state.removedPackages, name])]
+        : state.removedPackages.filter((n) => n !== name),
+      // A removed package has no version of its own any more.
+      addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
+    })),
   setManifest: (m) => set({ manifest: m }),
   setCapabilities: (c) =>
     set((state) => ({
@@ -331,6 +344,8 @@ export const useStore = create<AppState>((set) => ({
         disk: null,
         diskEdited: false,
         diskSeed: null,
+        // Removals name the previous template's packages.
+        removedPackages: [],
         ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
       }
     }),

@@ -451,3 +451,25 @@ func assertNoLeakedDeltas(t *testing.T, dir string) {
 		t.Errorf("leaked delta file(s) in TemplatesDir: %v", matches)
 	}
 }
+
+func TestComposeTemplateYAMLOnlyWhenAuthoring(t *testing.T) {
+	s := newTestService(t)
+	sel := Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
+
+	res, err := s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if res.TemplateYAML != "" {
+		t.Errorf("TemplateYAML sent without the authoring capability:\n%s", res.TemplateYAML)
+	}
+
+	s.cfg.Authoring = true
+	res, err = s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if res.TemplateYAML != minimalTemplate {
+		t.Errorf("TemplateYAML = %q, want the file as written", res.TemplateYAML)
+	}
+}

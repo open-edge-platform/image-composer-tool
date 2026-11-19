@@ -22,6 +22,10 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { applyAuthorEdits, authoringProblem } from '../lib/authorTemplate'
+import type { SavedFile } from '../lib/saveFile'
+import { AuthorReview } from './AuthorReview'
+import { parse as parseYaml } from 'yaml'
 import { useBaseLock } from '../lib/baseLock'
 import { overlayIncompatiblePackages, strandedPackages } from '../lib/edgepack'
 
@@ -73,6 +77,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const seedDisk = useStore((s) => s.seedDisk)
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
+  const advancedMode = useStore((s) => s.advancedMode)
+  const removedPackages = useStore((s) => s.removedPackages)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -456,6 +462,33 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // generated, and the build runs the curated template unchanged.
   const deltaYaml = composed?.deltaYaml ?? ''
 
+  // Author mode edits the template file itself. It needs the file's own text,
+  // which the server sends only when authoring is allowed, and works only on a
+  // template that doesn't extend another.
+  const author = advancedMode === 'author'
+  const authorProblem = author && composed ? authoringProblem(composed.templateYaml) : null
+  const authoring = author && !!composed?.templateYaml && !authorProblem
+  // The file saved last, kept while the same template stays selected.
+  const [authorSaved, setAuthorSaved] = useState<{ template: string; file: SavedFile; text: string } | null>(null)
+  const authorEdit = useMemo((): { text: string } | { error: string } | null => {
+    if (!authoring || !composed?.templateYaml) return null
+    try {
+      // The repositories new packages need come from the generated delta,
+      // which already maps the enabled repos to packageRepositories entries.
+      const delta = deltaYaml ? (parseYaml(deltaYaml) as { packageRepositories?: Record<string, unknown>[] }) : null
+      const text = applyAuthorEdits(composed.templateYaml, {
+        packages: addedPackages,
+        removed: removedPackages,
+        imageName: imageNameEdited ? imageName : undefined,
+        disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
+        repos: delta?.packageRepositories,
+      })
+      return { text }
+    } catch (e) {
+      return { error: (e as Error).message }
+    }
+  }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, diskEdited, disk, overlay])
+
   const exportYaml = () => {
     if (!composed || !deltaYaml) return
     const blob = new Blob([deltaYaml], { type: 'text/yaml' })
@@ -473,6 +506,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <AdvancedModeSwitch />
+      {authorProblem && (
+        <p className="mx-auto mb-4 max-w-3xl rounded bg-amber-50 p-3 text-sm text-amber-800">{authorProblem}</p>
+      )}
 
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
@@ -542,6 +578,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             templateRepos={lastTemplateRepos}
             templateOnlyRepos={lastTemplateOnlyRepos}
             overlay={overlay}
+            authoring={authoring}
           />
         )}
 
@@ -549,16 +586,38 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
         {step === 3 && (
           <div>
-            <h2 className="mb-1 text-lg font-bold text-[#00285a]">Review Image Configuration</h2>
+            <h2 className="mb-1 text-lg font-bold text-[#00285a]">
+              {authoring ? 'Review Template' : 'Review Image Configuration'}
+            </h2>
             <p className="mb-5 text-sm text-slate-500">
-              Review what this combination will compose. The template below is
-              only what you changed, as a delta extending the pre-authored
-              template it is based on.
+              {authoring
+                ? 'This is the whole template with your changes. Save it to your machine, or Save As a new file.'
+                : 'Review what this combination will compose. The template below is only what you changed, as a delta extending the pre-authored template it is based on.'}
             </p>
             {error && (
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
             )}
-            {complete && composed ? (
+            {authoring && complete && composed && authorEdit ? (
+              'error' in authorEdit ? (
+                <div className="rounded bg-red-50 p-3 text-sm text-red-700">
+                  Could not apply your changes to the template: {authorEdit.error}
+                </div>
+              ) : (
+                <>
+                  <AuthorReview
+                    templateName={composed.template}
+                    text={authorEdit.text}
+                    original={composed.templateYaml ?? ''}
+                    removed={removedPackages}
+                    saved={authorSaved?.template === composed.template ? authorSaved : null}
+                    onSaved={(s) => setAuthorSaved({ template: composed.template, ...s })}
+                  />
+                  <p className="mt-4 text-xs text-slate-500">
+                    Building an edited template from here is coming next. To build now, switch to Customize.
+                  </p>
+                </>
+              )
+            ) : complete && composed ? (
               <>
                 {/* Section 1: Review Image Configuration — the same summary shape
                     the Basic tab shows, so both panes agree on what will compose. */}

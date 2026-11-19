@@ -22,12 +22,22 @@ interface PackageRowProps {
   // Renders a repository ID as its display name, for the "via ..." line and
   // the chip tooltips.
   repoLabelFor: (repoId: string) => string
-  // True for a package the matched template already ships. The checkbox
-  // stays checked+disabled either way — the extends merge unions package
+  // True for a package the matched template already ships. Outside Author
+  // mode (see removable) the checkbox stays checked+disabled either way — the extends merge unions package
   // lists, so unchecking it could never actually remove it — but version
   // chips stay live: picking a different one is a real, meaningful override
   // on top of what the template already includes, not a no-op.
   locked?: boolean
+  // Author mode, where the template itself is edited: a locked row's checkbox
+  // is live, and unchecking it removes the package from the template.
+  removable?: boolean
+  // A template package removed in Author mode. It shows as an unchecked row
+  // marked Removed; checking it again puts it back.
+  removed?: boolean
+  // Drops the user's version change on a template package, so the template's
+  // own entry applies again. Defaults to onToggle(false), which does the same
+  // outside Author mode; in Author mode unchecking removes the package instead.
+  onRevert?: () => void
   // The version already in effect from the template itself, when knowable
   // (see BaseLock in lib/baseLock.ts). Its matching chip renders disabled
   // rather than selectable, since picking it again wouldn't change anything.
@@ -89,7 +99,10 @@ export function PackageRow({
   onToggle,
   onChooseVersion,
   repoLabelFor,
-  locked,
+  locked: lockedProp,
+  removable = false,
+  removed = false,
+  onRevert,
   currentVersion,
   currentIsFloating,
   pinnedFrom,
@@ -102,6 +115,8 @@ export function PackageRow({
   disabled = false,
   disabledReason,
 }: PackageRowProps) {
+  // A removed template package reads as a package the template doesn't ship.
+  const locked = !!lockedProp && !removed
   const checked = locked || selection != null
   // Whether the package is pinned, and the version a build would install:
   // the user's own pick first, since it overrides the template, then the
@@ -165,7 +180,7 @@ export function PackageRow({
   const chooseVersion = (v: PackageVersion) => {
     const sameAsSelection = selection != null && selection.version === v.version && selection.repo === v.repository
     if (sameAsSelection) {
-      if (locked) onToggle(false)
+      if (locked) (onRevert ?? (() => onToggle(false)))()
       else onChooseVersion({ version: '', repository: selection.repo })
       return
     }
@@ -187,10 +202,16 @@ export function PackageRow({
       <input
         type="checkbox"
         checked={checked}
-        disabled={locked || disabled}
+        disabled={(locked && !removable) || disabled}
         onChange={(e) => onToggle(e.target.checked)}
         className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
-        title={locked ? "Already included by the matched template — this can't be unchecked" : undefined}
+        title={
+          locked
+            ? removable
+              ? 'In the template. Uncheck it to remove it from the template.'
+              : "Already included by the matched template — this can't be unchecked"
+            : undefined
+        }
       />
       {/* A container, not a viewport, breakpoint: this row is shared by the
           full-width repo browser and narrower surfaces (the search dropdown,
@@ -203,6 +224,14 @@ export function PackageRow({
               <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
                 {name}
               </span>
+              {removed && (
+                <span
+                  className="rounded bg-red-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-red-700"
+                  title="Removed from the template. Check it to put it back."
+                >
+                  Removed
+                </span>
+              )}
               {tag && (
                 <span className="rounded bg-slate-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   {tag}
