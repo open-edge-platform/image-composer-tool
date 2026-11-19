@@ -752,6 +752,10 @@
           "type": "array",
           "description": "Keywords for template discovery and search",
           "items": { "type": "string" }
+        },
+        "basedOn": {
+          "type": "string",
+          "description": "The curated template this one was authored from, relative to the templates directory. Recorded by the web UI's Author mode; builds ignore it."
         }
       },
       "additionalProperties": false

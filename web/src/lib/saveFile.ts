@@ -76,3 +76,38 @@ export async function saveFile(text: string, current: SavedFile | null, suggeste
   }
   return saveFileAs(text, current?.name ?? suggestedName)
 }
+
+type OpenFilePicker = (options: {
+  types: { description: string; accept: Record<string, string[]> }[]
+}) => Promise<(FileHandle & { getFile(): Promise<File> })[]>
+
+// openFile asks for a file and reads it. With the File System Access API the
+// returned file keeps its handle, so Save writes back to it; otherwise it
+// carries only its name. Returns null when the user cancels.
+export async function openFile(): Promise<{ text: string; file: SavedFile } | null> {
+  const picker = (window as unknown as { showOpenFilePicker?: OpenFilePicker }).showOpenFilePicker
+  if (typeof picker === 'function') {
+    try {
+      const [handle] = await picker({
+        types: [{ description: 'YAML template', accept: { 'text/yaml': ['.yml', '.yaml'] } }],
+      })
+      const f = await handle.getFile()
+      return { text: await f.text(), file: { name: handle.name, handle } }
+    } catch (e) {
+      if ((e as DOMException).name === 'AbortError') return null
+      throw e
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.yml,.yaml'
+    input.onchange = () => {
+      const f = input.files?.[0]
+      if (!f) return resolve(null)
+      f.text().then((text) => resolve({ text, file: { name: f.name } }), reject)
+    }
+    input.oncancel = () => resolve(null)
+    input.click()
+  })
+}

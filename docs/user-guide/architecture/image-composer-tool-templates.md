@@ -162,13 +162,14 @@ systemConfig:   # Required in merged template - packages, kernel, users, etc.
 
 ### `metadata`
 
-Optional block for AI-powered template discovery. Ignored by the build engine.
+Optional block for AI-powered template discovery, and for the web UI to recognize a template it saved. Ignored by the build engine.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `description` | string | Human-readable description of the template |
 | `use_cases` | string[] | Use cases this template targets |
 | `keywords` | string[] | Keywords for search and discovery |
+| `basedOn` | string | The curated template this one was authored from, relative to the templates directory, such as `ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml`. The web UI's Author mode writes it when saving a template and reads it to select the matching use case when the template is opened again. |
 
 ```yaml
 metadata:

@@ -23,6 +23,16 @@ export interface AuthorEdits {
   // packageRepositories entries the added packages need. One whose url and
   // codename the template already lists is not added again.
   repos?: Record<string, unknown>[]
+  // The curated template this one is based on, recorded as metadata.basedOn
+  // so that opening the file again selects the same use case.
+  basedOn?: string
+}
+
+// basedOnOf returns a template's metadata.basedOn, or undefined.
+export function basedOnOf(text: string): string | undefined {
+  const doc = parseDocument(text)
+  const v = doc.getIn(['metadata', 'basedOn'])
+  return typeof v === 'string' && v ? v : undefined
 }
 
 // packageEntryName returns the package a systemConfig.packages entry names,
@@ -165,6 +175,33 @@ function splices(text: string, doc: Document, edits: AuthorEdits): Splice[] | nu
     }
   }
 
+  if (edits.basedOn !== undefined) {
+    const pair = topPair(doc, 'metadata')
+    if (!pair) {
+      // No metadata yet: a new block goes above the first top-level key.
+      const first = isMap(doc.contents) ? (doc.contents.items[0]?.key as Node | undefined) : undefined
+      if (!first?.range) return null
+      const at = lineStart(text, first.range[0])
+      out.push({ start: at, end: at, text: `metadata:\n  basedOn: ${edits.basedOn}\n\n` })
+    } else {
+      const map = blockNode(pair.value)
+      if (!map || !isMap(map) || map.items.length === 0) return null
+      const node = map.get('basedOn', true)
+      if (isScalar(node) && node.range) {
+        if (node.value !== edits.basedOn) {
+          out.push({ start: node.range[0], end: node.range[1], text: scalarText(node, edits.basedOn) })
+        }
+      } else {
+        const firstKey = map.items[0].key as Node
+        if (!firstKey.range) return null
+        const indent = ' '.repeat(firstKey.range[0] - lineStart(text, firstKey.range[0]))
+        const at = map.range[2]
+        const lead = text[at - 1] === '\n' ? '' : '\n'
+        out.push({ start: at, end: at, text: `${lead}${indent}basedOn: ${edits.basedOn}\n` })
+      }
+    }
+  }
+
   return out
 }
 
@@ -206,6 +243,7 @@ function applyViaDocument(doc: Document, edits: AuthorEdits): string {
   }
   if (edits.imageName !== undefined) doc.setIn(['image', 'name'], edits.imageName)
   if (edits.disk !== undefined) doc.set('disk', doc.createNode(edits.disk))
+  if (edits.basedOn !== undefined) doc.setIn(['metadata', 'basedOn'], edits.basedOn)
   return doc.toString({ lineWidth: 0 })
 }
 

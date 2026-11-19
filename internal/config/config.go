@@ -278,6 +278,11 @@ type TemplateMetadata struct {
 	Description string   `yaml:"description,omitempty"`
 	UseCases    []string `yaml:"use_cases,omitempty"`
 	Keywords    []string `yaml:"keywords,omitempty"`
+	// BasedOn names the curated template this one was authored from, relative
+	// to the templates directory. The web UI records it when saving a template
+	// in Author mode, and reads it back to select the matching use case when
+	// the template is opened again. Builds ignore it.
+	BasedOn string `yaml:"basedOn,omitempty"`
 }
 
 // ImageTemplate represents the YAML image template structure.

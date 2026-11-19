@@ -1218,6 +1218,13 @@ components:
           type: string
         imageType:
           type: string
+        templateYaml:
+          type: string
+          description: |
+            A template the user opened in Author mode, used in place of the
+            matched template's own file: the response describes it, and any
+            overrides apply on top of it. Requires the authoring capability, and
+            the template must not use `extends`. Not accepted by POST /builds yet.
         imageName:
           type: string
           description: |
