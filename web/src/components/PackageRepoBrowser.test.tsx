@@ -60,7 +60,7 @@ beforeEach(() => {
 
 // browse picks a repository from the toolbar dropdown, the same way a user does.
 function browse(repoId: string) {
-  fireEvent.change(screen.getByRole('combobox', { name: /Repository/ }), { target: { value: repoId } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: repoId } })
 }
 
 describe('a repo the matched template already draws a package from', () => {
@@ -75,7 +75,7 @@ describe('a repo the matched template already draws a package from', () => {
     )
 
     browse('intel-eci')
-    expect(screen.getByText('In template — always on')).toBeTruthy()
+    expect(screen.getByText('In template — already included')).toBeTruthy()
   })
 
   it('is not written into enabledRepos — it is checked by lockedRepoIds alone', () => {
@@ -118,7 +118,7 @@ describe('a repo the matched template already draws a package from', () => {
 
     const order = screen.getAllByRole('option').map((el) => (el as HTMLOptionElement).value)
     expect(order).toEqual(['base', 'intel-eci', 'intel-graphics', 'docker'])
-    const always = screen.getByRole('group', { name: 'Always on' })
+    const always = screen.getByRole('group', { name: 'Currently in template' })
     expect(Array.from(always.querySelectorAll('option')).map((o) => o.value)).toEqual(['base', 'intel-eci'])
   })
 
@@ -145,7 +145,7 @@ describe('the dropdown browses a repository, independent of using it for the bui
   it('shows the base repo as always on', () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    expect(screen.getByText('Base — always on')).toBeTruthy()
+    expect(screen.getByText('Base — already included')).toBeTruthy()
   })
 
   it('switches the fetched repo when a different repository is picked', async () => {
@@ -279,7 +279,7 @@ describe('"Show only selected"', () => {
       })
     })
   const browse = (label: string) =>
-    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), {
       target: { value: repos.find((r) => r.displayName === label)!.id },
     })
 
@@ -341,9 +341,9 @@ describe('"Show only selected"', () => {
     expect(mockApi.searchPackages.mock.calls.every(([args]) => !args.q)).toBe(true)
 
     // Back to a repo already looked up: answered from the cache.
-    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'intel-eci' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: 'intel-eci' } })
     await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'base' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: 'base' } })
     await screen.findByRole('checkbox', { name: 'Show only selected (2 selected)' })
     expect(mockApi.lookupPackages).toHaveBeenCalledTimes(2)
   })
