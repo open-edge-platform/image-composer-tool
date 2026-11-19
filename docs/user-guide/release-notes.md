@@ -6,6 +6,7 @@
 
 **New**:
 
+- **Fixed**: the Debian 13 Desktop Virtualization ISO template (`debian13-x86_64-desktop-virtualization-iso.yml`, the Web UI's **Retail** › **Desktop Virtualization** selection) failed every build with `required additional file not found: ../additionalfiles/99-dhcp-en.network`. The template referenced a network file Debian 13 never shipped. Builds had silently dropped it until ISO builds began validating their additional files up front. The entry is removed, and the image keeps the DHCP network configuration that Debian 13's defaults install.
 - **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
   selected by explicit APT `name_version` requests with
   `packageOperation: additive-and-upgrade`. It defaults to false and does not
