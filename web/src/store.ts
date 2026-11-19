@@ -133,7 +133,8 @@ interface AppState {
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
   setManifest: (m: Manifest) => void
-  // Losing the authoring capability drops Author mode back to Customize.
+  // Gaining the authoring capability starts in Author mode (the user can still
+  // switch); losing it drops back to Customize.
   setCapabilities: (c: Capabilities) => void
   setAdvancedMode: (mode: AdvancedMode) => void
   setField: (key: keyof Selection, value: string) => void
@@ -188,7 +189,7 @@ export const useStore = create<AppState>((set) => ({
   setCapabilities: (c) =>
     set((state) => ({
       capabilities: c,
-      advancedMode: c.authoring ? state.advancedMode : 'customize',
+      advancedMode: !c.authoring ? 'customize' : state.capabilities.authoring ? state.advancedMode : 'author',
     })),
   setAdvancedMode: (mode) =>
     set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),

@@ -18,15 +18,21 @@ describe('AdvancedModeSwitch', () => {
     expect(screen.queryByRole('radiogroup')).toBeNull()
   })
 
-  it('switches between Customize and Author when authoring is granted', () => {
+  it('starts in Author when authoring is granted, and can switch to Customize', () => {
     useStore.getState().setCapabilities({ authoring: true })
     render(<AdvancedModeSwitch />)
 
-    expect(screen.getByRole('radio', { name: 'Customize' }).getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(screen.getByRole('radio', { name: 'Author' }))
-    expect(useStore.getState().advancedMode).toBe('author')
     expect(screen.getByRole('radio', { name: 'Author' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByText(/Author mode edits the whole template/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Customize' }))
+    expect(useStore.getState().advancedMode).toBe('customize')
+    expect(screen.getByRole('radio', { name: 'Customize' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByText(/Author mode edits the whole template/)).toBeNull()
+
+    // Hearing the same capability again keeps the user's choice.
+    useStore.getState().setCapabilities({ authoring: true })
+    expect(useStore.getState().advancedMode).toBe('customize')
   })
 })
 
