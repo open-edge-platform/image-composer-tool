@@ -6,6 +6,7 @@
 
 **New**:
 
+- **Added**: `scripts/install-ict.sh` installs the ICT Debian package and the host tools a build uses on Ubuntu and Debian. `--tag TAG` downloads the package and `SHA256SUMS` from the GitHub release of the tag and verifies the checksum before installing; `--deb FILE` installs a package you already have.
 - **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
   selected by explicit APT `name_version` requests with
   `packageOperation: additive-and-upgrade`. It defaults to false and does not
