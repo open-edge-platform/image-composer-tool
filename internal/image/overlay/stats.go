@@ -176,6 +176,15 @@ func ComputePackageStats(baseline []BaselinePackage, plan *ResolutionPlan, repor
 
 // PrintPackageStats renders the package statistics as a formatted report.
 func PrintPackageStats(stats *PackageStats) {
+	printPackageStats(stats, "OVERLAY PACKAGE STATISTICS", "")
+}
+
+// PrintPackagePlan renders the resolved package changes before the build starts.
+func PrintPackagePlan(stats *PackageStats) {
+	printPackageStats(stats, "OVERLAY PACKAGE PLAN", "Planned changes; install-time cascade removals may differ.")
+}
+
+func printPackageStats(stats *PackageStats, title, note string) {
 	if stats == nil {
 		return
 	}
@@ -183,9 +192,12 @@ func PrintPackageStats(stats *PackageStats) {
 	var sb strings.Builder
 	sb.WriteString("\n")
 	sb.WriteString("═══════════════════════════════════════════════════════════════\n")
-	sb.WriteString("                    OVERLAY PACKAGE STATISTICS                  \n")
+	sb.WriteString("                    " + title + "                  \n")
 	sb.WriteString("═══════════════════════════════════════════════════════════════\n")
 	sb.WriteString("\n")
+	if note != "" {
+		sb.WriteString(note + "\n\n")
+	}
 
 	// Summary counts table
 	summary := tabwriter.NewWriter(&sb, 0, 0, 2, ' ', 0)

@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "26.04.4"
+  version: "26.04.5"
 
 target:
   os: ubuntu
@@ -77,6 +77,18 @@ disk:
 # edge-compute-essentials enablement is carried by intel-edge-base-standard
 # itself, so no separate NPU package or prerequisite repository is required.
 packageRepositories:
+  # Firefox as a real .deb. Ubuntu's archive only ships a transitional
+  # "firefox" package that installs the snap on first run, and the snap is
+  # never fetched in an offline/first-boot image, so the browser would be
+  # missing. Pin the Mozilla Team PPA build for the firefox package only.
+  - codename: "resolute"
+    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
+
   # EdgePack base/add-on packages, public signed repository.
   - codename: "resolute"
     url: "https://apt.repos.intel.com/edgepack"
