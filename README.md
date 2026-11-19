@@ -43,8 +43,10 @@ publishes the tested image as `YYYYMMDD-<12-character-source-SHA>`.
 To enable tag publishing, configure the repository variables
 `HARBOR_REGISTRY` and `HARBOR_PROJECT`, and the repository secrets
 `HARBOR_USERNAME` and `HARBOR_PASSWORD`. Use a least-privilege registry account
-and restrict who can create `ict-*` tags. Pull requests and manual runs do not
-receive registry credentials or publish images.
+and restrict who can create `ict-*` tags. Pull requests never receive registry
+credentials. Manual runs do not publish images; enable `harbor_test_only` on a
+trusted branch to test DNS, HTTPS and registry login without building or pushing.
+The login step receives credentials only after the connectivity check succeeds.
 
 ### 1. Build the Tool
 

@@ -8,6 +8,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      harbor_test_only:
+        description: Test Harbor connectivity and login without building or pushing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,15 +22,69 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  harbor-test:
+    if: github.event_name == 'workflow_dispatch' && inputs.harbor_test_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check Harbor DNS and HTTPS
+        env:
+          HARBOR_REGISTRY: ${{ vars.HARBOR_REGISTRY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${HARBOR_REGISTRY:?Configure HARBOR_REGISTRY}"
+          if [[ "${HARBOR_REGISTRY}" != gar-registry.caas.intel.com ]]; then
+            echo "::error::This diagnostic only supports the approved Harbor registry"
+            exit 1
+          fi
+          if ! getent ahosts "${HARBOR_REGISTRY}"; then
+            echo "::error::Harbor DNS resolution failed on ubuntu-latest"
+            exit 1
+          fi
+          if ! status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://${HARBOR_REGISTRY}/v2/")"; then
+            echo "::error::Harbor HTTPS connection failed; login was not attempted"
+            exit 1
+          fi
+          case "${status}" in
+            200|401) ;;
+            *)
+              echo "::error::Unexpected Harbor registry response: HTTP ${status}"
+              exit 1
+              ;;
+          esac
+      - name: Test Harbor login without pushing
+        env:
+          HARBOR_REGISTRY: ${{ vars.HARBOR_REGISTRY }}
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          DOCKER_CONFIG: ${{ runner.temp }}/harbor-login-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${HARBOR_USERNAME:?Configure HARBOR_USERNAME}"
+          : "${HARBOR_PASSWORD:?Configure HARBOR_PASSWORD}"
+          mkdir -m 700 "${DOCKER_CONFIG}"
+          trap 'rm -f "${DOCKER_CONFIG}/config.json"; rmdir "${DOCKER_CONFIG}"' EXIT
+          printf '%s' "${HARBOR_PASSWORD}" |
+            docker login "${HARBOR_REGISTRY}" \
+              --username "${HARBOR_USERNAME}" --password-stdin
+          echo "Harbor login succeeded. No image was built or pushed." >> "${GITHUB_STEP_SUMMARY}"
+
   security:
+    if: github.event_name != 'workflow_dispatch' || !inputs.harbor_test_only
     uses: ./.github/workflows/pre-merge.yml
     with:
       run_govulncheck: true
 
   lint:
+    if: github.event_name != 'workflow_dispatch' || !inputs.harbor_test_only
     uses: ./.github/workflows/go-lint.yml
 
   tests:
+    if: github.event_name != 'workflow_dispatch' || !inputs.harbor_test_only
     permissions:
       contents: write
     uses: ./.github/workflows/unit-test-and-coverage-gate.yml
@@ -33,6 +92,7 @@ jobs:
       disable_ratchet: true
 
   codeql:
+    if: github.event_name != 'workflow_dispatch' || !inputs.harbor_test_only
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
