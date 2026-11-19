@@ -3,7 +3,7 @@
 `target.dist: ubuntu26` — 5 templates.
 
 | Template | Arch | Type | Purpose | CI |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | [`ubuntu26-x86_64-edgepack-raw.yml`](./ubuntu26-x86_64-edgepack-raw.yml) | x86_64 | raw | Intel EdgePack (PTL/WCL) platform enablement | — |
 | [`ubuntu26-x86_64-edgepack-server-raw.yml`](./ubuntu26-x86_64-edgepack-server-raw.yml) | x86_64 | raw | minimal Intel EdgePack (PTL/WCL) server | — |
 | [`ubuntu26-x86_64-minimal-raw.yml`](./ubuntu26-x86_64-minimal-raw.yml) | x86_64 | raw | minimal | — |
@@ -13,6 +13,11 @@
 ## CI coverage
 
 0 of 5 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+
+## Internal templates
+
+Platform-enablement templates requiring private repositories are maintained in
+the internal template repository and are not included in this public catalog.
 
 ---
 
