@@ -543,9 +543,10 @@ function PackageSearch({
         }
         // Nothing arrived, so fall back to the non-streaming endpoint. It is
         // slower, but it works against a backend that predates the stream
-        // route or a proxy that buffers text/event-stream.
+        // route or a proxy that buffers text/event-stream. It names the same
+        // repositories, so a template-only one isn't dropped.
         api
-          .searchPackages({ q, os, limit: SEARCH_LIMIT })
+          .searchPackages({ q, os, repos: repoIds, limit: SEARCH_LIMIT })
           .then((r) => {
             if (cancelled) return
             setResults(r.packages)

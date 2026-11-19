@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -74,21 +75,27 @@ func templateOnlyRepo(osID, repoType string, tr config.PackageRepository) (Packa
 		ref = normalizeRepoRef(tr.URL, tr.Codename, tr.Component)
 		idx = RepoIndex{Codename: ref.codename, Component: ref.component}
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{osID, repoType, ref.url, ref.codename, ref.component}, "\n")))
+	// The allowPackages filter is part of the identity: two templates naming
+	// one repository with different filters get separate entries, so neither
+	// overwrites the other's.
+	allow := append([]string(nil), tr.AllowPackages...)
+	sort.Strings(allow)
+	sum := sha256.Sum256([]byte(strings.Join([]string{osID, repoType, ref.url, ref.codename, ref.component, strings.Join(allow, " ")}, "\n")))
 	priority := tr.Priority
 	if priority == 0 {
 		priority = defaultRepoPriority
 	}
 	return PackageRepo{
-		ID:          templateOnlyRepoPrefix + hex.EncodeToString(sum[:6]),
-		DisplayName: templateRepoLabel(ref.url, ref.codename),
-		URL:         ref.url,
-		Description: "Declared by the selected template's packageRepositories; not in the Web UI's repository catalog.",
-		Priority:    priority,
-		OS:          []string{osID},
-		Type:        repoType,
-		Index:       []RepoIndex{idx},
-		PKey:        tr.PKey,
+		ID:            templateOnlyRepoPrefix + hex.EncodeToString(sum[:6]),
+		DisplayName:   templateRepoLabel(ref.url, ref.codename),
+		URL:           ref.url,
+		Description:   "Declared by the selected template's packageRepositories; not in the Web UI's repository catalog.",
+		Priority:      priority,
+		OS:            []string{osID},
+		Type:          repoType,
+		Index:         []RepoIndex{idx},
+		PKey:          tr.PKey,
+		AllowPackages: allow,
 	}, true
 }
 

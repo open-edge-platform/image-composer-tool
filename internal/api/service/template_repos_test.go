@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
@@ -166,5 +167,38 @@ func TestComposeTemplateOnlyRepos(t *testing.T) {
 	}
 	if got := s.searchableRepos("ubuntu24", []string{ppa.ID}); len(got) != 1 {
 		t.Errorf("the composed PPA isn't searchable by its id")
+	}
+}
+
+// A template's allowPackages carries over to its registered repository, is
+// part of its identity, and narrows what a search of it returns.
+func TestTemplateOnlyRepoAllowPackages(t *testing.T) {
+	t.Parallel()
+	s := catalogService(t)
+	restricted := ppaRepo
+	restricted.AllowPackages = []string{"qemu-system-x86", "libvirt*"}
+
+	got := s.templateOnlyRepos("ubuntu26", []config.PackageRepository{restricted})
+	if len(got) != 1 || !slices.Equal(got[0].AllowPackages, []string{"libvirt*", "qemu-system-x86"}) {
+		t.Fatalf("AllowPackages = %+v, want the template's filter, sorted", got)
+	}
+	if open := s.templateOnlyRepos("ubuntu26", []config.PackageRepository{ppaRepo}); open[0].ID == got[0].ID {
+		t.Errorf("same id %q with and without allowPackages", got[0].ID)
+	}
+
+	lookups := s.planLookups("ubuntu26", got)
+	if len(lookups) == 0 || !slices.Equal(lookups[0].allow, got[0].AllowPackages) {
+		t.Fatalf("lookups don't carry the filter: %+v", lookups)
+	}
+	entries := []pkgindex.Entry{{Name: "qemu-system-x86"}, {Name: "libvirt0"}, {Name: "libvirt-daemon"}, {Name: "curl"}}
+	var names []string
+	for _, e := range lookups[0].allowed(entries) {
+		names = append(names, e.Name)
+	}
+	if !slices.Equal(names, []string{"qemu-system-x86", "libvirt0", "libvirt-daemon"}) {
+		t.Errorf("allowed = %v, want curl filtered out", names)
+	}
+	if all := (repoLookup{}).allowed(entries); len(all) != len(entries) {
+		t.Errorf("an unrestricted lookup dropped entries: %v", all)
 	}
 }

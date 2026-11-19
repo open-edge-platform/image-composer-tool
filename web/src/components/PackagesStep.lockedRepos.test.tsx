@@ -118,6 +118,27 @@ describe('a repository only the template declares', () => {
     expect(useStore.getState().enabledRepos).toEqual([])
   })
 
+  it('is still searched when the stream fails and the search falls back', async () => {
+    render(
+      <PackagesStep os="ubuntu24" active basePackages={[]} templateRepos={[snapshot.id]} templateOnlyRepos={[snapshot]} />,
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    fireEvent.change(screen.getByPlaceholderText('Search packages across all repositories…'), {
+      target: { value: 'ros' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    act(() => {
+      FakeEventSource.last!.emit('error', {})
+    })
+    expect(mockApi.searchPackages).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'ros', repos: ['ubuntu-noble-base', 'ros2-jazzy', snapshot.id] }),
+    )
+  })
+
   it('is listed under Currently in template in the Repositories tab', async () => {
     render(
       <PackagesStep os="ubuntu24" active basePackages={[]} templateRepos={[snapshot.id]} templateOnlyRepos={[snapshot]} />,
