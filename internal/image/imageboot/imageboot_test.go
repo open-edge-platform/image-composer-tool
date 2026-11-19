@@ -1,6 +1,7 @@
 package imageboot
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1676,5 +1677,65 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
+	}
+}
+
+// recordingExecutor records the commands run through ExecCmd and otherwise
+// behaves like the mock executor.
+type recordingExecutor struct {
+	*shell.MockExecutor
+	cmds []string
+}
+
+func (r *recordingExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	r.cmds = append(r.cmds, cmdStr)
+	return r.MockExecutor.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func TestSetGrubTimeout(t *testing.T) {
+	zero, five := 0, 5
+	tests := []struct {
+		name    string
+		timeout *int
+		want    []string
+	}{
+		{"unset leaves the asset default", nil, nil},
+		{"zero is written", &zero, []string{"sed -E -i 's|^GRUB_TIMEOUT=.*$|GRUB_TIMEOUT=0|g' /etc/default/grub"}},
+		{"value is written", &five, []string{"sed -E -i 's|^GRUB_TIMEOUT=.*$|GRUB_TIMEOUT=5|g' /etc/default/grub"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := shell.Default
+			defer func() { shell.Default = original }()
+			rec := &recordingExecutor{MockExecutor: shell.NewMockExecutor([]shell.MockCommand{
+				{Pattern: "sed", Output: "", Error: nil},
+			})}
+			shell.Default = rec
+
+			if err := setGrubTimeout("/etc/default/grub", tt.timeout); err != nil {
+				t.Fatalf("setGrubTimeout: %v", err)
+			}
+			if len(rec.cmds) != len(tt.want) {
+				t.Fatalf("ran %d commands %q, want %d", len(rec.cmds), rec.cmds, len(tt.want))
+			}
+			for i, want := range tt.want {
+				if rec.cmds[i] != want {
+					t.Errorf("command %d = %q, want %q", i, rec.cmds[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestSetGrubTimeout_SedFailure(t *testing.T) {
+	original := shell.Default
+	defer func() { shell.Default = original }()
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "sed", Output: "", Error: errors.New("sed failed")},
+	})
+
+	timeout := 1
+	if err := setGrubTimeout("/etc/default/grub", &timeout); err == nil {
+		t.Fatal("expected an error when sed fails")
 	}
 }

@@ -111,6 +111,7 @@ var kernelSafeExactNames = map[string]bool{
 // identity (linux-libc-dev, linux-tools-common, and the kernel-headers/-devel/
 // -tools names in kernelSafeExactNames) are excluded so a swap never drags them out.
 var kernelFamilyPackagePrefixes = []string{
+	"linux-main-modules",
 	"linux-image",      // Debian/Ubuntu bootable image + the "linux-image-generic" meta
 	"linux-modules",    // per-kernel modules ("linux-modules-6.8.0-40-generic", "-extra")
 	"linux-headers",    // per-kernel headers ("linux-headers-6.8.0-40-generic", "-generic" meta)
@@ -122,6 +123,7 @@ var kernelFamilyPackagePrefixes = []string{
 
 // PlannedAction is a single classified package operation.
 type PlannedAction struct {
+	Requirement string
 	// Type is the classified action (add/upgrade/downgrade/remove/conflict).
 	Type ActionType
 	// Package is the canonical package name the action targets.
@@ -220,6 +222,7 @@ type PreflightReport struct {
 // PreflightInput is the pure, side-effect-free input to EvaluatePreflight. It is
 // deliberately decoupled from I/O so every policy path is unit-testable.
 type PreflightInput struct {
+	NativeArch string
 	// Family is the package-manager family, used to pick the version comparator.
 	Family PackageManager
 	// Baseline is Slice A: the baseline package inventory (only installed
@@ -375,6 +378,7 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 	}
 
 	report := EvaluatePreflight(PreflightInput{
+		NativeArch:       packagingArch(info.Arch, info.PackageManager),
 		Family:           info.PackageManager,
 		Baseline:         baseline,
 		Resolved:         plan.ToInstall,
@@ -528,6 +532,7 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		}
 	}
 
+	actions = append(actions, retainedPreflightFailures(in, actions)...)
 	sortActions(actions)
 
 	// A kernel replacement self-authorizes only its own kernel-family removals; the
@@ -1108,6 +1113,14 @@ func replacementKernelImages(request string, resolved, closure []ResolvedPackage
 	request = strings.TrimSpace(request)
 	if request == "" {
 		return nil
+	}
+	for _, packages := range [][]ResolvedPackage{resolved, closure} {
+		for _, pkg := range packages {
+			if pkg.Version != "" && request == pkg.Name+"_"+pkg.Version {
+				request = pkg.Name
+				break
+			}
+		}
 	}
 
 	if !strings.ContainsAny(request, "*?[") {
