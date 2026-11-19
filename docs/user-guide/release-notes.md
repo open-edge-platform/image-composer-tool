@@ -7,6 +7,7 @@
 **New**:
 
 - **Added**: `scripts/install-ict.sh` installs the ICT Debian package and the host tools a build uses on Ubuntu and Debian. `--tag TAG` downloads the package and `SHA256SUMS` from the GitHub release of the tag and verifies the checksum before installing; `--deb FILE` installs a package you already have.
+- **Added**: `build --replace-additional-file FINAL=FILE` replaces the host file of the `systemConfig.additionalFiles` entry installed at `FINAL` for one build, so an input that changes per build (for example a vendor tarball) can be supplied on the command line without editing the template. It does not add files: it fails if no entry has that `final` path or `FILE` is not an existing regular file. Repeatable.
 - **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
   selected by explicit APT `name_version` requests with
   `packageOperation: additive-and-upgrade`. It defaults to false and does not
