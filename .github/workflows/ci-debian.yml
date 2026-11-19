@@ -154,7 +154,7 @@ jobs:
       matrix:
         image: ['ubuntu:24.04', 'debian:12']
     steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 #v6.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 #v8.0.2
         with:
           name: ict-deb-amd64
           path: dist
@@ -224,7 +224,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 #v6.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 #v8.0.2
         with:
           name: ict-deb-amd64
           path: dist
