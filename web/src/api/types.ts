@@ -179,10 +179,6 @@ export interface ComposeResponse {
   // baseline can be shown beside the delta that modifies it. Absent when there
   // are no overrides, because `yaml` already is the base.
   baseYaml?: string
-  // Packages requested at a pinned version whose name the curated template
-  // already lists unpinned. The extends merge unions package lists and cannot
-  // drop the parent's entry, so both survive into `yaml`. Advisory only.
-  pinConflicts?: string[]
   // The matched template's own package list, before this request's overrides
   // are applied. Present even when the request carries no overrides, so the
   // Packages step can show "already included" packages alongside whatever
@@ -192,6 +188,14 @@ export interface ComposeResponse {
   // login. Any entry with satisfied: false must be covered by a credentials
   // entry on the request before a build will start.
   credentials?: CredentialRequirement[]
+  // Ids of the catalog repositories the matched template itself installs from
+  // (its packageRepositories through extends and the default config), before
+  // this request's overrides. The Packages step shows them as in use.
+  templateRepos?: string[]
+  // Entries for those of templateRepos GET /package-repos doesn't list, such
+  // as a vendor snapshot only this template uses. Their ids work in package
+  // searches like a catalog id.
+  templateOnlyRepos?: PackageRepo[]
   // Present when the resolved template downloads OEP Installer files, which
   // may need a GitHub token for a private repository.
   oepInstaller?: OEPInstallerInfo

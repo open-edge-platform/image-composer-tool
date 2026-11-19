@@ -148,6 +148,41 @@ sudo apt-get install -y mmdebstrap || sudo apt-get install -y debootstrap
 > **Tip:** If `dpkg -i` reports dependency errors, run
 > `sudo apt-get install -f` to resolve them.
 
+### Install from a GitHub Release with One Script
+
+`install-ict.sh` installs the package and the host tools a build uses on
+Ubuntu 24.04 and 26.04 and Debian 12 and 13 (amd64). Each release publishes it
+as an asset next to the `.deb`; the repository copy is `scripts/install-ict.sh`. With `--tag` it downloads the `.deb` and
+`SHA256SUMS` that the release workflow publishes for a tag, checks the
+checksum, and installs the package; apt resolves the package's dependencies.
+
+```bash
+# Download from the GitHub release of a tag (for example ict-2026.3-rc2)
+bash install-ict.sh --tag ict-2026.3-rc2
+
+# Or install a package you already downloaded (checks SHA256SUMS if it sits next to it)
+bash install-ict.sh --deb ./ict_2026.3.rc2_amd64.deb
+```
+
+Run the script as a user that can use `sudo`, without `sudo` in front of it: it
+elevates only its `apt` commands, so an exported `GITHUB_TOKEN` or proxy
+settings stay visible to it (an outer `sudo` drops them). Running it as root also
+works.
+
+| Option | Description |
+| --- | --- |
+| `--tag TAG` | Download the release asset for `TAG` and verify its SHA-256. Set `GITHUB_TOKEN` to avoid API rate limits or to read a private repository. |
+| `--deb FILE` | Install a local `.deb`. |
+| `--with-cross-arch` | Also install user-mode QEMU for builds that target another CPU architecture (`qemu-user-static`, or `qemu-user-binfmt` on Ubuntu 26.04). |
+| `--skip-prerequisites` | Install only the package and what apt requires for it. |
+
+A host package that the distribution release does not offer is reported and
+skipped; the build installs or reports what it still needs. This matters on
+Debian 12, which has no `systemd-ukify`: the Debian, Ubuntu and eLxr providers
+require it for every build, not only for unified kernel images, so on a Debian
+12 host the package installs but those builds fail before image creation. Use
+Ubuntu 24.04 or 26.04 or Debian 13 as the build host for them.
+
 ### Verify Installation
 
 ```bash

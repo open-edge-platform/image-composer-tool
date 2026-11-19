@@ -10,6 +10,7 @@ import type {
   EdgePack,
   NewUserInput,
   OEPInstallerInfo,
+  PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
@@ -102,6 +103,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // the Packages check below must keep seeing what the template ships while a
   // recompose is in flight.
   const [lastBasePackages, setLastBasePackages] = useState<string[] | null>(null)
+  // The repositories the matched template itself installs from, from the last
+  // successful compose. Held for the same reason lastBasePackages is: the
+  // Repositories list must not drop them to "optional" while a recompose is in
+  // flight.
+  const [lastTemplateRepos, setLastTemplateRepos] = useState<string[]>([])
+  const [lastTemplateOnlyRepos, setLastTemplateOnlyRepos] = useState<PackageRepo[]>([])
   // The Edge Pack for the selected OS, for the same check. Fetched here rather
   // than taken from the Packages step, which unmounts once the wizard moves on
   // and starts each visit with nothing loaded. Keyed by OS so a stale pack is
@@ -188,6 +195,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setNewUsers([])
     setLastRequirements([])
     setLastBasePackages(null)
+    setLastTemplateRepos([])
+    setLastTemplateOnlyRepos([])
     setOverlay(false)
     setOEPInstallerToken('')
     setLastOEPInstaller(undefined)
@@ -277,6 +286,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
           setLastBasePackages(r.basePackages ?? [])
+          setLastTemplateRepos(r.templateRepos ?? [])
+          setLastTemplateOnlyRepos(r.templateOnlyRepos ?? [])
           setLastOEPInstaller(r.oepInstaller)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
@@ -525,6 +536,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             os={selection.os}
             active={active}
             basePackages={composed?.basePackages ?? []}
+            templateRepos={lastTemplateRepos}
+            templateOnlyRepos={lastTemplateOnlyRepos}
             overlay={overlay}
           />
         )}
@@ -584,26 +597,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                     Edit the image name, packages, repositories, or disk layout
                     and your changes appear here.
                   </p>
-                )}
-
-                {/* Pinned a version for a package the curated template already
-                    lists? Both entries survive the merge, so say so rather than
-                    letting the resolved template look like a duplicate bug. */}
-                {composed.pinConflicts && composed.pinConflicts.length > 0 && (
-                  <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    <span className="font-semibold">
-                      {composed.pinConflicts.length === 1
-                        ? 'One pinned package is also provided by the base template'
-                        : `${composed.pinConflicts.length} pinned packages are also provided by the base template`}
-                      :
-                    </span>{' '}
-                    {composed.pinConflicts.join(', ')}. Template inheritance combines
-                    package lists rather than replacing them, so the base
-                    template&apos;s own unpinned entry stays alongside your pinned
-                    one and the build may install either version. Choose
-                    &quot;Latest&quot; for these packages to leave the base
-                    template&apos;s entry to decide.
-                  </div>
                 )}
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">

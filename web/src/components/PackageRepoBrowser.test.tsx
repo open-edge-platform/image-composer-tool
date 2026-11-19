@@ -60,7 +60,7 @@ beforeEach(() => {
 
 // browse picks a repository from the toolbar dropdown, the same way a user does.
 function browse(repoId: string) {
-  fireEvent.change(screen.getByRole('combobox', { name: /Repository/ }), { target: { value: repoId } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: repoId } })
 }
 
 describe('a repo the matched template already draws a package from', () => {
@@ -75,7 +75,7 @@ describe('a repo the matched template already draws a package from', () => {
     )
 
     browse('intel-eci')
-    expect(screen.getByText('In template — always on')).toBeTruthy()
+    expect(screen.getByText('In template — already included')).toBeTruthy()
   })
 
   it('is not written into enabledRepos — it is checked by lockedRepoIds alone', () => {
@@ -118,7 +118,7 @@ describe('a repo the matched template already draws a package from', () => {
 
     const order = screen.getAllByRole('option').map((el) => (el as HTMLOptionElement).value)
     expect(order).toEqual(['base', 'intel-eci', 'intel-graphics', 'docker'])
-    const always = screen.getByRole('group', { name: 'Always on' })
+    const always = screen.getByRole('group', { name: 'Currently in template' })
     expect(Array.from(always.querySelectorAll('option')).map((o) => o.value)).toEqual(['base', 'intel-eci'])
   })
 
@@ -145,7 +145,7 @@ describe('the dropdown browses a repository, independent of using it for the bui
   it('shows the base repo as always on', () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    expect(screen.getByText('Base — always on')).toBeTruthy()
+    expect(screen.getByText('Base — already included')).toBeTruthy()
   })
 
   it('switches the fetched repo when a different repository is picked', async () => {
@@ -196,9 +196,12 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    expect(screen.getByText(/Pinned to/)).toBeTruthy()
-    expect(screen.getByText('9.1')).toBeTruthy()
-    expect(screen.getByText('Intel ECI')).toBeTruthy()
+    // The header says what's pinned and where from; the note, what a chip
+    // here would do instead.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.getByText('Intel ECI', { selector: 'button' })).toBeTruthy()
+    expect(screen.getByText('Picking a version here pins Ubuntu Base instead of Intel ECI.')).toBeTruthy()
     const chip = screen.getByRole('button', { name: '9.0' })
     expect(chip.className).not.toContain('bg-[#0071c5]')
   })
@@ -216,12 +219,17 @@ describe('a package already selected from a different repository than the one be
     browse('intel-eci')
 
     await screen.findByText('vim')
-    expect(screen.queryByText(/Pinned to/)).toBeNull()
+    // The pin is one of this repo's chips, highlighted there, and beside the
+    // tag with no "via", since it's from the repo being browsed.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.queryByText(/^via /, { selector: 'span' })).toBeNull()
+    expect(screen.queryByText(/Picking a version here pins/)).toBeNull()
     const chip = screen.getByRole('button', { name: '9.1' })
     expect(chip.className).toContain('bg-[#0071c5]')
   })
 
-  it('shows "Latest" as selected in every repo once picked as the unpinned choice', async () => {
+  it('tags an unpinned pick Unpinned in every repo, with no version chip selected', async () => {
     useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'intel-eci' }] })
     mockApi.searchPackages.mockResolvedValue({
       packages: [{ name: 'vim', version: '9.0', repository: 'base', versions: [{ version: '9.0', repository: 'base' }] }],
@@ -230,8 +238,9 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    const latest = screen.getByRole('button', { name: 'Latest' })
-    expect(latest.className).toContain('bg-[#0071c5]')
+    expect(screen.getByText('Unpinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Unpinned' })).toBeNull()
+    expect(screen.getByRole('button', { name: '9.0' }).getAttribute('aria-pressed')).toBe('false')
   })
 })
 
@@ -279,7 +288,7 @@ describe('"Show only selected"', () => {
       })
     })
   const browse = (label: string) =>
-    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), {
       target: { value: repos.find((r) => r.displayName === label)!.id },
     })
 
@@ -341,9 +350,9 @@ describe('"Show only selected"', () => {
     expect(mockApi.searchPackages.mock.calls.every(([args]) => !args.q)).toBe(true)
 
     // Back to a repo already looked up: answered from the cache.
-    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'intel-eci' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: 'intel-eci' } })
     await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'base' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: 'base' } })
     await screen.findByRole('checkbox', { name: 'Show only selected (2 selected)' })
     expect(mockApi.lookupPackages).toHaveBeenCalledTimes(2)
   })

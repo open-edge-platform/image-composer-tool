@@ -62,6 +62,10 @@ type Service struct {
 	// repos is the Advanced tab's repository catalog, loaded once at
 	// construction. Read-only after New, so it needs no lock.
 	repos []PackageRepo
+	// templateOnly holds the repositories templates declare that repos doesn't
+	// carry, keyed by id, registered by templateOnlyRepos as composes meet them.
+	templateOnlyMu sync.RWMutex
+	templateOnly   map[string]PackageRepo
 	// edgePack is the Advanced tab's capability catalog, grouping a subset of
 	// `repos`' packages by domain. Loaded once at construction alongside repos
 	// and read-only after New, for the same reason.

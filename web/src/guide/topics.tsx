@@ -202,16 +202,18 @@ const advanced: GuideTopic = {
           </li>
           <li>Tick a package, or pick a version, to add it.</li>
           <li>
-            Everything you added shows in the <Ui>Selected</Ui> panel on the right, under{' '}
-            <Ui>You are adding</Ui>. Packages the image already has are listed under{' '}
-            <Ui>Already in template</Ui>.
+            Everything you added or changed shows in the <Ui>Selected</Ui> panel on the right, under{' '}
+            <Ui>You are adding</Ui>. Packages the image already has show ticked in the{' '}
+            <Ui>Repositories</Ui> tab.
           </li>
         </Steps>
         <Tip>
-          Leave a package on <Ui>Latest</Ui> unless you need one exact version. <Ui>Latest</Ui> is
+          Leave a package unpinned (ticked, no version chosen) unless you need one exact version;
+          choose a version chip to pin it, and choose it again to unpin it. An unpinned package is
           looked up when the image is built, so a later build can get a newer version. To fix each
-          package you are adding to today's newest version instead, click <Ui>Update to latest version</Ui>{' '}
-          above the package list in the <Ui>Repositories</Ui> tab.
+          package selected from a repository, added or from the template, to the newest version that
+          repository offers today instead, browse that repository and click{' '}
+          <Ui>Update to latest version</Ui> above the package list in the <Ui>Repositories</Ui> tab.
         </Tip>
       </Section>
 

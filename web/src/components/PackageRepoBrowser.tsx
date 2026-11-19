@@ -1,13 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore, confirmRepoRelease } from '../store'
+import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
 import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 import { ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import type { VersionResolver } from '../lib/useVersionResolver'
+import {
+  MAX_SELECTED_PACKAGES,
+  pinSources,
+  pinnedElsewhere,
+  pinnedElsewhereLabel,
+  pinnedElsewhereNotice,
+  planTemplateUpdates,
+} from '../lib/templateUpdates'
 
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
+
+// Names the template pins that "Update to latest version" left alone, and why.
+function unverifiableNotice(names: string[], repoLabel: string): string | null {
+  if (names.length === 0) return null
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : ''
+  return `Kept the template's own pinned version of ${names.slice(0, 5).join(', ')}${more}: ${repoLabel} doesn't publish that version, so it can't be told whether its newest one is newer or older.`
+}
 
 // Height cap for the package list. It tracks the viewport so the step's
 // Back/Next row stays on screen: 37rem is roughly the page chrome above the
@@ -78,9 +93,11 @@ export function PackageRepoBrowser({
   }, [pickerRepoIdsKey, selectedRepoId])
   const selectedRepo = pickerRepos.find((r) => r.id === selectedRepoId)
 
-  // The curated-subset toggle only makes sense against whichever repo is
-  // currently browsed, so switching repos resets it rather than carrying a
-  // filter over that might not even apply to the new one.
+  // The curated-subset filter ("Show frequently used"). Its checkbox isn't
+  // offered for now, to keep the controls row short, so this stays off; the
+  // filtering behind it is kept so the checkbox can come back. It only makes
+  // sense against whichever repo is currently browsed, so switching repos
+  // resets it rather than carrying a filter over that might not apply.
   const [frequentOnly, setFrequentOnly] = useState(false)
   useEffect(() => {
     setFrequentOnly(false)
@@ -111,7 +128,7 @@ export function PackageRepoBrowser({
           resolver={resolver}
           lockedRepoIds={lockedRepoIds}
           frequentOnly={frequentOnly}
-          onFrequentOnlyChange={selectedRepo?.hasCuratedPackages ? setFrequentOnly : undefined}
+          onBrowseRepo={setSelectedRepoId}
         />
       </div>
     </div>
@@ -144,12 +161,12 @@ function RepoToolbar({
 }) {
   const alwaysOnRepos = repos.filter(isAlwaysOn)
   const optionalRepos = repos.filter((r) => !isAlwaysOn(r))
-  const badge = selectedRepo.enabledByDefault ? 'Base — always on' : locked ? 'In template — always on' : null
+  const badge = selectedRepo.enabledByDefault ? 'Base — already included' : locked ? 'In template — already included' : null
   return (
     <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <label className="flex min-w-[280px] flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
-          Repository
+          Choose repository
           <select
             value={selectedRepo.id}
             onChange={(e) => onSelect(e.target.value)}
@@ -159,7 +176,7 @@ function RepoToolbar({
             className="min-w-0 max-w-[420px] flex-1 cursor-pointer truncate rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-semibold text-slate-700 hover:border-[#0071c5] focus:border-[#0071c5] focus:outline-none focus:ring-2 focus:ring-[#0071c5]/25"
           >
             {alwaysOnRepos.length > 0 && (
-              <optgroup label="Always on">
+              <optgroup label="Currently in template">
                 {alwaysOnRepos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.displayName}
@@ -168,7 +185,7 @@ function RepoToolbar({
               </optgroup>
             )}
             {optionalRepos.length > 0 && (
-              <optgroup label="Optional">
+              <optgroup label="Available (not in template)">
                 {optionalRepos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {isEnabled(r) ? `✓ ${r.displayName}` : r.displayName}
@@ -204,7 +221,7 @@ function MergedPane({
   resolver,
   lockedRepoIds,
   frequentOnly,
-  onFrequentOnlyChange,
+  onBrowseRepo,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
@@ -214,8 +231,8 @@ function MergedPane({
   resolver: VersionResolver
   lockedRepoIds: Set<string>
   frequentOnly: boolean
-  // Set only when the browsed repo has a curated subset to filter down to.
-  onFrequentOnlyChange?: (on: boolean) => void
+  // Switches the Repository dropdown, to go and browse another repository.
+  onBrowseRepo: (repoId: string) => void
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -260,6 +277,12 @@ function MergedPane({
   // repo again clears it and retries.
   const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
   const templateNamesKey = baseLock.concreteNames.join(',')
+  const addedPackages = useStore((s) => s.addedPackages)
+  // Packages under "You are adding" picked from the browsed repo. Looked up
+  // with the template's names, so "Show only selected" can offer every
+  // version the repo has for them too, not just the one picked.
+  const browsedAddedNames = addedPackages.filter((p) => p.repo === selectedRepo?.id).map((p) => p.name)
+  const browsedAddedKey = browsedAddedNames.join(',')
   useEffect(() => {
     setTemplateHits({})
     setTemplateLookupFailed(null)
@@ -271,7 +294,8 @@ function MergedPane({
     const repoId = selectedRepo?.id
     if (!repoId || templateLookupFailed === repoId) return
     const known = templateHits[repoId] ?? {}
-    const missing = baseLock.concreteNames.filter((name) => !(name in known))
+    const names = [...new Set([...baseLock.concreteNames, ...browsedAddedNames])]
+    const missing = names.filter((name) => !(name in known))
     if (missing.length === 0) return
     let cancelled = false
     // One request for the whole list: one search per name queued the
@@ -298,10 +322,9 @@ function MergedPane({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- templateNamesKey stands in for baseLock.concreteNames
-  }, [selectedRepo?.id, os, templateNamesKey, templateHits, templateLookupFailed])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the keys stand in for baseLock.concreteNames and browsedAddedNames
+  }, [selectedRepo?.id, os, templateNamesKey, browsedAddedKey, templateHits, templateLookupFailed])
 
-  const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
   const setPackages = useStore((s) => s.setPackages)
@@ -318,8 +341,20 @@ function MergedPane({
     lookupNewest,
   } = resolver
   const [pinning, setPinning] = useState(false)
-  // Why the last "Update to latest version" changed nothing, if it didn't.
+  // Why the last "Update to latest version" changed nothing, or left some
+  // packages as they were.
   const [pinNotice, setPinNotice] = useState<string | null>(null)
+  // The template as of the latest render, for an answer to check it against
+  // once it settles: a different template means a different package list.
+  const latestTemplateKey = useRef(templateNamesKey)
+  useEffect(() => {
+    latestTemplateKey.current = templateNamesKey
+  }, [templateNamesKey])
+  // Likewise the browsed repo, which an answer is only about.
+  const latestBrowsedRepo = useRef(selectedRepo?.id)
+  useEffect(() => {
+    latestBrowsedRepo.current = selectedRepo?.id
+  }, [selectedRepo?.id])
 
   // "Latest" ('') is written to the template unpinned and resolved only at
   // build time, so the image can differ from what was reviewed here. This
@@ -327,7 +362,9 @@ function MergedPane({
   // to the exact newest version the checked repos offer right now, so the
   // YAML records it. The repo a package was picked from stays enabled even if
   // the newest version lives elsewhere: releasing it would change the repo
-  // scope the versions were just looked up in.
+  // scope the versions were just looked up in. The matched template's own
+  // packages are pinned too, as overrides added under "You are adding" (see
+  // planTemplateUpdates for which ones).
   //
   // Nothing changes unless the answer is complete: with a repo unreadable,
   // "newest" could be an older version or a downgrade of a pin. And only
@@ -336,14 +373,25 @@ function MergedPane({
   // it's removed and re-added, or the target changes, so comparing the
   // entry objects themselves skips every one of those rather than
   // overwriting a newer choice (or another OS's package) with this answer.
+  // A template package added by hand meanwhile is skipped the same way.
   const pinAllToNewest = () => {
-    const dispatched = addedPackages
+    // What "Show only selected" lists for the browsed repo, so the button
+    // updates exactly what its count says (see pinCount below).
+    const repoId = selectedRepo?.id
+    if (!repoId) return
+    const dispatched = addedPackages.filter((p) => p.repo === repoId)
+    const dispatchedTemplate = lockedRows.map((r) => r.name).filter((name) => !elsewhere.includes(name))
+    const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
-    lookupNewest(dispatched.map((p) => p.name))
+    // The newest version in the browsed repo, so every pin this sets is one
+    // of the chips on screen.
+    lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate], [repoId])
       .then(({ found, complete, unavailableRepos, stale }) => {
-        if (stale) {
-          setPinNotice('The target or checked repositories changed while checking, so nothing was updated. Try again.')
+        if (stale || latestBrowsedRepo.current !== repoId) {
+          setPinNotice(
+            'The target, checked repositories or browsed repository changed while checking, so nothing was updated. Try again.',
+          )
           return
         }
         if (!complete) {
@@ -354,13 +402,51 @@ function MergedPane({
           )
           return
         }
-        const pins = useStore
-          .getState()
-          .addedPackages.filter((p) => dispatched.includes(p) && found[p.name])
+        const current = useStore.getState().addedPackages
+        const pins = current
+          .filter((p) => dispatched.includes(p) && found[p.name])
           .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
-        if (pins.length > 0) setPackages(pins)
+        const templatePins = planTemplatePins(dispatchedTemplate, templateKey, current, found)
+        const all = [...pins, ...templatePins]
+        if (all.length > 0) {
+          setPackages(all)
+          // Every pin is from the browsed repo (the lookup was in it alone),
+          // and a build only reads repos in use, so pinning from it puts it
+          // in use, as picking a version chip does.
+          ensureRepoEnabled(repoId)
+        }
       })
       .finally(() => setPinning(false))
+  }
+
+  // The template's share of a completed answer, with pinNotice saying what
+  // it left alone and why.
+  const planTemplatePins = (
+    names: string[],
+    templateKey: string,
+    current: AddedPackage[],
+    found: Record<string, PackageSearchResult>,
+  ): AddedPackage[] => {
+    if (names.length === 0) return []
+    if (latestTemplateKey.current !== templateKey) {
+      setPinNotice("The matched template changed while checking, so its packages weren't updated. Try again.")
+      return []
+    }
+    const taken = new Set(current.map((p) => p.name))
+    const plan = planTemplateUpdates(
+      names.filter((name) => !taken.has(name)),
+      baseLock,
+      found,
+    )
+    const total = current.length + plan.pins.length
+    if (total > MAX_SELECTED_PACKAGES) {
+      setPinNotice(
+        `Pinning the template's packages would add ${plan.pins.length}, ${total} in all, over the ${MAX_SELECTED_PACKAGES} a build accepts, so they weren't updated. Packages you are adding were.`,
+      )
+      return []
+    }
+    setPinNotice(unverifiableNotice(plan.unverifiable, repoLabelFor(selectedRepo?.id ?? '')))
+    return plan.pins
   }
   // What the pane is actually fetched against — only the one repository
   // currently picked in the dropdown, checked or not. Kept separate from
@@ -456,14 +542,17 @@ function MergedPane({
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  // Already-picked packages from the browsed repo, synthesized straight from
-  // the store rather than fetched — addedPackages only carries name/version/
-  // repo, not description or sibling versions, which is fine for a short
-  // review list. A floating pick (version === '') uses whatever was
-  // live-resolved for it.
+  // Already-picked packages from the browsed repo. The repo's own entry for
+  // each, looked up with the template's names above, carries every version
+  // it publishes, so the row offers the same chips the catalog does; the
+  // store's pick decides which one is selected. Until that lookup lands, a
+  // row is synthesized from the store: a floating pick (version === '') uses
+  // whatever was live-resolved for it, a pinned one its own version.
   const addedRows: PackageSearchResult[] = addedPackages
     .filter((p) => p.repo === selectedRepo?.id)
     .map((p) => {
+      const own = selectedRepo ? templateHits[selectedRepo.id]?.[p.name] : undefined
+      if (own) return own
       if (p.version === '' && liveResolved[p.name]) return liveResolved[p.name]
       return {
         name: p.name,
@@ -495,6 +584,47 @@ function MergedPane({
   const selectedRows: PackageSearchResult[] = [...addedRows, ...lockedRows].sort((a, b) =>
     a.name.localeCompare(b.name),
   )
+  // "Update to latest version" acts on the browsed repo's selection, the same
+  // rows "Show only selected" lists and counts.
+  // Template pins whose pinned version the browsed repo doesn't publish:
+  // the button leaves them as they are, so they aren't in its count, and a
+  // note beside it says where they come from. That takes one lookup across
+  // the other repos the build reads (an unchecked one may publish the same
+  // build, but a build never takes it from there).
+  const elsewhere = pinnedElsewhere(lockedRows, baseLock)
+  const pinCount = selectedRows.length - elsewhere.length
+  const elsewhereOthers = enabledRepoIds.filter((id) => id !== selectedRepo?.id)
+  const elsewhereKey = `${os}|${selectedRepo?.id}|${elsewhere.join(',')}|${elsewhereOthers.join(',')}`
+  const [elsewhereSources, setElsewhereSources] = useState<{ key: string; sources: Map<string, string[]> } | null>(
+    null,
+  )
+  useEffect(() => {
+    if (elsewhere.length === 0 || elsewhereOthers.length === 0) return
+    let cancelled = false
+    const priorities = Object.fromEntries(repos.map((r) => [r.id, r.priority ?? 500]))
+    api
+      .lookupPackages({ os, repos: elsewhereOthers, names: elsewhere })
+      .then((r) => {
+        if (cancelled) return
+        const found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
+        setElsewhereSources({ key: elsewhereKey, sources: pinSources(elsewhere, baseLock, found, priorities) })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- elsewhereKey stands in for its parts
+  }, [elsewhereKey])
+  const sourcesNow = elsewhereSources?.key === elsewhereKey ? elsewhereSources.sources : undefined
+  const sourceOf = new Map<string, string>()
+  for (const [repo, names] of sourcesNow ?? []) for (const name of names) if (repo) sourceOf.set(name, repo)
+  const onlySource = sourcesNow && sourcesNow.size === 1 && !sourcesNow.has('') ? [...sourcesNow.keys()][0] : undefined
+  // What a row whose template pin comes from elsewhere says about it.
+  const pinnedFromFor = (name: string) => {
+    if (!elsewhere.includes(name)) return undefined
+    const repo = sourceOf.get(name)
+    return repo ? { repoLabel: repoLabelFor(repo), onBrowse: () => onBrowseRepo(repo) } : {}
+  }
 
   const selectedCountLabel = checkingTemplate
     ? 'checking…'
@@ -575,17 +705,6 @@ function MergedPane({
   return (
     <>
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-slate-600">
-        {onFrequentOnlyChange && (
-          <label className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={frequentOnly}
-              onChange={(e) => onFrequentOnlyChange(e.target.checked)}
-              className="h-[13px] w-[13px] accent-[#0071c5]"
-            />
-            Show frequently used
-          </label>
-        )}
         <label className="flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -627,22 +746,44 @@ function MergedPane({
               : `Resolve versions (${unresolvedNames.length})`}
           </button>
         )}
-        {/* Acts on everything added, not just this repo or page, so it sits
-            apart toward the end of the row, before the pager. Disabled rather than hidden until
-            something is added, so it can be found before it's needed. */}
+        {/* Acts on everything selected from this repo, not just this page, so
+            it sits apart toward the end of the row, before the pager.
+            Disabled rather than hidden until there is something to pin, so it
+            can be found before it's needed. */}
         <button
           type="button"
           onClick={pinAllToNewest}
-          disabled={pinning || addedPackages.length === 0}
+          disabled={pinning || checkingTemplate || pinCount === 0}
           title={
-            addedPackages.length === 0
-              ? 'Add packages first: this pins every package you are adding to its newest version'
-              : 'Pin every package you are adding, from any repository, to the newest version in the checked repositories, so the template records that exact version instead of resolving it at build time'
+            pinCount === 0
+              ? 'Nothing is selected from this repository: this pins each package selected from it to its newest version'
+              : 'Pin every package selected from this repository, added or from the template, to the newest version this repository offers, so the template records that exact version instead of resolving it at build time. A template pin is only replaced by a newer version from this repository'
           }
           className="ml-auto font-medium text-[#0071c5] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
         >
-          {pinning ? 'Updating…' : `Update to latest version (${addedPackages.length})`}
+          {pinning ? 'Updating…' : `Update to latest version (${pinCount})`}
         </button>
+        {elsewhere.length > 0 &&
+          !checkingTemplate &&
+          (onlySource ? (
+            // One source: the note is a link there, where these pins can be
+            // updated.
+            <button
+              type="button"
+              onClick={() => onBrowseRepo(onlySource)}
+              className="text-slate-500 underline decoration-dotted hover:text-[#0071c5]"
+              title={pinnedElsewhereNotice(elsewhere, sourcesNow, selectedRepo?.id ?? '', repoLabelFor)}
+            >
+              {pinnedElsewhereLabel(elsewhere.length, sourcesNow, repoLabelFor)}
+            </button>
+          ) : (
+            <span
+              className="text-slate-500"
+              title={pinnedElsewhereNotice(elsewhere, sourcesNow, selectedRepo?.id ?? '', repoLabelFor)}
+            >
+              {pinnedElsewhereLabel(elsewhere.length, sourcesNow, repoLabelFor)}
+            </span>
+          ))}
         {/* Sits on the controls row rather than a line of its own, so the
             vertical space goes to package rows instead. */}
         {!selectedOnly && pageCount > 1 && displayRows.length > 0 && !error && (
@@ -709,6 +850,9 @@ function MergedPane({
                   locked={lock.locked}
                   currentVersion={currentVersion}
                   currentIsFloating={lock.currentIsFloating}
+                  pinnedFrom={pinnedFromFor(h.name)}
+                  browsedRepoId={selectedRepo?.id}
+                  onBrowseRepo={onBrowseRepo}
                   resolvedVersion={liveResolved[h.name]?.version}
                   resolvedRepo={liveResolved[h.name]?.repository}
                   onToggle={(checked) => {

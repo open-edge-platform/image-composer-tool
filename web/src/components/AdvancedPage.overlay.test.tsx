@@ -37,10 +37,10 @@ const TEMPLATE = 'ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml'
 
 const manifest: Manifest = {
   combinations: [
-    { vertical: 'platform-enablement-bkc', sku: 'bkc', platform: 'nvl', os: 'ubuntu26', imageType: 'raw', template: TEMPLATE },
+    { vertical: 'platform-enablement', sku: 'upstream-bkc', platform: 'nvl', os: 'ubuntu26', imageType: 'raw', template: TEMPLATE },
   ],
-  verticals: [{ id: 'platform-enablement-bkc', displayName: 'Platform Enablement - BKC' }],
-  skus: [{ id: 'bkc', displayName: 'BKC' }],
+  verticals: [{ id: 'platform-enablement', displayName: 'Platform Enablement' }],
+  skus: [{ id: 'upstream-bkc', displayName: 'Upstream BKC' }],
   platforms: [{ id: 'nvl', displayName: 'NVL (Nova Lake)' }],
   targets: [{ id: 'ubuntu26', displayName: 'Ubuntu 26.04', os: 'ubuntu', arch: 'x86_64' }],
 }
@@ -69,7 +69,7 @@ beforeEach(() => {
   mockApi.getEdgePack.mockReset().mockResolvedValue(pack)
   useStore.setState({
     manifest,
-    selection: { vertical: 'platform-enablement-bkc', sku: 'bkc', platform: 'nvl', os: 'ubuntu26', kernel: '', imageType: 'raw' },
+    selection: { vertical: 'platform-enablement', sku: 'upstream-bkc', platform: 'nvl', os: 'ubuntu26', kernel: '', imageType: 'raw' },
     // Kept from an earlier EdgePack selection on the same OS.
     addedPackages: [{ name: 'base-standard', version: '', repo: 'intel-eci' }],
     enabledRepos: [],

@@ -43,7 +43,15 @@ interface EdgePackBrowserProps {
   // addedPackages — the same treatment PackageRepoBrowser already gives a
   // single row via baseLock.
   baseLock: BaseLock
+  // Repositories the matched template already installs from (see
+  // templateInUseRepos). Selecting a package never writes one of these into
+  // enabledRepos: the build already reads it, and the Repositories tab shows it
+  // locked, so an entry there could not be unticked again.
+  lockedRepoIds?: Set<string>
 }
+
+// noLockedRepos is the default lockedRepoIds, hoisted so it is one stable set.
+const noLockedRepos = new Set<string>()
 
 // EdgePackBrowser is the Packages step's Edge Pack tab: the capability view over
 // the same packages the Repositories tab browses by provenance.
@@ -57,6 +65,7 @@ export function EdgePackBrowser({
   repoLabelFor,
   targetLabel,
   baseLock,
+  lockedRepoIds = noLockedRepos,
 }: EdgePackBrowserProps) {
   // Which domain's package list is expanded, if any. Purely presentational, so
   // it is local state rather than store state — it must not survive a target
@@ -82,7 +91,7 @@ export function EdgePackBrowser({
   // away from the rest of the template.
   const ensureReposEnabled = (domains: EdgePackDomain[]) => {
     for (const id of reposToEnable(pack, domains)) {
-      if (!enabledRepos.includes(id)) setRepoEnabled(id, true)
+      if (!enabledRepos.includes(id) && !lockedRepoIds.has(id)) setRepoEnabled(id, true)
     }
   }
 
@@ -151,7 +160,12 @@ export function EdgePackBrowser({
 
   return (
     <>
-      <BaseRuntimeSelector pack={pack} repoLabelFor={repoLabelFor} baseLock={baseLock} />
+      <BaseRuntimeSelector
+        pack={pack}
+        repoLabelFor={repoLabelFor}
+        baseLock={baseLock}
+        lockedRepoIds={lockedRepoIds}
+      />
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
         {/* Pack-level select-all. Its scope is the domains only — the base
@@ -326,10 +340,12 @@ function BaseRuntimeSelector({
   pack,
   repoLabelFor,
   baseLock,
+  lockedRepoIds,
 }: {
   pack: EdgePack
   repoLabelFor: (id: string) => string
   baseLock: BaseLock
+  lockedRepoIds: Set<string>
 }) {
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
@@ -358,7 +374,7 @@ function BaseRuntimeSelector({
     // elsewhere, so enabling only the pack repo would emit a template that
     // cannot resolve at build time.
     for (const id of reposToEnable(pack, [runtime])) {
-      if (!enabledRepos.includes(id)) setRepoEnabled(id, true)
+      if (!enabledRepos.includes(id) && !lockedRepoIds.has(id)) setRepoEnabled(id, true)
     }
   }
 

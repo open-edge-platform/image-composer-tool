@@ -39,6 +39,13 @@ func isGlobPattern(pattern string) bool {
 	return strings.ContainsAny(pattern, "*?[]")
 }
 
+// MatchesPackageFilter reports whether a repository's allowPackages filter
+// admits pkgName, exactly as a build applies it, so other code (the web UI's
+// package search) can apply the same rule.
+func MatchesPackageFilter(pkgName string, filter []string) bool {
+	return matchesPackageFilter(pkgName, filter)
+}
+
 func matchesPackageFilter(pkgName string, filter []string) bool {
 	if len(filter) == 0 {
 		return true

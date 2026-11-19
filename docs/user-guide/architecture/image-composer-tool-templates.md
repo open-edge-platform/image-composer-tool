@@ -1589,7 +1589,7 @@ follow different strategies:
 | `image.name`, `image.version` | User overrides default if non-empty |
 | `target` | User value used entirely |
 | `disk` | User replaces entire default if non-empty |
-| `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated) |
+| `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated). A user entry pinning a version (`curl_8.5.0-2`) replaces the default's entry for the same package; a bare one (`curl`) leaves the default's entry in place |
 | `systemConfig.kernel` | User overrides `version`, `cmdline`, `packages` individually if non-empty |
 | `systemConfig.bootloader` | User overrides individual fields if non-empty |
 | `systemConfig.network` | User overrides `backend` if non-empty; `interfaces` replaced when provided |
@@ -1665,7 +1665,7 @@ full behavior across a chain:
 | `baseline` / `overlayPolicy` | Non-nil child pointer replaces the parent value |
 | `disk` | Wholesale replacement when the child provides a non-empty disk config |
 | `systemConfig.name` / `.description` / `.hostname` / `.initramfs.template` | Non-empty child overrides |
-| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated. Deduplication is by exact string, so a child pinning `pkg_1.2` does **not** replace a parent's unpinned `pkg` — both entries survive (see [What the Packages Step Contributes](#what-the-packages-step-contributes)) |
+| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated, so a child cannot remove a parent's package. Where a child lists a package the parent also lists, one entry survives: a child pinning a version (`pkg_1.2`) replaces the parent's entry, pinned or not, in place, and a child's bare `pkg` leaves the parent's entry to decide. Glob entries (`libva*`) are deduplicated by exact string only |
 | `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
@@ -1835,14 +1835,10 @@ the per-OS `providerconfigs/`, so re-declaring them would duplicate
 configuration the build already has.
 
 > **Pinning a package the curated template already lists.** Per the merge table
-> above, `systemConfig.packages` is an **additive union** — a child layer cannot
-> remove a parent's entry. So pinning a version for a package the curated
-> template already lists unpinned leaves **both** entries in the resolved
-> template (`curl` and `curl_8.5.0-2ubuntu10.13`), and the resolver may install
-> either. `POST /templates/compose` reports these on `pinConflicts` and the
-> Review step names them, rather than presenting the resolved template as
-> unambiguous. To let the curated template's entry decide, choose "Latest" for
-> that package.
+> above, a pinned entry replaces the curated template's entry for the same
+> package, whether that entry is unpinned (`curl`) or pinned to another version,
+> so the resolved template requests the package once, at your version. To let
+> the curated template's entry decide, choose "Latest" for that package.
 
 Because the delta is a template in its own right, the Review step can show it
 directly: `POST /templates/compose` returns `deltaYaml` (the generated delta
@@ -1897,6 +1893,29 @@ repository cannot quietly start producing unverified builds.
 Repositories for target OSes the manifest does not offer are deliberately
 absent; the picker can never query them. They should be added alongside the
 manifest combination that makes them reachable.
+
+#### Repositories Only a Template Declares
+
+A template served from outside this repository, through `serve --manifest` and
+`--templates-dir`, can declare a repository the catalog does not carry, such as
+a vendor snapshot or a PPA only that template uses. `POST /templates/compose`
+reports each one too: its id, prefixed `template-`, is in `templateRepos`, and
+`templateOnlyRepos` carries a catalog-shaped entry for it, built from the
+template's own `url`, `codename`, `component`, `priority` and `pkey` and labelled
+by host and the end of its path (for example
+`ppa.launchpadcontent.net …/lp2168017/ubuntu (resolute)`). The id is derived
+from the target and the repository's URL, suite and components, so it is the
+same on every compose.
+
+The Packages step lists such a repository under **Already included** with the
+template's other repositories, and browses and searches it like a catalogued
+one: `GET /packages/search` and `/packages/search/stream` accept its id once a
+compose has returned it. `GET /package-repos` never lists it, so it is not
+offered as optional for other templates, and an unfiltered search does not
+read it. Only repositories named by templates the server itself serves are ever
+fetched this way; a client can name an id a compose returned, never a URL. The
+server must be able to reach the repository for its packages to show; when it
+cannot, the step reports it as unreadable, as for a catalogued repository.
 
 ### See Also
 

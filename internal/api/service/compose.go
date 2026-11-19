@@ -425,13 +425,9 @@ type ComposeResult struct {
 	// caller show the baseline beside the delta that modifies it. Empty when
 	// there are no overrides, because YAML already is the base.
 	BaseYAML string
-	// PinConflicts names packages requested at a pinned version whose name the
-	// base template already lists unpinned. The merge unions package lists and
-	// cannot drop the parent's entry, so both survive into YAML. Advisory only.
-	PinConflicts []string
 	// BasePackages is the curated template's own systemConfig.packages list —
 	// what it ships before this selection's overrides are applied. Populated
-	// unconditionally (unlike BaseYAML/PinConflicts), so a caller can show
+	// unconditionally (unlike BaseYAML), so a caller can show
 	// "already included" packages even before the user has added anything of
 	// their own.
 	BasePackages []string
@@ -441,6 +437,16 @@ type ComposeResult struct {
 	// A caller can use this to prompt for missing credentials rather than
 	// discovering the gap partway through a build.
 	Credentials []CredentialRequirement
+	// TemplateRepos are the ids of the repositories the matched template
+	// itself installs from — its packageRepositories through the whole
+	// extends chain and the default config — before this selection's
+	// overrides. Like BasePackages it is populated unconditionally, so the
+	// Packages step can show them as in use rather than as optional repos.
+	// Those the catalog doesn't carry are listed by their TemplateOnlyRepos id.
+	TemplateRepos []string
+	// TemplateOnlyRepos are the entries for TemplateRepos the catalog (GET
+	// /package-repos) doesn't list, so a caller can show and search them too.
+	TemplateOnlyRepos []PackageRepo
 	// OEPInstaller says whether the resolved template downloads OEP Installer
 	// files, so a caller can ask for a GitHub token for the build.
 	OEPInstaller OEPInstallerInfo
@@ -566,6 +572,7 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		Credentials:  credentialRequirements(merged),
 		OEPInstaller: s.oepInstallerInfo(merged),
 	}
+	s.setTemplateRepos(res, sel.OS, merged.PackageRepositories)
 
 	// With overrides in play, resolve the curated parent a second time so the
 	// caller can show the baseline beside the delta and attribute the difference
@@ -578,8 +585,10 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			if baseBytes, merr := config.MarshalTemplateYAML(config.RedactSensitiveData(base)); merr == nil {
 				res.BaseYAML = string(baseBytes)
 			}
-			res.PinConflicts = pinConflicts(sel.Packages, base.SystemConfig.Packages)
 			res.BasePackages = base.SystemConfig.Packages
+			// Without the overrides, so a repo the user enabled is not reported
+			// as one the template ships.
+			s.setTemplateRepos(res, sel.OS, base.PackageRepositories)
 		} else {
 			logger.Logger().Warnf("compose: baseline resolve of %s failed, omitting base view: %v", tmpl, berr)
 		}
@@ -587,37 +596,17 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 	return res, nil
 }
 
-// pinConflicts names the requested packages that are pinned to a version while
-// the base template already lists the same package unpinned. The extends merge
-// unions package lists and cannot remove the parent's entry, so both survive
-// into the resolved template and the resolver may install either.
-//
-// Reported rather than rejected or silently dropped: rejecting would fail the
-// Review pane for a common pick (the curated templates list dozens of packages
-// users browse straight into), and dropping would discard the version the user
-// explicitly asked for.
-func pinConflicts(requested, basePackages []string) []string {
-	if len(requested) == 0 || len(basePackages) == 0 {
-		return nil
+// setTemplateRepos fills res.TemplateRepos and res.TemplateOnlyRepos from a
+// resolved template's packageRepositories.
+func (s *Service) setTemplateRepos(res *ComposeResult, osID string, repos []config.PackageRepository) {
+	ids := s.templateRepoIDs(osID, repos)
+	extra := s.templateOnlyRepos(osID, repos)
+	for _, r := range extra {
+		ids = append(ids, r.ID)
 	}
-	base := make(map[string]bool, len(basePackages))
-	for _, p := range basePackages {
-		base[p] = true
-	}
-	var out []string
-	for _, entry := range requested {
-		if !isPinned(entry) {
-			continue
-		}
-		// Only an *unpinned* parent entry conflicts. A parent already pinned to
-		// the same version dedups on the exact string, and one pinned to a
-		// different version is a collision the parent authored deliberately.
-		if base[packageName(entry)] {
-			out = append(out, entry)
-		}
-	}
-	sort.Strings(out)
-	return out
+	sort.Strings(ids)
+	res.TemplateRepos = ids
+	res.TemplateOnlyRepos = extra
 }
 
 // deltaForOverride loads the curated parent's image/target info, renders a
