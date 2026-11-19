@@ -10,6 +10,7 @@ import type {
   EdgePack,
   NewUserInput,
   OEPInstallerInfo,
+  PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
@@ -107,6 +108,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Repositories list must not drop them to "optional" while a recompose is in
   // flight.
   const [lastTemplateRepos, setLastTemplateRepos] = useState<string[]>([])
+  const [lastTemplateOnlyRepos, setLastTemplateOnlyRepos] = useState<PackageRepo[]>([])
   // The Edge Pack for the selected OS, for the same check. Fetched here rather
   // than taken from the Packages step, which unmounts once the wizard moves on
   // and starts each visit with nothing loaded. Keyed by OS so a stale pack is
@@ -194,6 +196,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setLastRequirements([])
     setLastBasePackages(null)
     setLastTemplateRepos([])
+    setLastTemplateOnlyRepos([])
     setOverlay(false)
     setOEPInstallerToken('')
     setLastOEPInstaller(undefined)
@@ -284,6 +287,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           if (r.credentials) setLastRequirements(r.credentials)
           setLastBasePackages(r.basePackages ?? [])
           setLastTemplateRepos(r.templateRepos ?? [])
+          setLastTemplateOnlyRepos(r.templateOnlyRepos ?? [])
           setLastOEPInstaller(r.oepInstaller)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
@@ -533,6 +537,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             active={active}
             basePackages={composed?.basePackages ?? []}
             templateRepos={lastTemplateRepos}
+            templateOnlyRepos={lastTemplateOnlyRepos}
             overlay={overlay}
           />
         )}

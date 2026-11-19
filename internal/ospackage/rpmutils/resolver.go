@@ -243,6 +243,13 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // matchesPackageFilter checks if a package name matches any of the filter patterns.
 // Supports glob patterns, exact match, and version-specific prefix match
 // (e.g., "kernel-6.17.11" matches "kernel-6.17.11-1.emt3.x86_64.rpm").
+// MatchesPackageFilter reports whether a repository's allowPackages filter
+// admits pkgName, exactly as a build applies it, so other code (the web UI's
+// package search) can apply the same rule.
+func MatchesPackageFilter(pkgName string, filter []string) bool {
+	return matchesPackageFilter(pkgName, filter)
+}
+
 func matchesPackageFilter(pkgName string, filter []string) bool {
 	if len(filter) == 0 {
 		return true // No filter means include all

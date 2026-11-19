@@ -1753,15 +1753,26 @@ components:
         templateRepos:
           type: array
           description: |
-            Ids (as published by GET /package-repos) of the repositories the
-            matched template itself installs from: its `packageRepositories`
-            through the whole `extends` chain and the default config, before
-            this request's overrides. Present even when the request carries no
-            overrides, so a client can show these repositories as already in
-            use rather than as optional ones. A template repository the catalog
-            does not list is omitted.
+            Ids of the repositories the matched template itself installs
+            from: its `packageRepositories` through the whole `extends` chain
+            and the default config, before this request's overrides. Present
+            even when the request carries no overrides, so a client can show
+            these repositories as already in use rather than as optional ones.
+            A repository GET /package-repos lists has that id; one it doesn't
+            has the id of its `templateOnlyRepos` entry.
           items:
             type: string
+        templateOnlyRepos:
+          type: array
+          description: |
+            An entry for each of `templateRepos` that GET /package-repos
+            doesn't list, such as a vendor snapshot or a PPA only this
+            template uses. Its id (prefixed `template-`) is accepted by
+            GET /packages/search and /packages/search/stream like a catalog
+            id, so a client can browse and search it. GET /package-repos
+            never lists it.
+          items:
+            $ref: "#/components/schemas/PackageRepo"
         oepInstaller:
           $ref: "#/components/schemas/OEPInstallerInfo"
         summary:

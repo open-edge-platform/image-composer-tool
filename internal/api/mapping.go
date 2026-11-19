@@ -235,29 +235,34 @@ func fromManifest(m *service.Manifest) httpapi.Manifest {
 func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 	out := httpapi.PackageRepoList{Repos: make([]httpapi.PackageRepo, len(repos))}
 	for i, r := range repos {
-		priority := r.Priority
-		// Only whether the repo has curated packages is published, not which —
-		// the filtering stays server-side behind `curated=true`. Without the
-		// flag a client cannot tell "no curated picks defined" from "curated
-		// search returned nothing", so it would have to offer a toggle that
-		// yields an empty list.
-		hasCurated := len(r.CuratedPackages) > 0
-		// Likewise only whether a signing key is known, not the key URL. A
-		// client needs the flag to say plainly that enabling this repo means
-		// fetching its packages unverified; it has no use for the URL itself.
-		hasKey := r.HasSigningKey()
-		out.Repos[i] = httpapi.PackageRepo{
-			Id:                 r.ID,
-			DisplayName:        r.DisplayName,
-			Url:                r.URL,
-			Description:        optStr(r.Description),
-			EnabledByDefault:   r.EnabledByDefault,
-			Priority:           &priority,
-			HasCuratedPackages: &hasCurated,
-			HasSigningKey:      &hasKey,
-		}
+		out.Repos[i] = fromPackageRepo(r)
 	}
 	return out
+}
+
+// fromPackageRepo maps one catalog repo to the wire type.
+func fromPackageRepo(r service.PackageRepo) httpapi.PackageRepo {
+	priority := r.Priority
+	// Only whether the repo has curated packages is published, not which —
+	// the filtering stays server-side behind `curated=true`. Without the
+	// flag a client cannot tell "no curated picks defined" from "curated
+	// search returned nothing", so it would have to offer a toggle that
+	// yields an empty list.
+	hasCurated := len(r.CuratedPackages) > 0
+	// Likewise only whether a signing key is known, not the key URL. A
+	// client needs the flag to say plainly that enabling this repo means
+	// fetching its packages unverified; it has no use for the URL itself.
+	hasKey := r.HasSigningKey()
+	return httpapi.PackageRepo{
+		Id:                 r.ID,
+		DisplayName:        r.DisplayName,
+		Url:                r.URL,
+		Description:        optStr(r.Description),
+		EnabledByDefault:   r.EnabledByDefault,
+		Priority:           &priority,
+		HasCuratedPackages: &hasCurated,
+		HasSigningKey:      &hasKey,
+	}
 }
 
 // fromEdgePack maps the resolved Edge Pack to the wire type.
@@ -471,6 +476,13 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		out.BasePackages = &basePackages
 	}
 	out.TemplateRepos = optStrs(r.TemplateRepos)
+	if len(r.TemplateOnlyRepos) > 0 {
+		extra := make([]httpapi.PackageRepo, len(r.TemplateOnlyRepos))
+		for i, tr := range r.TemplateOnlyRepos {
+			extra[i] = fromPackageRepo(tr)
+		}
+		out.TemplateOnlyRepos = &extra
+	}
 	if len(r.Credentials) > 0 {
 		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
 		for _, c := range r.Credentials {

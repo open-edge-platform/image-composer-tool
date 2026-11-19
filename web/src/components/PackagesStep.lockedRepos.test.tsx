@@ -10,12 +10,14 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PackagesStep } from './PackagesStep'
 import { useStore } from '../store'
+import type { PackageRepo } from '../api/types'
 
 const mockApi = vi.hoisted(() => ({
   listPackageRepos: vi.fn(),
   getEdgePack: vi.fn(),
   searchPackages: vi.fn(),
-  searchStreamUrl: () => '/search',
+  lookupPackages: vi.fn(),
+  searchStreamUrl: vi.fn((_: { repos?: string[] }) => '/search'),
 }))
 vi.mock('../api/client', () => ({ api: mockApi }))
 
@@ -47,6 +49,8 @@ beforeEach(() => {
   })
   mockApi.getEdgePack.mockResolvedValue(null)
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
+  mockApi.lookupPackages.mockResolvedValue({ packages: [], unavailableRepos: [] })
+  mockApi.searchStreamUrl.mockClear()
 })
 
 afterEach(() => {
@@ -54,8 +58,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function addFromSearch(templateRepos: string[]) {
-  render(<PackagesStep os="ubuntu24" active basePackages={[]} templateRepos={templateRepos} />)
+async function addFromSearch(templateRepos: string[], templateOnlyRepos: PackageRepo[] = [], repo = 'ros2-jazzy') {
+  render(
+    <PackagesStep
+      os="ubuntu24"
+      active
+      basePackages={[]}
+      templateRepos={templateRepos}
+      templateOnlyRepos={templateOnlyRepos}
+    />,
+  )
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
   })
@@ -67,8 +79,8 @@ async function addFromSearch(templateRepos: string[]) {
   })
   act(() => {
     FakeEventSource.last!.emit('hits', {
-      repo: 'ros2-jazzy',
-      packages: [{ name: 'ros-jazzy-desktop', version: '1.0', repository: 'ros2-jazzy' }],
+      repo,
+      packages: [{ name: 'ros-jazzy-desktop', version: '1.0', repository: repo }],
     })
   })
   fireEvent.click(screen.getByRole('checkbox', { name: /ros-jazzy-desktop/ }))
@@ -84,5 +96,62 @@ describe('adding a search hit', () => {
   it('still enables a repository the template does not use', async () => {
     await addFromSearch([])
     expect(useStore.getState().enabledRepos).toEqual(['ros2-jazzy'])
+  })
+})
+
+// A repository only the matched template declares, which GET /package-repos
+// doesn't list (ComposeResponse.templateOnlyRepos).
+const snapshot: PackageRepo = {
+  id: 'template-0123456789ab',
+  displayName: 'af01p-png.devtools.intel.com …/resolute/20261023-0019 (resolute)',
+  url: 'https://af01p-png.devtools.intel.com/artifactory/hspe-edge-png-local/ubuntu/resolute/resolute/20261023-0019',
+  enabledByDefault: false,
+}
+
+describe('a repository only the template declares', () => {
+  it('is searched by id, and a hit from it does not enable it', async () => {
+    await addFromSearch([snapshot.id], [snapshot], snapshot.id)
+    expect(mockApi.searchStreamUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ repos: ['ubuntu-noble-base', 'ros2-jazzy', snapshot.id] }),
+    )
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'ros-jazzy-desktop', version: '', repo: snapshot.id }])
+    expect(useStore.getState().enabledRepos).toEqual([])
+  })
+
+  it('is still searched when the stream fails and the search falls back', async () => {
+    render(
+      <PackagesStep os="ubuntu24" active basePackages={[]} templateRepos={[snapshot.id]} templateOnlyRepos={[snapshot]} />,
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    fireEvent.change(screen.getByPlaceholderText('Search packages across all repositories…'), {
+      target: { value: 'ros' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    act(() => {
+      FakeEventSource.last!.emit('error', {})
+    })
+    expect(mockApi.searchPackages).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'ros', repos: ['ubuntu-noble-base', 'ros2-jazzy', snapshot.id] }),
+    )
+  })
+
+  it('is listed under Currently in template in the Repositories tab', async () => {
+    render(
+      <PackagesStep os="ubuntu24" active basePackages={[]} templateRepos={[snapshot.id]} templateOnlyRepos={[snapshot]} />,
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    fireEvent.click(screen.getByRole('tab', { name: /Repositories/ }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    const included = screen.getByRole('group', { name: 'Currently in template' })
+    const labels = Array.from(included.querySelectorAll('option')).map((o) => o.textContent)
+    expect(labels).toContain(snapshot.displayName)
   })
 })

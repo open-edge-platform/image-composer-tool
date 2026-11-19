@@ -110,7 +110,7 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 		offset = 0
 	}
 
-	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	repos := s.searchableRepos(osID, repoFilter)
 	lookups := s.planLookups(osID, repos)
 	results := runLookups(ctx, s.pkgindexCache, lookups)
 
@@ -148,7 +148,7 @@ func (s *Service) LookupPackages(ctx context.Context, osID string, names, repoFi
 		want[n] = true
 	}
 
-	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	repos := s.searchableRepos(osID, repoFilter)
 	lookups := s.planLookups(osID, repos)
 	results := runLookups(ctx, s.pkgindexCache, lookups)
 	// Narrowed to the wanted names before dedupAndFilter, which would
@@ -229,7 +229,7 @@ func (s *Service) SearchPackagesStream(ctx context.Context, osID, query string,
 		limit = maxSearchLimit
 	}
 
-	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	repos := s.searchableRepos(osID, repoFilter)
 	groups := groupByRepo(s.planLookups(osID, repos))
 
 	// One goroutine per repository, all drawing their index lookups from a
@@ -305,7 +305,7 @@ func (s *Service) lookupRepo(ctx context.Context, g repoGroup, sem chan struct{}
 					lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
 				return
 			}
-			results[i] = lookupResult{entries: entries, repoID: lk.repoID}
+			results[i] = lookupResult{entries: lk.allowed(entries), repoID: lk.repoID}
 		}(i, lk)
 	}
 	wg.Wait()
@@ -357,6 +357,28 @@ func filterReposByID(repos []PackageRepo, ids []string) []PackageRepo {
 type repoLookup struct {
 	repo   pkgindex.Repo
 	repoID string
+	// allow is the repository's allowPackages filter, applied to every
+	// index it reads. Empty means all.
+	allow []string
+}
+
+// allowed narrows a lookup's index entries to its repository's
+// allowPackages, by the rule a build applies to that kind of repository.
+func (lk repoLookup) allowed(entries []pkgindex.Entry) []pkgindex.Entry {
+	if len(lk.allow) == 0 {
+		return entries
+	}
+	match := debutils.MatchesPackageFilter
+	if lk.repo.Type == repoTypeRPM {
+		match = rpmutils.MatchesPackageFilter
+	}
+	kept := make([]pkgindex.Entry, 0, len(entries))
+	for _, e := range entries {
+		if match(e.Name, lk.allow) {
+			kept = append(kept, e)
+		}
+	}
+	return kept
 }
 
 // planLookups expands each repo's Index entries into individual pkgindex.Repo
@@ -403,6 +425,7 @@ func indexLookups(r PackageRepo, idx RepoIndex, repoType, gpgKeyPath string, osA
 					Component: comp, Arch: arch, GPGKeyPath: gpgKeyPath,
 				},
 				repoID: r.ID,
+				allow:  r.AllowPackages,
 			})
 		}
 	}
@@ -524,7 +547,7 @@ func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup
 				results[i] = lookupResult{repoID: lk.repoID, failed: !errors.Is(err, pkgindex.ErrNotFound)}
 				return nil
 			}
-			results[i] = lookupResult{entries: entries, repoID: lk.repoID}
+			results[i] = lookupResult{entries: lk.allowed(entries), repoID: lk.repoID}
 			return nil
 		})
 	}
