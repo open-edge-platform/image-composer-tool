@@ -136,6 +136,17 @@ failed or interrupted refresh cannot leave a partial `Release` behind. Builds
 still require network access to the package repositories; offline builds are not
 supported.
 
+**An unavailable repository server is waited for before the cache is used.**
+Before the refresh, ICT checks which release files a repository publishes
+(`InRelease`, or `Release` with `Release.gpg`) and where its package index is.
+If the server answers 429, 502, 503 or 504, or never answers, ICT repeats the
+check, up to 6 attempts in all, waiting 15 s and doubling up to 2 minutes; all
+checks on one server share those 5¾ minutes of waiting. If the server is still
+unavailable, ICT relies on what an earlier build left behind: the format it
+found, or the `Release`/`Release.gpg` it cached. Without either, the build fails
+with `repository server unavailable`, so a server that never recovers takes
+about 6 minutes to fail a build (up to about 10 if every attempt times out).
+
 Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
 execution.

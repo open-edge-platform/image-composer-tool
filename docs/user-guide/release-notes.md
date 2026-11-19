@@ -85,6 +85,32 @@
   hand and then run `sudo /usr/libexec/ict-provision-report done oep-installer`.
   Templates can show their own hint with the new `recoveryHint` script field.
 - **Fixed**: on Ubuntu 26.04, `sudo` failed for every user with `cannot open sudoers file /run/ict-oep-installer.d` on boots where the OEP Installer's first-boot script had not run yet, such as before it started and after it had succeeded. The image's sudoers file includes a directory in `/run`, which is empty after each boot, and sudo-rs treats a missing included directory as an error. A `tmpfiles.d` entry now creates the directory at every boot.
+- **Fixed**: a Debian or Ubuntu repository server that is briefly unavailable
+  no longer fails the build within seconds, and its outage is no longer
+  mistaken for a repository that does not publish `InRelease`.
+  - **Unavailable**: while ICT checks for a repository's `InRelease`,
+    `Release.gpg`, `Release` or package index files, the server answers 429,
+    502, 503 or 504, or never answers because the request times out or the
+    connection is refused, reset or closed. Launchpad's PPA snapshot host does
+    this for minutes at a time while it sheds load. A host name that does not
+    resolve still fails at once.
+  - **Retries**: ICT repeats such a check on the schedule package downloads
+    use: up to 6 attempts, waiting 15 s and doubling up to 2 minutes, and never
+    sooner than a `Retry-After` header asks. A server that asks for more than
+    2 minutes fails the check at once.
+  - **One budget per server**: all checks on one server share the schedule's
+    5¾ minutes of waiting, so a server that stays down delays the build once,
+    not once for every file checked.
+  - **Fallback**: ICT falls back to `Release`/`Release.gpg` when the server
+    reports `InRelease` missing. While the server stays unavailable, ICT relies
+    on what an earlier build left behind: the format it found, or the
+    `Release`/`Release.gpg` it cached. Without either, the build fails with
+    `repository server unavailable`.
+  - **Trade-off**: a repository server that never recovers now takes about 6
+    minutes to fail the build instead of seconds, or up to about 10 minutes if
+    every attempt times out after 30 s. Behind an HTTP proxy, that includes a
+    plain-HTTP repository whose host name does not resolve, which the proxy
+    answers with 504.
 - **Fixed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser pushed the **Back** and **Next** buttons below the bottom of the window on common laptop screens (1440×900, for example). The repository list, package list and **Selected** panel had fixed heights; they now follow the window height, so the buttons stay in view. Each list keeps a minimum height, so on a very short window the page scrolls rather than squeezing the lists below a few rows, and on a tall window the lists grow somewhat taller than before.
 - **Changed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser picks the repository to browse from a **Choose repository** dropdown instead of a list down the left side, so the package list now spans the full width. Browsing a repository never puts it in use for the build: an optional repository comes into use when a package or version is picked from it, and is released when the last package from it is removed. The dropdown groups repositories under *Currently in template* and *Available (not in template)* and marks each available repository in use with ✓, and an *N of M repositories in use* count sits alongside. Package rows are more compact, with the version chips beside the package name rather than under it, so about five packages fit on a 1440×900 screen without scrolling.
 - **Changed**: the Web UI says the same thing wherever a compose is held back because another build is running: **additional concurrent builds are currently restricted**. This replaces *a build is already in progress (&lt;build id&gt;); only one compose runs at a time*, which the server returned and the credentials dialog and the Compose Image tab's retry banner showed, and *A compose is already in progress. Switch to the Compose Image tab to monitor it.* on the Basic and Advanced tabs. The server still answers such a start with `409 BUILD_IN_PROGRESS`; it no longer returns the id of the running build, which it logs instead.

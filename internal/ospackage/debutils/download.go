@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	urlpkg "net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -622,8 +623,12 @@ func repoMetadataBuildPath(id, baseURL, codename, arch, component, packageListUR
 //
 // A single probe's error (e.g. a transient 5xx with no cached verdict) does
 // not abort resolution early: the other format may still be reachable, so
-// every remaining probe is still attempted, and an error is only returned
-// once none of them yielded a usable or cached verdict.
+// every remaining probe is still attempted. Only a confirmed absence (a 4xx)
+// falls back to the classic URLs on its own. If none of the probes yielded a
+// usable or cached verdict because the server stayed unavailable, the classic
+// URLs come back with an error wrapping errRepoUnavailable, and
+// BuildRepoConfigs uses them only where an earlier build cached their release
+// files.
 //
 // A releaseSignURL of inReleaseSentinel signals ParseRepositoryMetadata to
 // treat releaseFileURL as a combined InRelease file rather than a
@@ -671,17 +676,25 @@ func resolveReleaseURLs(baseURL, codename, releaseNm string) (releaseFileURL, re
 	}
 
 	if len(probeErrs) > 0 {
+		probeErr := errors.Join(probeErrs...)
+		// A server still unavailable after probeURLExistence's retries has not
+		// said which files exist, and falling back would guess classic
+		// Release/Release.gpg files the repository may not publish. Report the
+		// outage, with the classic URLs for a caller that has them cached.
+		if errors.Is(probeErr, errRepoUnavailable) {
+			return classicRelease, classicSign, fmt.Errorf("probing release files under %s/dists/%s: %w", baseURL, codename, probeErr)
+		}
 		// Don't abort here: a fresh/offline probe can fail for reasons
-		// probeURL doesn't recognize as "no response" (e.g. "network is
-		// unreachable" isn't in its offline-error allowlist, so it surfaces
-		// as a real error with no cached verdict to fall back on instead of
-		// status 0) even when a valid classic Release/package index cache
-		// already exists on disk from before this format-detection code
-		// existed. Log and fall through to the classic URLs so
-		// ParseRepositoryMetadata's own offline cache fallback still gets a
-		// chance; a genuinely broken/typo'd repo surfaces its error there
-		// (or at actual fetch time) instead.
-		logger.Logger().Warnf("could not confirm repo format for %s/dists/%s via probing: %v; falling back to classic Release/Release.gpg URLs", baseURL, codename, errors.Join(probeErrs...))
+		// probeURL recognizes neither as an unknown host nor as a server that
+		// did not answer (e.g. "network is unreachable"), so it surfaces as a
+		// real error with no cached verdict to fall back on, even when a
+		// valid classic Release/package index cache already exists on disk
+		// from before this format-detection code existed. Log and fall
+		// through to the classic URLs so ParseRepositoryMetadata's own
+		// offline cache fallback still gets a chance; a genuinely
+		// broken/typo'd repo surfaces its error there (or at actual fetch
+		// time) instead.
+		logger.Logger().Warnf("could not confirm repo format for %s/dists/%s via probing: %v; falling back to classic Release/Release.gpg URLs", baseURL, codename, probeErr)
 	}
 
 	// Neither found; keep the classic URLs so a genuinely broken/typo'd
@@ -690,13 +703,14 @@ func resolveReleaseURLs(baseURL, codename, releaseNm string) (releaseFileURL, re
 }
 
 // probeExistenceWithOfflineFallback probes url fresh so a format migration is
-// picked up whenever there's real connectivity (any 2xx/4xx response always
-// overrides and refreshes the cached verdict), but falls back to the last
-// cached verdict when the probe can't produce an authoritative answer: no
-// response at all (status 0, e.g. offline), or a server error (5xx, which
-// probeURLExistence reports as a non-nil err) — a transient outage should not
-// misreport "not found" or abort a build that a cached verdict could still
-// serve.
+// picked up whenever there's real connectivity (a 2xx, or a 4xx other than
+// 429, always overrides and refreshes the cached verdict), but falls back to
+// the last cached verdict when the probe can't produce an authoritative
+// answer: a host name that does not resolve (status 0, e.g. offline), or an
+// error, which probeURLExistence reports for a server error (5xx) and for a
+// server that stayed unavailable or never answered through its retries — a
+// transient outage should not misreport "not found" or abort a build that a
+// cached verdict could still serve.
 func probeExistenceWithOfflineFallback(url string) (bool, error) {
 	found, status, err := probeURLExistence(url)
 	if status == 0 || err != nil {
@@ -726,18 +740,38 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 			component = "main"
 		}
 		releaseFileURL, releaseSignURL, err := resolveReleaseURLs(baseURL, codename, releaseNm)
+		// With the server unavailable, the classic release files are only a
+		// guess at what the repository publishes. Metadata an earlier build
+		// cached for them still lets ParseRepositoryMetadata build from its
+		// cache, as before, so the outage fails only an entry without it.
+		var outageErr error
 		if err != nil {
-			return nil, fmt.Errorf("resolving release files: %w, baseURL %s codename %s", err, baseURL, codename)
+			err = fmt.Errorf("resolving release files: %w, baseURL %s codename %s", err, baseURL, codename)
+			if !errors.Is(err, errRepoUnavailable) {
+				return nil, err
+			}
+			outageErr = err
 		}
 		for _, componentName := range slice.SplitBySpace(component) {
 			for _, localArch := range strings.Split(archs, ",") {
 				package_list_url, err := GetPackagesNames(baseURL, codename, localArch, componentName)
 				if err != nil {
+					// Without a package list there is no cached metadata either.
+					if outageErr != nil {
+						return nil, outageErr
+					}
 					return nil, fmt.Errorf("getting package metadata name: %w, baseURL %s codename %s localArch %s componentName %s\n", err, baseURL, codename, localArch, componentName)
 				}
 				if package_list_url == "" {
 					log.Debugf("no package metadata found: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 					continue // No valid package list found for this arch/component
+				}
+				buildPath := repoMetadataBuildPath(id, baseURL, codename, localArch, componentName, package_list_url)
+				if outageErr != nil {
+					if !releaseMetadataCached(buildPath, releaseFileURL, releaseSignURL, pkey) {
+						return nil, outageErr
+					}
+					log.Warnf("%v; continuing with the release files cached in %s", outageErr, buildPath)
 				}
 				log.Debugf("found package metadata: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 				repo := RepoConfig{
@@ -750,7 +784,7 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 					RepoGPGCheck:  true,
 					Enabled:       true,
 					PbGPGKey:      pkey,
-					BuildPath:     repoMetadataBuildPath(id, baseURL, codename, localArch, componentName, package_list_url),
+					BuildPath:     buildPath,
 					Arch:          localArch,
 					Priority:      repoItem.Priority,
 					AllowPackages: repoItem.AllowPackages,
@@ -766,6 +800,18 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 	}
 
 	return userRepo, nil
+}
+
+// releaseMetadataCached reports whether buildPath holds every release file
+// ParseRepositoryMetadata falls back to when it cannot refresh them.
+func releaseMetadataCached(buildPath, releaseFile, releaseSign, pbGPGKey string) bool {
+	local, _ := releaseMetadataFiles(buildPath, releaseFile, releaseSign, pbGPGKey)
+	for _, f := range local {
+		if _, err := os.Stat(f); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
@@ -928,9 +974,9 @@ func checkFileExists(url string) (bool, error) {
 	}
 
 	// Only record a verdict the server actually gave. A status of 0 means the
-	// probe never got a response (a network error mapped to absence above), and
-	// persisting that would pin a reachable repository to "missing" for every
-	// later run off the on-disk cache.
+	// probe never got a response (a host name that did not resolve, mapped to
+	// absence by probeURL), and persisting that would pin a reachable
+	// repository to "missing" for every later run off the on-disk cache.
 	if status != 0 {
 		saveURLExistenceToCache(url, found)
 	}
@@ -949,8 +995,153 @@ func checkFileExists(url string) (bool, error) {
 // file, a repository's Release.gpg-vs-InRelease publication format can
 // change between builds, so a stale cached verdict must never be trusted as
 // a shortcut, only as a last resort.
+//
+// A 429/502/503/504 says the server (or a gateway in front of it) cannot
+// answer right now, not that the file is missing. So does no answer at all: a
+// host shedding load may stall, refuse, reset or close a connection instead of
+// answering 503. Either way the probe is repeated after a wait, and never
+// sooner than a Retry-After asks: Launchpad's PPA snapshot host sheds load for
+// minutes at a time. If every attempt fails that way, or the server asks for a
+// longer wait than the schedule allows, the error wraps errRepoUnavailable so
+// callers never read the outage as an absent file. A host name that does not
+// resolve is still reported absent at once.
+//
+// The waiting is budgeted per host, not per probe: all probes of a host share
+// what one full run of the schedule waits, so a server that stays down stalls
+// the build once instead of once for every file probed on it.
 func probeURLExistence(url string) (bool, int, error) {
-	found, status, err := probeURL(url, http.MethodHead)
+	return probeURLExistenceWith(url, probeRetrySchedule)
+}
+
+// probeURLExistenceWith is probeURLExistence with the retry schedule passed in.
+func probeURLExistenceWith(url string, sched probeSchedule) (bool, int, error) {
+	host, budget := probeHost(url), sched.budget()
+	wait := sched.backoff
+	for attempt := 1; ; attempt++ {
+		answer := probeURLExistenceOnce(url)
+		if !answer.unavailable() {
+			return answer.found, answer.status, answer.err
+		}
+		cause := answer.err
+		if cause == nil {
+			// probeURL reports a 429 like any other 4xx, with no error of its
+			// own, so name the URL and status here.
+			cause = fmt.Errorf("checking file at %s: status %d %s", url, answer.status, http.StatusText(answer.status))
+		}
+		if attempt == sched.attempts {
+			return false, answer.status, fmt.Errorf("%w after %d attempts: %w", errRepoUnavailable, attempt, cause)
+		}
+		// Retrying sooner than the server asked would only be refused again.
+		if answer.retryAfter > sched.maxBackoff {
+			return false, answer.status, fmt.Errorf("%w: %w (it asked to be retried after %s, longer than the %s a probe waits)",
+				errRepoUnavailable, cause, answer.retryAfter, sched.maxBackoff)
+		}
+		pause := max(wait, answer.retryAfter)
+		if waited, ok := reserveProbeWait(host, pause, budget); !ok {
+			return false, answer.status, fmt.Errorf("%w after %s of retries for %s: %w", errRepoUnavailable, waited, host, cause)
+		}
+		logger.Logger().Warnf("%v (attempt %d/%d); retrying in %s", cause, attempt, sched.attempts, pause)
+		timer := time.NewTimer(pause)
+		select {
+		case <-runctx.Context().Done():
+			timer.Stop()
+			return false, answer.status, fmt.Errorf("probing %s cancelled during retry backoff: %w", url, runctx.Context().Err())
+		case <-timer.C:
+		}
+		wait = min(wait*2, sched.maxBackoff)
+	}
+}
+
+// errRepoUnavailable marks a probe the server kept answering as unavailable,
+// or not at all, so it gave no verdict on the file.
+var errRepoUnavailable = errors.New("repository server unavailable")
+
+// errNoResponse marks a probe that got no HTTP response: the request timed
+// out, or the connection was refused, reset or closed first.
+var errNoResponse = errors.New("no response")
+
+// probeSchedule is how a probe the server answers as unavailable is retried:
+// up to attempts probes in all, waiting backoff before the first retry and
+// doubling the wait up to maxBackoff.
+type probeSchedule struct {
+	attempts            int
+	backoff, maxBackoff time.Duration
+}
+
+// probeRetrySchedule matches the package-download schedule in pkgfetcher: six
+// attempts, waiting 15 s and doubling up to 2 minutes. TestMain shortens it.
+var probeRetrySchedule = probeSchedule{attempts: 6, backoff: 15 * time.Second, maxBackoff: 2 * time.Minute}
+
+// budget is how long one full run of the schedule waits: 5m45s for
+// probeRetrySchedule.
+func (s probeSchedule) budget() time.Duration {
+	var total time.Duration
+	for i, wait := 1, s.backoff; i < s.attempts; i, wait = i+1, min(wait*2, s.maxBackoff) {
+		total += wait
+	}
+	return total
+}
+
+// probeWaited is how long probes have waited so far, per host, for a server
+// answering unavailable to come back.
+var (
+	probeWaitedMu sync.Mutex
+	probeWaited   = map[string]time.Duration{}
+)
+
+// reserveProbeWait books a wait of d against host's budget. It returns how long
+// probes of host have waited so far, and false, booking nothing, when d does
+// not fit in what is left.
+func reserveProbeWait(host string, d, budget time.Duration) (time.Duration, bool) {
+	probeWaitedMu.Lock()
+	defer probeWaitedMu.Unlock()
+	waited := probeWaited[host]
+	if waited+d > budget {
+		return waited, false
+	}
+	probeWaited[host] = waited + d
+	return waited, true
+}
+
+// probeHost is the host (with any port) whose budget probes of rawURL draw on.
+func probeHost(rawURL string) string {
+	if u, err := urlpkg.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return rawURL
+}
+
+// probeUnavailableStatus reports whether status means the server is
+// temporarily unable to answer rather than that the file is absent.
+func probeUnavailableStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// probeAnswer is what one existence check of a URL learned.
+type probeAnswer struct {
+	found      bool
+	status     int           // the HTTP status; 0 when no response arrived
+	retryAfter time.Duration // the server's Retry-After on a 429/502/503/504
+	err        error
+}
+
+// unavailable reports whether the server, or a gateway in front of it, could
+// not serve the request right now, so the answer is no verdict on the file.
+func (a probeAnswer) unavailable() bool {
+	return probeUnavailableStatus(a.status) || errors.Is(a.err, errNoResponse)
+}
+
+// probeURLExistenceOnce is a single existence check: HEAD, confirmed by a
+// ranged GET when the server rejects HEAD.
+func probeURLExistenceOnce(url string) probeAnswer {
+	answer := probeURL(url, http.MethodHead)
 
 	// A HEAD rejection is not proof of absence. Some CDN-backed APT mirrors
 	// answer HEAD for a perfectly downloadable object with a client error while
@@ -964,12 +1155,12 @@ func probeURLExistence(url string) (bool, int, error) {
 	// This is checked before err is propagated because one of the statuses that
 	// means "HEAD unsupported" (501) falls in the range probeURL reports as a
 	// server error.
-	if !found && headRejectedStatus(status) {
+	if !answer.found && headRejectedStatus(answer.status) {
 		log := logger.Logger()
-		log.Debugf("HEAD %s returned %d; retrying with a ranged GET", url, status)
-		found, status, err = probeURL(url, http.MethodGet)
+		log.Debugf("HEAD %s returned %d; retrying with a ranged GET", url, answer.status)
+		answer = probeURL(url, http.MethodGet)
 	}
-	return found, status, err
+	return answer
 }
 
 // headRejectedStatus reports whether a status means "this server would not
@@ -986,11 +1177,12 @@ func headRejectedStatus(status int) bool {
 	return false
 }
 
-// probeURL issues a single existence check for url. It returns whether the file
-// is present and the HTTP status observed (0 when no response was obtained, e.g.
-// a network error treated as absence). A GET probe asks for only the first byte
-// so a hit does not pull a multi-megabyte index down.
-func probeURL(url, method string) (bool, int, error) {
+// probeURL issues a single existence check for url. The answer says whether the
+// file is present and the HTTP status observed (0 when no response was
+// obtained), with the server's Retry-After on a 429/502/503/504. A GET probe
+// asks for only the first byte so a hit does not pull a multi-megabyte index
+// down.
+func probeURL(url, method string) probeAnswer {
 	// Create a context with timeout for the request, parented on the ambient
 	// run-scoped ctx so a SIGINT/SIGTERM during a large fan-out of HEAD checks
 	// (overlay/create modes) cancels the in-flight requests within the 30s
@@ -1003,7 +1195,7 @@ func probeURL(url, method string) (bool, int, error) {
 	// Create request with context
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
-		return false, 0, fmt.Errorf("creating request for %s: %w", url, err)
+		return probeAnswer{err: fmt.Errorf("creating request for %s: %w", url, err)}
 	}
 
 	// Set additional headers to encourage faster responses
@@ -1016,16 +1208,7 @@ func probeURL(url, method string) (bool, int, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// Handle common network errors as "not found" to avoid failing the entire operation
-		errStr := strings.ToLower(err.Error())
-		if strings.Contains(errStr, "eof") ||
-			strings.Contains(errStr, "timeout") ||
-			strings.Contains(errStr, "connection refused") ||
-			strings.Contains(errStr, "no such host") ||
-			strings.Contains(errStr, "context deadline exceeded") {
-			return false, 0, nil // Treat network issues as "file not found"
-		}
-		return false, 0, fmt.Errorf("network error checking %s: %w", url, err)
+		return probeNetworkError(url, err)
 	}
 	defer func() {
 		// Properly drain and close the response body to avoid connection leaks
@@ -1035,21 +1218,45 @@ func probeURL(url, method string) (bool, int, error) {
 		}
 	}()
 
+	answer := probeAnswer{status: resp.StatusCode}
+	if probeUnavailableStatus(resp.StatusCode) {
+		answer.retryAfter = pkgfetcher.ParseRetryAfter(resp.Header.Get("Retry-After"))
+	}
 	switch {
 	case resp.StatusCode == http.StatusOK, resp.StatusCode == http.StatusPartialContent:
 		// File exists, all good. A ranged GET answers 206; a server that ignores
 		// the Range header answers 200.
-		return true, resp.StatusCode, nil
+		answer.found = true
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		// Client errors (404, 403, etc.) - treat as file not found
-		return false, resp.StatusCode, nil
 	case resp.StatusCode >= 500:
 		// Server errors - treat as temporary issue, file might exist
-		return false, resp.StatusCode, fmt.Errorf("server error checking file at %s: status %s", url, resp.Status)
+		answer.err = fmt.Errorf("server error checking file at %s: status %s", url, resp.Status)
 	default:
 		// Unexpected status codes
-		return false, resp.StatusCode, fmt.Errorf("unexpected response checking file at %s: status %s", url, resp.Status)
+		answer.err = fmt.Errorf("unexpected response checking file at %s: status %s", url, resp.Status)
 	}
+	return answer
+}
+
+// probeNetworkError is the answer for a probe whose request failed before any
+// HTTP response arrived.
+func probeNetworkError(url string, err error) probeAnswer {
+	errStr := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(errStr, "no such host"):
+		// A host name that does not resolve is a wrong URL, or no DNS at all:
+		// report the file absent at once, so a typo'd repository fails fast.
+		return probeAnswer{}
+	case strings.Contains(errStr, "eof"),
+		strings.Contains(errStr, "timeout"),
+		strings.Contains(errStr, "connection refused"),
+		strings.Contains(errStr, "connection reset"),
+		strings.Contains(errStr, "context deadline exceeded"):
+		// The server never answered: retried like a 503, not read as absence.
+		return probeAnswer{err: fmt.Errorf("%w from %s: %w", errNoResponse, url, err)}
+	}
+	return probeAnswer{err: fmt.Errorf("network error checking %s: %w", url, err)}
 }
 
 // Validate verifies the downloaded files
