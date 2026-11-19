@@ -104,6 +104,10 @@ type PackageRepo struct {
 	// enabling it fetches packages unverified. Kept out of the wire type like
 	// the fields above; only the derived hasSigningKey flag is published.
 	PKey string `json:"pkey,omitempty"`
+	// AllowPackages restricts which of the repository's packages a build may
+	// take from it, the template's packageRepositories allowPackages: a search
+	// shows only those. Empty means all. Kept out of the wire type like Index.
+	AllowPackages []string `json:"allowPackages,omitempty"`
 }
 
 // HasSigningKey reports whether this repository's packages are ever fetched

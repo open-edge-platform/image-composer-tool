@@ -340,6 +340,17 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 
 	log.Infof("Generating apt preferences files for %d repositories", len(t.PackageRepositories))
 
+	// Several repositories can map to one file name (same suite and host, no
+	// IDs), and a suffixed name can equal another repository's own name or ID.
+	// Reserve every name up front, then give a repeat the first free "-N", so no
+	// file replaces another.
+	reservedNames := map[string]bool{}
+	for _, repo := range t.PackageRepositories {
+		if !repo.hasOwnFiles() && extractOriginFromURL(repo.URL) != "" {
+			reservedNames[generatePreferencesFilename(repo)] = true
+		}
+	}
+	takenNames := map[string]bool{}
 	for _, repo := range t.PackageRepositories {
 		if repo.hasOwnFiles() {
 			if !t.repoMayUpgrade(repo) {
@@ -367,6 +378,19 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 		if !t.repoMayUpgrade(repo) && (repo.Priority >= NoUpgradePinPriority || repo.Priority == 0) {
 			preferencesContent = generateNoUpgradePreferencesContent(origin)
 		}
+		// allowPackages limits the repository at build time, so limit its pin the
+		// same way. Otherwise the pin covers every package the repository
+		// publishes, and a later apt run can replace or downgrade packages from
+		// the Ubuntu archive. Only the listed packages get the repository's
+		// priority; the rest of the repository stays at apt's default. There is
+		// deliberately no "block everything else" stanza: apt pins match the host
+		// only, and an allowlisted repository often shares its host with the OS
+		// archive (a backports suite), so a host-wide block would stop ordinary
+		// updates. When the repository may not upgrade, the no-upgrade pin above
+		// stays as it is: it already keeps the whole repository from upgrading.
+		if len(repo.AllowPackages) > 0 && t.repoMayUpgrade(repo) && repo.Priority >= 0 {
+			preferencesContent = restrictPreferencesToPackages(preferencesContent, repo.AllowPackages)
+		}
 
 		// Create temporary preferences file
 		tempFile, err := createTempAptPreferencesFile(repo, preferencesContent)
@@ -376,6 +400,16 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 
 		// Determine filename for preferences
 		filename := generatePreferencesFilename(repo)
+		if takenNames[filename] {
+			base := filename
+			for n := 2; ; n++ {
+				filename = fmt.Sprintf("%s-%d", base, n)
+				if !takenNames[filename] && !reservedNames[filename] {
+					break
+				}
+			}
+		}
+		takenNames[filename] = true
 
 		// Add to additionalFiles
 		preferencesFile := AdditionalFileInfo{
@@ -392,6 +426,28 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 	}
 
 	return nil
+}
+
+// restrictPreferencesToPackages narrows a "Package: *" preferences stanza to
+// the listed packages.
+func restrictPreferencesToPackages(content string, packages []string) string {
+	return strings.Replace(content, "Package: *\n", "Package: "+strings.Join(allowPackagePinPatterns(packages), " ")+"\n", 1)
+}
+
+// allowPackagePinPatterns turns allowPackages entries into apt pin patterns
+// that match the same packages the build-time filter accepts. That filter
+// takes a literal entry as a name prefix ("curl" also allows "curl-dev"), so a
+// literal becomes "name*"; entries that are already globs are kept as given.
+func allowPackagePinPatterns(packages []string) []string {
+	patterns := make([]string, 0, len(packages))
+	for _, name := range packages {
+		if strings.ContainsAny(name, "*?[]") {
+			patterns = append(patterns, name)
+		} else {
+			patterns = append(patterns, name+"*")
+		}
+	}
+	return patterns
 }
 
 // extractOriginFromURL extracts the host (without port or credentials) that APT

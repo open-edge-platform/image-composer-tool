@@ -39,6 +39,13 @@ func isGlobPattern(pattern string) bool {
 	return strings.ContainsAny(pattern, "*?[]")
 }
 
+// MatchesPackageFilter reports whether a repository's allowPackages filter
+// admits pkgName, exactly as a build applies it, so other code (the web UI's
+// package search) can apply the same rule.
+func MatchesPackageFilter(pkgName string, filter []string) bool {
+	return matchesPackageFilter(pkgName, filter)
+}
+
 func matchesPackageFilter(pkgName string, filter []string) bool {
 	if len(filter) == 0 {
 		return true
@@ -136,7 +143,7 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // v6: the cache now records the package filter (allowPackages) it was parsed
 // with; a v5 cache has no such record, so it could be reused under a different
 // filter and return the wrong set of packages.
-const parsedPackageCacheVersion = 6
+const parsedPackageCacheVersion = 7
 
 // inReleaseSentinel is passed as releaseSign to ParseRepositoryMetadata to
 // mean "releaseFile is a combined InRelease file, not a detached signature
@@ -753,6 +760,8 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 			pkg.Type = "deb"
 		case "Version":
 			pkg.Version = val
+		case "Multi-Arch":
+			pkg.MultiArch = val
 		case "Pre-Depends":
 			// Split dependencies by comma and clean each dependency. Pre-Depends is
 			// stored in RequiresVer too (like Depends) so the OR-alternative selection

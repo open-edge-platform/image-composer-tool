@@ -1103,6 +1103,7 @@ func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	stanza := "Package: libqt6core6t64\nVersion: 6.4.2+dfsg-21.1build5\nArchitecture: amd64\n" +
+		"Multi-Arch: foreign\n" +
 		"Provides: qt6-base-abi (= 6.4.2)\n" +
 		"Filename: pool/universe/q/qt6-base/libqt6core6t64_6.4.2+dfsg-21.1build5_amd64.deb\n\n"
 
@@ -1136,6 +1137,9 @@ func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
 		t.Fatalf("expected exactly one package, got %d: %+v", len(pkgs), pkgs)
 	}
 	pkg := pkgs[0]
+	if pkg.MultiArch != "foreign" {
+		t.Errorf("MultiArch = %q, want foreign", pkg.MultiArch)
+	}
 	if len(pkg.Provides) != 1 || pkg.Provides[0] != "qt6-base-abi" {
 		t.Errorf("Provides = %v, want [qt6-base-abi]", pkg.Provides)
 	}
