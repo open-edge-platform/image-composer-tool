@@ -33,6 +33,9 @@ services:
         - HTTP_PROXY
         - HTTPS_PROXY
         - NO_PROXY
+      # Offer the Advanced tab's Author mode, which edits a whole template and
+      # saves it to your machine. Off by default.
+      # - ICT_WEBUI_AUTHORING=true
     # `serve` runs the web UI and the API behind it. Inside the container it
     # must listen on every interface (0.0.0.0) for Docker's port forwarding to
     # reach it; the ports entry below still limits it to the host's loopback.

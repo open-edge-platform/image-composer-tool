@@ -23,6 +23,12 @@ func (s *Server) GetManifest(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, fromManifest(s.svc.Manifest()))
 }
 
+// GetSession handles GET /session.
+func (s *Server) GetSession(w http.ResponseWriter, _ *http.Request) {
+	c := s.svc.Session()
+	writeJSON(w, http.StatusOK, httpapi.Session{Capabilities: httpapi.Capabilities{Authoring: c.Authoring}})
+}
+
 // ComposeTemplate handles POST /templates/compose.
 func (s *Server) ComposeTemplate(w http.ResponseWriter, r *http.Request) {
 	var req httpapi.ComposeRequest

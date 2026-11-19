@@ -14,6 +14,11 @@
   bypass dependency integrity, protected boot packages, or removal policy.
   Unpinned packages and dependencies are not automatically selected for
   downgrade; RPM overlay builds are not supported end-to-end.
+- The Web UI's Advanced tab can offer an **Author** mode next to **Customize**.
+  It is off by default; turn it on with `image-composer-tool serve
+  --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose. The UI
+  asks the new `GET /api/v1/session` endpoint whether it is allowed. When it
+  is, Advanced starts in Author mode. Author mode is a placeholder for now; opening, editing and saving whole templates follow.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time

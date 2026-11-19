@@ -772,6 +772,7 @@ image-composer-tool serve [flags]
 | `--manifest STRING` | Path to a manifest YAML to read from disk instead of the copy embedded at build time. |
 | `--package-repos STRING` | Path to a package-repository catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's repository picker. |
 | `--edge-pack STRING` | Path to an Edge Pack catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's Edge Pack picker. |
+| `--enable-authoring` | Offer the Advanced tab's Author mode, which edits a whole template and saves it to the user's machine. Off by default. Setting `ICT_WEBUI_AUTHORING=true` turns it on too. |
 
 **Description:**
 
