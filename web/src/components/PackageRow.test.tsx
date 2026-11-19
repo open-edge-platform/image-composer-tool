@@ -71,7 +71,10 @@ describe('PackageRow — beside the name', () => {
     renderRow({ versions: base('1:6.19-1'), selection: { name: 'pkg', version: '1:6.19-1', repo: 'base' } })
     expect(tag()).toBe('Pinned')
     expect(headerChip()?.textContent).toBe('1:6.19-1')
-    expect(headerChip()?.className).not.toContain('border-dashed')
+    // Bold text beside the name, not a chip.
+    expect(headerChip()?.tagName).toBe('SPAN')
+    expect(headerChip()?.className).toContain('font-bold')
+    expect(headerChip()?.className).not.toContain('rounded-full')
     expect(via()).toBeUndefined()
   })
 
@@ -91,7 +94,7 @@ describe('PackageRow — beside the name', () => {
     expect(onBrowse).toHaveBeenCalled()
   })
 
-  it('tags an unpinned package, with what it resolves to dashed, here and among the chips', () => {
+  it('tags an unpinned package, with what it resolves to beside it and dashed among the chips', () => {
     renderRow({
       versions: base('1:34.0.5-12build1', '1:34.0.5-11'),
       locked: true,
@@ -100,7 +103,7 @@ describe('PackageRow — beside the name', () => {
     })
     expect(tag()).toBe('Unpinned')
     expect(headerChip()?.textContent).toBe('1:34.0.5-12build1')
-    expect(headerChip()?.className).toContain('border-dashed')
+    expect(headerChip()?.className).not.toContain('rounded-full')
     expect(chip('1:34.0.5-12build1').className).toContain('border-dashed')
     expect(chip('1:34.0.5-11').className).not.toContain('border-dashed')
     expect(pressed()).toEqual([])
