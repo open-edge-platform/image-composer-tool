@@ -97,6 +97,8 @@ type CompositionScript struct {
 	EnvNames    []string `json:"envNames,omitempty"`
 	TimeoutSec  int      `json:"timeoutSec,omitempty"`
 	RebootAfter bool     `json:"rebootAfter,omitempty"`
+	// StopOnFailure is recorded because it changes what a failure does at boot.
+	StopOnFailure bool `json:"stopOnFailure,omitempty"`
 }
 
 type CompositionProvisioner struct {
@@ -224,7 +226,7 @@ func compositionScripts(scripts []config.ProvisioningScript) []CompositionScript
 		out = append(out, CompositionScript{
 			Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order,
 			Args: s.Args, EnvNames: slices.Sorted(maps.Keys(s.Env)),
-			TimeoutSec: s.TimeoutSec, RebootAfter: s.RebootAfter,
+			TimeoutSec: s.TimeoutSec, RebootAfter: s.RebootAfter, StopOnFailure: s.StopOnFailure,
 		})
 	}
 	return out

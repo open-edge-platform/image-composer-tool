@@ -13,6 +13,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageconvert"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageprovision"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
@@ -118,8 +119,10 @@ var (
 	builderValidateUsersFn = ValidateOverlayUsers
 	builderResolveFn       = ResolveOverlayPackages
 	builderPreflightFn     = Preflight
+	builderPrintPlanFn     = PrintPackagePlan
 	builderInstallFn       = InstallOverlayPackages
 	builderCreateUsersFn   = RunOverlayUsers
+	builderProxyFn         = imageprovision.WriteProxyConfig
 	builderConfigureFn     = RunOverlayConfigurations
 	builderRegenBootFn     = RegenerateBoot
 	builderGrubRegenFn     = RegenerateGrub
@@ -238,6 +241,7 @@ func (b *Builder) Preprocess() (err error) {
 		return err
 	}
 
+	builderPrintPlanFn(ComputePackageStats(b.baseline, b.plan, b.report))
 	b.preprocessed = true
 	return nil
 }
@@ -315,6 +319,17 @@ func (b *Builder) Build() error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if !b.template.SystemConfig.Proxy.IsEmpty() {
+		if err := b.timeStage("Proxy", func() error {
+			if perr := builderProxyFn(b.layout.RootMount, b.template.SystemConfig.Proxy); perr != nil {
+				return fmt.Errorf("overlay build: proxy configuration failed: %w", perr)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 
 	// Copy the pre-initramfs additionalFiles BEFORE boot regeneration, so files the

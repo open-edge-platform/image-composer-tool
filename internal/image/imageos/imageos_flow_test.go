@@ -245,6 +245,13 @@ func TestInstallImagePkgsDebSpecialPackages(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(apparmorParser), 0755); err != nil {
 		t.Fatalf("mkdir sbin: %v", err)
 	}
+	// The real uname is in place, so a failed dpkg-divert leaves the image intact.
+	if err := os.MkdirAll(filepath.Join(installRoot, "usr", "bin"), 0755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "usr", "bin", "uname"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("write uname: %v", err)
+	}
 	if err := os.WriteFile(apparmorParser, []byte("#!/bin/sh\n"), 0755); err != nil {
 		t.Fatalf("write apparmor_parser: %v", err)
 	}
