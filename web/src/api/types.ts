@@ -12,6 +12,12 @@ export interface Option {
   displayName: string
 }
 
+// A use case. skuLabel renames the SKU dropdown for a use case whose second
+// choice is something else, such as a kernel version.
+export interface Vertical extends Option {
+  skuLabel?: string
+}
+
 export interface Target {
   id: string
   displayName: string
@@ -34,7 +40,7 @@ export interface Combination {
 
 export interface Manifest {
   combinations: Combination[]
-  verticals: Option[]
+  verticals: Vertical[]
   skus: Option[]
   platforms: Option[]
   targets: Target[]

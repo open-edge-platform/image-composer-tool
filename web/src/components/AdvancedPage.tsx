@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage } from '../store'
+import { useStore, cascadingOptions, encodePackage, skuLabelFor } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -135,7 +135,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const missingTarget = opts
     ? ([
         ['Use Case', !selection.vertical],
-        ['SKU', opts.skus.length > 0 && !selection.sku],
+        [skuLabelFor(manifest, selection.vertical), opts.skus.length > 0 && !selection.sku],
         ['Platform', !selection.platform],
         ['Operating System', !selection.os],
         ['Kernel', opts.kernels.length > 0 && !selection.kernel],
@@ -524,6 +524,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         {step === 0 && (
           <TargetStep
             opts={opts}
+            skuLabel={skuLabelFor(manifest, selection.vertical)}
             selection={selection}
             setSel={setSel}
             imageName={imageName}
@@ -697,12 +698,14 @@ const REQUIRED = <span className="text-red-600"> *</span>
 // Basic tab), plus the editable Image Name override.
 function TargetStep({
   opts,
+  skuLabel,
   selection,
   setSel,
   imageName,
   setImageName,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
+  skuLabel: string
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
@@ -712,8 +715,8 @@ function TargetStep({
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed. Fields marked{' '}
+        Select a Use Case to load the default configuration. The remaining
+        selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
@@ -726,10 +729,10 @@ function TargetStep({
         onChange={(v) => setSel('vertical', v)}
       />
       <Select
-        label="SKU"
+        label={skuLabel}
         // SKU is optional where the manifest offers none for this use case.
         labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-        placeholder="-- Select SKU --"
+        placeholder={`-- Select ${skuLabel} --`}
         value={selection.sku}
         options={opts.skus}
         disabled={!selection.vertical}

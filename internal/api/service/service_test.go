@@ -23,7 +23,7 @@ func testManifest() *Manifest {
 			{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso", Template: "robotics.yml"},
 			{Vertical: "retail", SKU: "dv", Platform: "arl", OS: "debian13", ImageType: "iso", Template: "retail.yml"},
 		},
-		Verticals: []Option{{ID: "robotics", DisplayName: "Robotics"}, {ID: "retail", DisplayName: "Retail Edge"}},
+		Verticals: []Vertical{{ID: "robotics", DisplayName: "Robotics", SKULabel: "Robot Kit"}, {ID: "retail", DisplayName: "Retail Edge"}},
 		SKUs:      []Option{{ID: "amr", DisplayName: "AMR"}, {ID: "dv", DisplayName: "Desktop Virtualization"}},
 		Platforms: []Option{{ID: "wcl", DisplayName: "WCL"}, {ID: "arl", DisplayName: "ARL"}},
 		Targets:   []Target{{ID: "ubuntu24", DisplayName: "Ubuntu 24.04", OS: "ubuntu", Arch: "x86_64"}},
@@ -121,6 +121,35 @@ func TestEmbeddedManifestUnavailableCombinations(t *testing.T) {
 		if !targetIDs[c.OS] {
 			t.Errorf("combination OS %q has no label in targets", c.OS)
 		}
+	}
+}
+
+func TestEmbeddedManifestBKCKernelVersions(t *testing.T) {
+	// The BKC use cases offer a kernel version where other use cases offer a
+	// SKU: the version is the sku id, and the use case's skuLabel renames the
+	// dropdown.
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest embedded: %v", err)
+	}
+	labels := map[string]string{}
+	for _, v := range m.Verticals {
+		labels[v.ID] = v.SKULabel
+	}
+	for id, want := range map[string]string{
+		"upstream-bkc":        "Mainline Kernel Version",
+		"ubuntu-lts-bkc":      "HWE Kernel Version",
+		"platform-enablement": "",
+	} {
+		if got := labels[id]; got != want {
+			t.Errorf("vertical %q skuLabel = %q, want %q", id, got, want)
+		}
+	}
+	if got := m.findTemplate("upstream-bkc", "mainline-7.0.14", "nvl", "ubuntu26", "raw"); got != "ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml" {
+		t.Errorf("mainline 7.0.14 template = %q, want the NVL overlay", got)
+	}
+	if got := m.findTemplate("upstream-bkc", "mainline-7.1.13", "nvl", "ubuntu26", "raw"); got != "" {
+		t.Errorf("planned mainline 7.1.13 resolved to %q, want empty", got)
 	}
 }
 

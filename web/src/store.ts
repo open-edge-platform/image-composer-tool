@@ -369,6 +369,12 @@ export function labelFor(options: { id: string; displayName: string }[], id: str
   return options.find((o) => o.id === id)?.displayName ?? id
 }
 
+// The label of the SKU dropdown under a use case: the use case's own skuLabel
+// (e.g. "Mainline Kernel Version"), or "SKU".
+export function skuLabelFor(manifest: Manifest | null, vertical: string): string {
+  return manifest?.verticals.find((v) => v.id === vertical)?.skuLabel || 'SKU'
+}
+
 // Distinct ids present in combinations, optionally filtered by prior selections.
 // For each id, `available` is true when at least one matching combination has a
 // template behind it; ids reachable only through template-less (planned but not
