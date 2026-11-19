@@ -599,26 +599,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </p>
                 )}
 
-                {/* Pinned a version for a package the curated template already
-                    lists? Both entries survive the merge, so say so rather than
-                    letting the resolved template look like a duplicate bug. */}
-                {composed.pinConflicts && composed.pinConflicts.length > 0 && (
-                  <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    <span className="font-semibold">
-                      {composed.pinConflicts.length === 1
-                        ? 'One pinned package is also provided by the base template'
-                        : `${composed.pinConflicts.length} pinned packages are also provided by the base template`}
-                      :
-                    </span>{' '}
-                    {composed.pinConflicts.join(', ')}. Template inheritance combines
-                    package lists rather than replacing them, so the base
-                    template&apos;s own unpinned entry stays alongside your pinned
-                    one and the build may install either version. Choose
-                    &quot;Latest&quot; for these packages to leave the base
-                    template&apos;s entry to decide.
-                  </div>
-                )}
-
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
                     type="button"

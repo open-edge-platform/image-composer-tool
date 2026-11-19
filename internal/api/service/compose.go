@@ -425,13 +425,9 @@ type ComposeResult struct {
 	// caller show the baseline beside the delta that modifies it. Empty when
 	// there are no overrides, because YAML already is the base.
 	BaseYAML string
-	// PinConflicts names packages requested at a pinned version whose name the
-	// base template already lists unpinned. The merge unions package lists and
-	// cannot drop the parent's entry, so both survive into YAML. Advisory only.
-	PinConflicts []string
 	// BasePackages is the curated template's own systemConfig.packages list —
 	// what it ships before this selection's overrides are applied. Populated
-	// unconditionally (unlike BaseYAML/PinConflicts), so a caller can show
+	// unconditionally (unlike BaseYAML), so a caller can show
 	// "already included" packages even before the user has added anything of
 	// their own.
 	BasePackages []string
@@ -589,7 +585,6 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			if baseBytes, merr := config.MarshalTemplateYAML(config.RedactSensitiveData(base)); merr == nil {
 				res.BaseYAML = string(baseBytes)
 			}
-			res.PinConflicts = pinConflicts(sel.Packages, base.SystemConfig.Packages)
 			res.BasePackages = base.SystemConfig.Packages
 			// Without the overrides, so a repo the user enabled is not reported
 			// as one the template ships.
@@ -612,39 +607,6 @@ func (s *Service) setTemplateRepos(res *ComposeResult, osID string, repos []conf
 	sort.Strings(ids)
 	res.TemplateRepos = ids
 	res.TemplateOnlyRepos = extra
-}
-
-// pinConflicts names the requested packages that are pinned to a version while
-// the base template already lists the same package unpinned. The extends merge
-// unions package lists and cannot remove the parent's entry, so both survive
-// into the resolved template and the resolver may install either.
-//
-// Reported rather than rejected or silently dropped: rejecting would fail the
-// Review pane for a common pick (the curated templates list dozens of packages
-// users browse straight into), and dropping would discard the version the user
-// explicitly asked for.
-func pinConflicts(requested, basePackages []string) []string {
-	if len(requested) == 0 || len(basePackages) == 0 {
-		return nil
-	}
-	base := make(map[string]bool, len(basePackages))
-	for _, p := range basePackages {
-		base[p] = true
-	}
-	var out []string
-	for _, entry := range requested {
-		if !isPinned(entry) {
-			continue
-		}
-		// Only an *unpinned* parent entry conflicts. A parent already pinned to
-		// the same version dedups on the exact string, and one pinned to a
-		// different version is a collision the parent authored deliberately.
-		if base[packageName(entry)] {
-			out = append(out, entry)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // deltaForOverride loads the curated parent's image/target info, renders a

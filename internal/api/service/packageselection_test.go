@@ -125,39 +125,35 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// --- packageName / isPinned ---
+// --- packageName ---
 
 // packageName decides whether an underscore separates a version or is part of
-// the name. Getting it wrong would report a bogus pin collision for a package
-// whose name legitimately contains an underscore.
+// the name. Getting it wrong would treat a package whose name legitimately
+// contains an underscore as a pinned version of another package.
 func TestPackageName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		entry      string
-		wantName   string
-		wantPinned bool
+		entry    string
+		wantName string
 	}{
-		{"curl", "curl", false},
-		{"curl_8.5.0-2ubuntu10.13", "curl", true},
-		{"vim_2:9.1.0016-1ubuntu7.8", "vim", true},
-		{"intel-oneapi-runtime-compilers_2025.3.3-30", "intel-oneapi-runtime-compilers", true},
+		{"curl", "curl"},
+		{"curl_8.5.0-2ubuntu10.13", "curl"},
+		{"vim_2:9.1.0016-1ubuntu7.8", "vim"},
+		{"intel-oneapi-runtime-compilers_2025.3.3-30", "intel-oneapi-runtime-compilers"},
 		// A suffix that isn't a version is part of the name: createrepo_c is one
 		// package, not createrepo pinned to version "c".
-		{"createrepo_c", "createrepo_c", false},
-		{"lib_foo", "lib_foo", false},
+		{"createrepo_c", "createrepo_c"},
+		{"lib_foo", "lib_foo"},
 		// A trailing underscore names nothing after it.
-		{"curl_", "curl_", false},
+		{"curl_", "curl_"},
 		// A leading underscore can't be a separator; the name part would be empty.
-		{"_curl", "_curl", false},
+		{"_curl", "_curl"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.entry, func(t *testing.T) {
 			t.Parallel()
 			if got := packageName(tt.entry); got != tt.wantName {
 				t.Errorf("packageName(%q) = %q, want %q", tt.entry, got, tt.wantName)
-			}
-			if got := isPinned(tt.entry); got != tt.wantPinned {
-				t.Errorf("isPinned(%q) = %v, want %v", tt.entry, got, tt.wantPinned)
 			}
 		})
 	}
@@ -526,17 +522,13 @@ func TestComposeWithPinnedPackage(t *testing.T) {
 	if !strings.Contains(res.YAML, "htop_3.3.0-4build1") {
 		t.Errorf("resolved YAML missing the pinned version:\n%s", res.YAML)
 	}
-	if len(res.PinConflicts) != 0 {
-		t.Errorf("PinConflicts = %v, want none (htop is not in the parent)", res.PinConflicts)
-	}
 
 	assertNoLeakedDeltas(t, s.cfg.TemplatesDir)
 }
 
-// Pinning a package the parent already lists unpinned leaves both entries in the
-// resolved template, because the merge unions rather than overrides. That is
-// reported, not silently fixed.
-func TestComposePinConflictReported(t *testing.T) {
+// Pinning a package the parent already lists unpinned replaces the parent's
+// entry, so the resolved template requests that package once, at the pin.
+func TestComposePinReplacesParentEntry(t *testing.T) {
 	s := newPackageTestService(t)
 
 	sel := ubuntu24Selection()
@@ -546,20 +538,15 @@ func TestComposePinConflictReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
-	if len(res.PinConflicts) != 1 || res.PinConflicts[0] != "curl_8.5.0-2ubuntu10.13" {
-		t.Errorf("PinConflicts = %v, want [curl_8.5.0-2ubuntu10.13]", res.PinConflicts)
-	}
-	// Both entries really are present — the report describes reality.
-	if !strings.Contains(res.YAML, "- curl\n") || !strings.Contains(res.YAML, "curl_8.5.0-2ubuntu10.13") {
-		t.Errorf("expected both the parent's curl and the pinned one:\n%s", res.YAML)
+	if strings.Contains(res.YAML, "- curl\n") || !strings.Contains(res.YAML, "curl_8.5.0-2ubuntu10.13") {
+		t.Errorf("expected only the pinned curl, not the parent's unpinned one:\n%s", res.YAML)
 	}
 
 	assertNoLeakedDeltas(t, s.cfg.TemplatesDir)
 }
 
-// An unpinned pick that duplicates a parent entry is not a conflict: it dedups
-// on the exact string.
-func TestComposeUnpinnedDuplicateIsNotAConflict(t *testing.T) {
+// An unpinned pick that duplicates a parent entry dedups against it.
+func TestComposeUnpinnedDuplicateDedups(t *testing.T) {
 	s := newPackageTestService(t)
 
 	sel := ubuntu24Selection()
@@ -568,9 +555,6 @@ func TestComposeUnpinnedDuplicateIsNotAConflict(t *testing.T) {
 	res, err := s.Compose(sel)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
-	}
-	if len(res.PinConflicts) != 0 {
-		t.Errorf("PinConflicts = %v, want none for an unpinned duplicate", res.PinConflicts)
 	}
 	if res.Summary.PackageCount != 2 {
 		t.Errorf("summary.PackageCount = %d, want 2 (curl deduped against the parent)", res.Summary.PackageCount)
@@ -593,9 +577,6 @@ func TestComposeWithoutOverridesPublishesNoDeltaOrBase(t *testing.T) {
 	}
 	if res.BaseYAML != "" {
 		t.Errorf("BaseYAML = %q, want empty with no overrides", res.BaseYAML)
-	}
-	if len(res.PinConflicts) != 0 {
-		t.Errorf("PinConflicts = %v, want none with no overrides", res.PinConflicts)
 	}
 	if want := []string{"curl", "vim"}; !slices.Equal(res.BasePackages, want) {
 		t.Errorf("BasePackages = %v, want %v even with no overrides", res.BasePackages, want)
