@@ -353,21 +353,21 @@ func printOverlayTiming(timings []overlay.StageTiming) {
 
 func (p *ubuntu) installHostDependency() error {
 	var dependencyInfo = map[string]string{
-		"mmdebstrap":        "mmdebstrap",       // For the chroot env build
-		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
-		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
-		"update-binfmts":    "binfmt-support",   // For registering qemu-user-static with the kernel
-		"mkfs.fat":          "dosfstools",       // For the FAT32 boot partition creation
-		"mformat":           "mtools",           // For writing files to FAT32 partition
-		"xorriso":           "xorriso",          // For ISO image creation
-		"qemu-img":          "qemu-utils",       // For image file format conversion
-		"ukify":             "systemd-ukify",    // For the UKI image creation
-		"grub-mkimage":      "grub-common",      // For ISO image UEFI Grub binary creation
-		"veritysetup":       "cryptsetup",       // For the veritysetup command
-		"sbsign":            "sbsigntool",       // For the UKI image creation
-		"ubuntu-keyring":    "ubuntu-keyring",   // For Ubuntu repository GPG keys
-		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
-		"dpkg-scanpackages": "dpkg-dev",         // For DEB repository metadata creation
+		"mmdebstrap":        "mmdebstrap",             // For the chroot env build
+		"arch-test":         "arch-test",              // Required by mmdebstrap for foreign-architecture bootstrap
+		"qemu-user":         system.QemuUserPackage(), // For cross-architecture binary execution support (qemu-user-binfmt on Ubuntu 26.04+)
+		"update-binfmts":    "binfmt-support",         // For registering qemu-user with the kernel
+		"mkfs.fat":          "dosfstools",             // For the FAT32 boot partition creation
+		"mformat":           "mtools",                 // For writing files to FAT32 partition
+		"xorriso":           "xorriso",                // For ISO image creation
+		"qemu-img":          "qemu-utils",             // For image file format conversion
+		"ukify":             "systemd-ukify",          // For the UKI image creation
+		"grub-mkimage":      "grub-common",            // For ISO image UEFI Grub binary creation
+		"veritysetup":       "cryptsetup",             // For the veritysetup command
+		"sbsign":            "sbsigntool",             // For the UKI image creation
+		"ubuntu-keyring":    "ubuntu-keyring",         // For Ubuntu repository GPG keys
+		"bootctl":           "systemd-boot-efi",       // For bootctl on Ubuntu hosts
+		"dpkg-scanpackages": "dpkg-dev",               // For DEB repository metadata creation
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {
