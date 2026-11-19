@@ -135,6 +135,9 @@ func TestEmbeddedManifestBKCKernelVersions(t *testing.T) {
 	labels := map[string]string{}
 	for _, v := range m.Verticals {
 		labels[v.ID] = v.SKULabel
+		if v.PlatformFirst != (v.SKULabel != "") {
+			t.Errorf("vertical %q platformFirst = %t, want it set exactly on the BKC use cases", v.ID, v.PlatformFirst)
+		}
 	}
 	for id, want := range map[string]string{
 		"upstream-bkc":        "Mainline Kernel Version",

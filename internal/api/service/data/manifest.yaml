@@ -154,7 +154,8 @@ combinations:
 
   # BKC (Best Known Configuration) use cases. Their second choice is a kernel
   # version rather than a SKU: each version is a `sku` id, and the use case's
-  # `skuLabel` (under `verticals`) renames the dropdown. A version with an empty
+  # `skuLabel` (under `verticals`) renames the dropdown, and `platformFirst`
+  # asks for the platform before it. A version with an empty
   # template is listed but grayed out; give it a template to make it buildable.
   #
   # Upstream BKC for Nova Lake on Ubuntu 26.04 is an overlay build: it layers
@@ -223,9 +224,11 @@ verticals:
   - id: upstream-bkc
     displayName: Platform Enablement - Upstream BKC
     skuLabel: Mainline Kernel Version
+    platformFirst: true
   - id: ubuntu-lts-bkc
     displayName: Platform Enablement - Ubuntu LTS BKC
     skuLabel: HWE Kernel Version
+    platformFirst: true
 
 skus:
   - id: desktop-virtualization

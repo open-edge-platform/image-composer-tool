@@ -403,6 +403,9 @@ func fromVerticals(vs []service.Vertical) []httpapi.Vertical {
 	out := make([]httpapi.Vertical, len(vs))
 	for i, v := range vs {
 		out[i] = httpapi.Vertical{Id: v.ID, DisplayName: v.DisplayName, SkuLabel: optStr(v.SKULabel)}
+		if v.PlatformFirst {
+			out[i].PlatformFirst = &v.PlatformFirst
+		}
 	}
 	return out
 }

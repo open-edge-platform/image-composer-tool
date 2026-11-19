@@ -34,11 +34,13 @@ type Option struct {
 }
 
 // Vertical is a use case option. SKULabel renames the SKU dropdown for a use
-// case whose second choice is something else, such as a kernel version.
+// case whose second choice is something else, such as a kernel version, and
+// PlatformFirst asks for the platform before it.
 type Vertical struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	SKULabel    string `json:"skuLabel,omitempty"`
+	ID            string `json:"id"`
+	DisplayName   string `json:"displayName"`
+	SKULabel      string `json:"skuLabel,omitempty"`
+	PlatformFirst bool   `json:"platformFirst,omitempty"`
 }
 
 // Target is an OS option with its family and architecture.

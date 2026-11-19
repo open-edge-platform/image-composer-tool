@@ -16,6 +16,9 @@ export interface Option {
 // choice is something else, such as a kernel version.
 export interface Vertical extends Option {
   skuLabel?: string
+  // Ask for the platform before the SKU, for a use case whose SKU choices
+  // depend on the platform (such as kernel versions).
+  platformFirst?: boolean
 }
 
 export interface Target {

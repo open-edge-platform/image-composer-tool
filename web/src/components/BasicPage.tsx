@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, skuLabelFor } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, skuLabelFor } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
@@ -95,6 +96,7 @@ export function BasicPage({
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
   const skuLabel = skuLabelFor(manifest, selection.vertical)
+  const platformFirst = cascadeOrder(manifest, selection.vertical)[1] === 'platform'
 
   const requirements = review?.credentials ?? []
   // The backend rejects a build whose template leaves an account without a
@@ -169,24 +171,14 @@ export function BasicPage({
               options={opts.verticals}
               onChange={(v) => setSel('vertical', v)}
             />
-            <Select
-              label={skuLabel}
-              // SKU is optional where the manifest offers none for this use case.
-              labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-              placeholder={`-- Select ${skuLabel} --`}
-              value={selection.sku}
-              options={opts.skus}
-              disabled={!selection.vertical}
-              onChange={(v) => setSel('sku', v)}
-            />
-            <Select
-              label="Platform"
-              labelSuffix={REQUIRED}
-              placeholder="-- Select Platform --"
-              value={selection.platform}
-              options={opts.platforms}
-              disabled={!selection.sku && opts.skus.length > 0}
-              onChange={(v) => setSel('platform', v)}
+            <SkuPlatformSelects
+              skus={opts.skus}
+              platforms={opts.platforms}
+              selection={selection}
+              setSel={setSel}
+              skuLabel={skuLabel}
+              platformFirst={platformFirst}
+              required={REQUIRED}
             />
             <Select
               label="Operating System"

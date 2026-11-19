@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage, skuLabelFor } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, encodePackage, skuLabelFor } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -13,6 +13,7 @@ import type {
   PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
@@ -525,6 +526,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           <TargetStep
             opts={opts}
             skuLabel={skuLabelFor(manifest, selection.vertical)}
+            platformFirst={cascadeOrder(manifest, selection.vertical)[1] === 'platform'}
             selection={selection}
             setSel={setSel}
             imageName={imageName}
@@ -699,6 +701,7 @@ const REQUIRED = <span className="text-red-600"> *</span>
 function TargetStep({
   opts,
   skuLabel,
+  platformFirst,
   selection,
   setSel,
   imageName,
@@ -706,6 +709,7 @@ function TargetStep({
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
   skuLabel: string
+  platformFirst: boolean
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
@@ -728,24 +732,14 @@ function TargetStep({
         options={opts.verticals}
         onChange={(v) => setSel('vertical', v)}
       />
-      <Select
-        label={skuLabel}
-        // SKU is optional where the manifest offers none for this use case.
-        labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-        placeholder={`-- Select ${skuLabel} --`}
-        value={selection.sku}
-        options={opts.skus}
-        disabled={!selection.vertical}
-        onChange={(v) => setSel('sku', v)}
-      />
-      <Select
-        label="Platform"
-        labelSuffix={REQUIRED}
-        placeholder="-- Select Platform --"
-        value={selection.platform}
-        options={opts.platforms}
-        disabled={!selection.sku && opts.skus.length > 0}
-        onChange={(v) => setSel('platform', v)}
+      <SkuPlatformSelects
+        skus={opts.skus}
+        platforms={opts.platforms}
+        selection={selection}
+        setSel={setSel}
+        skuLabel={skuLabel}
+        platformFirst={platformFirst}
+        required={REQUIRED}
       />
       <Select
         label="Operating System"

@@ -14,12 +14,13 @@
   downgrade; RPM overlay builds are not supported end-to-end.
 - The Web UI's Basic tab offers two Best Known Configuration (BKC) use cases:
   **Platform Enablement - Upstream BKC** and **Platform Enablement - Ubuntu LTS
-  BKC**. In place of a SKU they ask for a **Mainline Kernel Version** or an
-  **HWE Kernel Version**. Upstream BKC 7.0.14 builds the Nova Lake Ubuntu 26.04
+  BKC**. They ask for the platform first, then a **Mainline Kernel Version**
+  or an **HWE Kernel Version** in place of a SKU. Upstream BKC 7.0.14 builds the Nova Lake Ubuntu 26.04
   overlay image, which was the Upstream BKC SKU under Platform Enablement. The
   other kernel versions, and the Ubuntu LTS BKC use case, are listed but grayed
-  out until their templates exist. A manifest use case names its second
-  dropdown with the new optional `skuLabel` field.
+  out until their templates exist. Two new optional manifest fields on a use
+  case drive this: `skuLabel` names its SKU dropdown, and `platformFirst` asks
+  for the platform before it.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time

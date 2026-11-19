@@ -787,6 +787,12 @@ components:
             Label for the SKU dropdown under this use case, for a use case whose
             second choice is not a SKU (e.g. "Mainline Kernel Version"). Omitted
             means the UI labels it "SKU".
+        platformFirst:
+          type: boolean
+          description: |
+            Ask for the platform before the SKU dropdown, for a use case whose
+            SKU choices depend on the platform (e.g. kernel versions). Omitted
+            means false.
 
     Target:
       type: object
