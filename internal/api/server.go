@@ -64,6 +64,9 @@ type Config struct {
 	// EdgePackPath is an optional Edge Pack catalog file; empty uses the
 	// embedded copy.
 	EdgePackPath string
+	// Authoring grants every user the authoring capability; see
+	// service.Config.Authoring.
+	Authoring bool
 }
 
 // Server holds the HTTP server's dependencies: its listen address and the
@@ -86,6 +89,7 @@ func New(cfg Config) (*Server, error) {
 
 		PackageReposPath: cfg.PackageReposPath,
 		EdgePackPath:     cfg.EdgePackPath,
+		Authoring:        cfg.Authoring,
 	})
 	if err != nil {
 		return nil, err

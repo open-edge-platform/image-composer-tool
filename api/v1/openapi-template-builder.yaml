@@ -64,6 +64,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/Manifest"
 
+  /session:
+    get:
+      tags: [Manifest]
+      operationId: getSession
+      summary: Get what the current user may do
+      description: |
+        Returns the current user's capabilities. The UI shows a feature only
+        when its capability is true. Today a server setting decides them for
+        every user; later the user's role will.
+      responses:
+        "200":
+          description: The current user's capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
   # ─────────────────────────────────────────────────────────────────────
   # Packages (Advanced tab)
   # ─────────────────────────────────────────────────────────────────────
@@ -771,6 +788,24 @@ components:
           type: string
         displayName:
           type: string
+
+    Session:
+      type: object
+      description: What the current user may do.
+      required: [capabilities]
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/Capabilities"
+
+    Capabilities:
+      type: object
+      required: [authoring]
+      properties:
+        authoring:
+          type: boolean
+          description: |
+            The Advanced tab may offer Author mode, which edits a whole
+            template. Set by `serve --enable-authoring`.
 
     Target:
       type: object

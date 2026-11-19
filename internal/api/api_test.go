@@ -64,7 +64,8 @@ func newTestServer(t *testing.T) (*Server, string) {
 }
 
 // newTestServerWithICT is newTestServer with a caller-supplied fake ICT script.
-func newTestServerWithICT(t *testing.T, ictScript string) (*Server, string) {
+// Each option adjusts the server Config before the server is built.
+func newTestServerWithICT(t *testing.T, ictScript string, opts ...func(*Config)) (*Server, string) {
 	t.Helper()
 	tdir := t.TempDir()
 	for _, name := range []string{"robotics.yml", "retail.yml"} {
@@ -90,12 +91,16 @@ targets:
 	if err := os.WriteFile(ictBin, []byte(ictScript), 0o755); err != nil {
 		t.Fatalf("write fake ICT: %v", err)
 	}
-	srv, err := New(Config{
+	cfg := Config{
 		TemplatesDir: tdir,
 		ICTBinary:    ictBin,
 		WorkDir:      t.TempDir(),
 		ManifestPath: mpath,
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -147,6 +152,22 @@ func TestHandleGetManifest(t *testing.T) {
 	// Wire-format check: optional sku present, required camelCase fields.
 	if m.Combinations[0].Sku == nil || *m.Combinations[0].Sku != "amr" {
 		t.Errorf("combination sku not serialized: %+v", m.Combinations[0])
+	}
+}
+
+// --- session ---
+
+func TestHandleGetSession(t *testing.T) {
+	for _, authoring := range []bool{false, true} {
+		s, _ := newTestServerWithICT(t, fakeICT, func(c *Config) { c.Authoring = authoring })
+		rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/session", nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rr.Code)
+		}
+		want := fmt.Sprintf(`{"capabilities":{"authoring":%t}}`, authoring)
+		if got := strings.TrimSpace(rr.Body.String()); got != want {
+			t.Errorf("authoring=%t: body = %s, want %s", authoring, got, want)
+		}
 	}
 }
 

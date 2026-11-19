@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions, encodePackage } from '../store'
+import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -471,6 +472,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
+      <AdvancedModeSwitch />
+
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
         {STEPS.map((label, i) => (

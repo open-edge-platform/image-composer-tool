@@ -57,3 +57,16 @@ func TestExecuteServePrintSudoers(t *testing.T) {
 		}
 	}
 }
+
+func TestServeAuthoringFlagDefaultsFromEnv(t *testing.T) {
+	for env, want := range map[string]string{"": "false", "true": "true", "1": "true", "false": "false", "yes": "false"} {
+		t.Setenv(authoringEnv, env)
+		f := createServeCommand().Flags().Lookup("enable-authoring")
+		if f == nil {
+			t.Fatal("serve has no --enable-authoring flag")
+		}
+		if f.DefValue != want {
+			t.Errorf("%s=%q: --enable-authoring default = %s, want %s", authoringEnv, env, f.DefValue, want)
+		}
+	}
+}

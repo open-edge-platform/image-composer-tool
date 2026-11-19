@@ -12,6 +12,17 @@ export interface Option {
   displayName: string
 }
 
+// What the current user may do. The UI shows a feature only when its
+// capability is true.
+export interface Capabilities {
+  // The Advanced tab may offer Author mode, which edits a whole template.
+  authoring: boolean
+}
+
+export interface Session {
+  capabilities: Capabilities
+}
+
 export interface Target {
   id: string
   displayName: string

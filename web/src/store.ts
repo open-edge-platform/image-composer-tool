@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Manifest, Combination } from './api/types'
+import type { Capabilities, Manifest, Combination } from './api/types'
 import type { DiskModel } from './lib/disk'
 
 // Selection state for the Basic tab.
@@ -99,8 +99,15 @@ export function confirmRepoRelease(
   )
 }
 
+// Advanced-tab mode. Customize builds the user's changes on top of the
+// selected template; Author edits a whole template. Author is offered only
+// when the server grants the authoring capability.
+export type AdvancedMode = 'customize' | 'author'
+
 interface AppState {
   manifest: Manifest | null
+  capabilities: Capabilities
+  advancedMode: AdvancedMode
   selection: Selection
   // Advanced-tab override for the image name. Kept out of `Selection` so it never
   // leaks into the compose request body; it seeds from the resolved template's
@@ -126,6 +133,9 @@ interface AppState {
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
   setManifest: (m: Manifest) => void
+  // Losing the authoring capability drops Author mode back to Customize.
+  setCapabilities: (c: Capabilities) => void
+  setAdvancedMode: (mode: AdvancedMode) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
@@ -164,6 +174,8 @@ const emptySelection: Selection = {
 
 export const useStore = create<AppState>((set) => ({
   manifest: null,
+  capabilities: { authoring: false },
+  advancedMode: 'customize',
   selection: emptySelection,
   imageName: '',
   imageNameEdited: false,
@@ -173,6 +185,13 @@ export const useStore = create<AppState>((set) => ({
   diskEdited: false,
   diskSeed: null,
   setManifest: (m) => set({ manifest: m }),
+  setCapabilities: (c) =>
+    set((state) => ({
+      capabilities: c,
+      advancedMode: c.authoring ? state.advancedMode : 'customize',
+    })),
+  setAdvancedMode: (mode) =>
+    set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
