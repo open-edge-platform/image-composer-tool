@@ -319,6 +319,46 @@ Depends: vim-common (= 2:9.1.0016-1ubuntu7) | vim-gui-common, libc6 (>= 2.34)
 	}
 }
 
+func TestParseDpkgStatusRequirements(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFile(t, root, "status", `Package: mount
+Status: install ok installed
+Architecture: amd64
+Version: 2.41.3-3ubuntu2
+Multi-Arch: foreign
+Provides: virtual-mount (= 2)
+Pre-Depends: libmount1 (= 2.41.3-3ubuntu2)
+Depends: helper (>= 2) |
+ alternative, libc6:any (>= 2.34)
+`)
+
+	packages, err := parseDpkgStatus(filepath.Join(root, "status"))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements := packages[0].Requirements
+	if packages[0].MultiArch != "foreign" || len(packages[0].ProvidedRelations) != 1 ||
+		packages[0].ProvidedRelations[0].Constraint == nil ||
+		packages[0].ProvidedRelations[0].Constraint.Ver != "2" {
+		t.Fatalf("baseline capability metadata not preserved: %+v", packages[0])
+	}
+	if len(requirements) != 3 || len(requirements[1].Alternatives) != 2 {
+		t.Fatalf("requirements = %+v, want three edges with two alternatives on the second", requirements)
+	}
+	first := requirements[0]
+	if first.Package != "mount" || first.Alternatives[0].Name != "libmount1" ||
+		first.Alternatives[0].Constraint == nil || *first.Alternatives[0].Constraint !=
+		(VersionConstraint{Op: "=", Ver: "2.41.3-3ubuntu2"}) {
+		t.Fatalf("Pre-Depends = %+v, want exact libmount1 requirement", first)
+	}
+	if requirements[1].Alternatives[1].Name != "alternative" ||
+		requirements[2].Alternatives[0].Name != "libc6" {
+		t.Fatalf("folded alternatives or multiarch name lost: %+v", requirements)
+	}
+}
+
 func TestParseDpkgStatus_Errors(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
 		if _, err := parseDpkgStatus(filepath.Join(t.TempDir(), "status")); err == nil {

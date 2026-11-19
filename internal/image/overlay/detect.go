@@ -70,13 +70,16 @@ type BaselinePackage struct {
 	// Version is the full version string, including release/epoch where present.
 	Version string
 	// Arch is the package architecture (e.g. "amd64", "x86_64", "all", "noarch").
-	Arch string
+	Arch      string
+	MultiArch string
 	// Installed reports whether the package is fully installed (vs. config-files
 	// only, half-installed, etc.). Only installed packages gate overlay policy.
 	Installed bool
 	// Dependencies are the canonical names of packages this package depends on,
 	// with version constraints and alternatives reduced to package names.
-	Dependencies []string
+	Dependencies      []string
+	Requirements      []ArtifactDependency
+	ProvidedRelations []DependencyAlternative
 	// Provides are the virtual capabilities/names this package provides.
 	Provides []string
 }
@@ -626,14 +629,19 @@ func parseDpkgStatus(statusPath string) ([]BaselinePackage, error) {
 		var deps []string
 		deps = append(deps, parseDebDependencies(fields["Pre-Depends"])...)
 		deps = append(deps, parseDebDependencies(fields["Depends"])...)
+		requirements := parseDebDependsField(name, fields["Pre-Depends"])
+		requirements = append(requirements, parseDebDependsField(name, fields["Depends"])...)
 
 		pkgs = append(pkgs, BaselinePackage{
-			Name:         name,
-			Version:      fields["Version"],
-			Arch:         fields["Architecture"],
-			Installed:    isDpkgInstalled(fields["Status"]),
-			Dependencies: dedupeStrings(deps),
-			Provides:     parseDebProvides(fields["Provides"]),
+			Name:              name,
+			Version:           fields["Version"],
+			Arch:              fields["Architecture"],
+			MultiArch:         fields["Multi-Arch"],
+			Installed:         isDpkgInstalled(fields["Status"]),
+			Dependencies:      dedupeStrings(deps),
+			Requirements:      requirements,
+			ProvidedRelations: parseDebProvidedRelations(fields["Provides"]),
+			Provides:          parseDebProvides(fields["Provides"]),
 		})
 	}
 
@@ -702,6 +710,16 @@ func parseDebDependencies(field string) []string {
 }
 
 // parseDebProvides reduces a Provides field to the provided package names.
+func parseDebProvidedRelations(field string) []DependencyAlternative {
+	var provided []DependencyAlternative
+	for _, entry := range strings.Split(field, ",") {
+		if relation, ok := parseDebAlternative(entry); ok {
+			provided = append(provided, relation)
+		}
+	}
+	return provided
+}
+
 func parseDebProvides(field string) []string {
 	if strings.TrimSpace(field) == "" {
 		return nil

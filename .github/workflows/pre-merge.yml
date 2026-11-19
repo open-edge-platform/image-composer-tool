@@ -11,6 +11,11 @@ on:  # yamllint disable-line rule:truthy
     branches:
       - main
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      run_govulncheck:
+        type: boolean
+        default: false
 jobs:
   pre-merge:
     permissions:
@@ -20,6 +25,8 @@ jobs:
       run_version_check: false
       run_reuse_check: false
       run_security_scans: true
+      run_govulncheck: ${{ inputs.run_govulncheck || false }}
+      go_version: '1.26'
       run_dep_version_check: false
       run_build: false
       run_lint: false

@@ -613,6 +613,10 @@ func mergeBootloader(defaultBootloader, userBootloader Bootloader) Bootloader {
 	if userBootloader.BootEntryPolicy != "" {
 		merged.BootEntryPolicy = userBootloader.BootEntryPolicy
 	}
+	if userBootloader.TimeoutSec != nil {
+		timeout := *userBootloader.TimeoutSec
+		merged.TimeoutSec = &timeout
+	}
 
 	return merged
 }
@@ -739,7 +743,8 @@ func isEmptySystemConfig(config SystemConfig) bool {
 }
 
 func isEmptyBootloader(bootloader Bootloader) bool {
-	return bootloader.BootType == "" && bootloader.Provider == "" && bootloader.BootEntryPolicy == ""
+	return bootloader.BootType == "" && bootloader.Provider == "" && bootloader.BootEntryPolicy == "" &&
+		bootloader.TimeoutSec == nil
 }
 
 func isEmptyNetworkConfig(network NetworkConfig) bool {
@@ -818,6 +823,12 @@ func ResolveAndMergeExtendsChain(templatePath string, leaf *ImageTemplate) (*Ima
 	// the same way; this is the equivalent check for callers (`validate`,
 	// `resolve`) that fold the chain without applying OS defaults.
 	if err := merged.validateBaseline(); err != nil {
+		return nil, nil, fmt.Errorf("merged template is invalid: %w", err)
+	}
+
+	// bootloader.timeoutSec and bootloader.provider can come from different
+	// layers, so a systemd-boot/timeoutSec pairing is only visible after the fold.
+	if err := validateBootloaderTimeout(merged.SystemConfig.Bootloader); err != nil {
 		return nil, nil, fmt.Errorf("merged template is invalid: %w", err)
 	}
 
