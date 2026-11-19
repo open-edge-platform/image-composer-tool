@@ -4,7 +4,8 @@
 // "Update to latest version", above the Repositories tab's package list: every added
 // package, floating or pinned and from any repo, becomes an exact pin on the
 // newest version the checked repos offer, so the template records that
-// version instead of resolving "Latest" at build time.
+// version instead of resolving "Latest" at build time. The matched template's
+// own packages are pinned the same way, as added overrides.
 
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,11 +29,26 @@ const repos: PackageRepo[] = [
   { id: 'intel-eci', displayName: 'Intel ECI', url: 'http://example/eci', enabledByDefault: false },
 ]
 
-function Browser({ os = 'ubuntu24' }: { os?: string }) {
+function Browser({ os = 'ubuntu24', baseLock = noLock }: { os?: string; baseLock?: BaseLock }) {
   const enabledRepos = useStore((s) => s.enabledRepos)
   const enabledRepoIds = repos.filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
   const resolver = useVersionResolver(os, enabledRepoIds)
-  return <PackageRepoBrowser repos={repos} os={os} baseLock={noLock} resolver={resolver} />
+  return <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} resolver={resolver} />
+}
+
+// A template listing vim unpinned and curl pinned to an older version than
+// the checked repos' newest.
+function templateLock(pins: Record<string, string>, bare: string[]): BaseLock {
+  return {
+    info: (name) =>
+      name in pins
+        ? { locked: true, currentVersion: pins[name], currentIsFloating: false }
+        : bare.includes(name)
+          ? { locked: true, currentIsFloating: true }
+          : { locked: false, currentIsFloating: false },
+    ensureResolved: () => {},
+    concreteNames: [...bare, ...Object.keys(pins)],
+  }
 }
 
 const newest: Record<string, PackageSearchResult> = {
@@ -251,5 +267,75 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     } finally {
       newest.vim = { name: 'vim', version: '2:9.1.0016-1', repository: 'base' }
     }
+  })
+})
+
+describe('PackageRepoBrowser — Update to latest version, template packages', () => {
+  const versioned = (name: string, ...versions: string[]): PackageSearchResult => ({
+    name,
+    version: versions[0],
+    repository: 'base',
+    versions: versions.map((version) => ({ version, repository: 'base' })),
+  })
+  const renderWith = async (baseLock: BaseLock) => {
+    await act(async () => {
+      render(<Browser baseLock={baseLock} />)
+    })
+  }
+
+  it('counts and pins the template packages too, as overrides', async () => {
+    mockApi.lookupPackages.mockResolvedValue({
+      packages: [versioned('vim', '2:9.1.0016-1'), versioned('curl', '8.5.0-2', '8.4.0-1')],
+      unavailableRepos: [],
+    })
+    useStore.setState({ addedPackages: [{ name: 'htop', version: '', repo: 'base' }] })
+    await renderWith(templateLock({ curl: '8.4.0-1' }, ['vim']))
+    expect(pinButton().textContent).toBe('Update to latest version (3)')
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith(expect.objectContaining({ names: ['htop', 'vim', 'curl'] }))
+    const byName = Object.fromEntries(useStore.getState().addedPackages.map((p) => [p.name, p]))
+    expect(byName.vim).toEqual({ name: 'vim', version: '2:9.1.0016-1', repo: 'base' })
+    expect(byName.curl).toEqual({ name: 'curl', version: '8.5.0-2', repo: 'base' })
+  })
+
+  it('is enabled with only template packages, and skips a name already added', async () => {
+    mockApi.lookupPackages.mockResolvedValue({ packages: [versioned('vim', '2:9.1.0016-1')], unavailableRepos: [] })
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '2:9.0-1', repo: 'base' }] })
+    await renderWith(templateLock({}, ['vim']))
+    // vim is already overridden, so it counts once.
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+
+    useStore.setState({ addedPackages: [] })
+    await act(async () => {})
+    expect(pinButton().disabled).toBe(false)
+  })
+
+  it("keeps a template pin no checked repo publishes, and says so", async () => {
+    mockApi.lookupPackages.mockResolvedValue({ packages: [versioned('curl', '8.3.0-1')], unavailableRepos: [] })
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([])
+    expect(screen.getByRole('status').textContent).toMatch(/Kept the template's own pinned version of curl/)
+  })
+
+  it("doesn't pin template packages past the build's package limit", async () => {
+    const bare = Array.from({ length: 300 }, (_, i) => `pkg${i}`)
+    mockApi.lookupPackages.mockResolvedValue({ packages: bare.map((n) => versioned(n, '1.0')), unavailableRepos: [] })
+    useStore.setState({ addedPackages: [{ name: 'htop', version: '', repo: 'base' }] })
+    newest.htop = { name: 'htop', version: '3.3.0-4', repository: 'base' }
+    try {
+      mockApi.lookupPackages.mockImplementation(() =>
+        Promise.resolve({ packages: [...bare.map((n) => versioned(n, '1.0')), newest.htop], unavailableRepos: [] }),
+      )
+      await renderWith(templateLock({}, bare))
+      await act(async () => fireEvent.click(pinButton()))
+    } finally {
+      delete newest.htop
+    }
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'htop', version: '3.3.0-4', repo: 'base' }])
+    expect(screen.getByRole('status').textContent).toMatch(/over the 256 a build accepts/)
   })
 })
