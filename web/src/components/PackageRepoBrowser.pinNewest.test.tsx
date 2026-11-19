@@ -56,9 +56,10 @@ const newest: Record<string, PackageSearchResult> = {
   curl: { name: 'curl', version: '8.5.0-2', repository: 'intel-eci' },
 }
 
-// The catalog fetch comes back empty; the by-name lookup finds `newest`.
-const answer = ({ names }: { names: string[] }, unavailableRepos: string[] = []) => ({
-  packages: names.filter((n) => newest[n]).map((n) => newest[n]),
+// The catalog fetch comes back empty; the by-name lookup finds `newest`, in
+// whichever of the asked-for repos publishes it.
+const answer = ({ names, repos: asked }: { names: string[]; repos?: string[] }, unavailableRepos: string[] = []) => ({
+  packages: names.filter((n) => newest[n] && (!asked || asked.includes(newest[n].repository))).map((n) => newest[n]),
   unavailableRepos,
 })
 
@@ -67,7 +68,7 @@ beforeEach(() => {
   mockApi.searchPackages.mockReset()
   mockApi.searchPackages.mockResolvedValue({ query: '', total: 0, packages: [] })
   mockApi.lookupPackages.mockReset()
-  mockApi.lookupPackages.mockImplementation((args: { names: string[] }) => Promise.resolve(answer(args)))
+  mockApi.lookupPackages.mockImplementation((args: { names: string[]; repos?: string[] }) => Promise.resolve(answer(args)))
 })
 
 const pinButton = () => screen.getByRole('button', { name: /^Update to latest version/ }) as HTMLButtonElement
@@ -84,26 +85,34 @@ describe('PackageRepoBrowser — Update to latest version', () => {
     expect(pinButton().disabled).toBe(true)
   })
 
-  it('pins a floating "Latest" pick and bumps an older pin to the newest version', async () => {
-    useStore.setState({
-      addedPackages: [
-        { name: 'vim', version: '', repo: 'base' },
-        { name: 'curl', version: '7.88.1-10', repo: 'base' },
-      ],
-    })
+  it('pins a floating "Latest" pick to the newest version the browsed repo offers', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }] })
     await renderBrowser()
-    expect(pinButton().textContent).toBe('Update to latest version (2)')
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
     await act(async () => fireEvent.click(pinButton()))
 
-    const byName = Object.fromEntries(useStore.getState().addedPackages.map((p) => [p.name, p]))
-    expect(byName.vim).toEqual({ name: 'vim', version: '2:9.1.0016-1', repo: 'base' })
-    expect(byName.curl).toEqual({ name: 'curl', version: '8.5.0-2', repo: 'intel-eci' })
-    // Moving curl to the repo its newest version lives in keeps the old repo
-    // checked: releasing it would change the scope the lookup ran against.
-    expect(useStore.getState().enabledRepos).toContain('intel-eci')
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }])
   })
 
-  it('looks up every added name, pinned ones too, across every checked repo in one request', async () => {
+  it("doesn't put the always-on base repo into enabledRepos when pinning from it", async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'base' }], enabledRepos: [] })
+    await renderBrowser()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }])
+    expect(useStore.getState().enabledRepos).toEqual([])
+  })
+
+  it("doesn't pin a newer version another checked repo offers", async () => {
+    // curl's newest, 8.5.0-2, is in Intel ECI; browsing base, it stays put.
+    useStore.setState({ addedPackages: [{ name: 'curl', version: '7.88.1-10', repo: 'base' }] })
+    await renderBrowser()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'curl', version: '7.88.1-10', repo: 'base' }])
+  })
+
+  it('looks up every added name, pinned ones too, in the browsed repo in one request', async () => {
     useStore.setState({
       addedPackages: [
         { name: 'vim', version: '', repo: 'base' },
@@ -111,12 +120,15 @@ describe('PackageRepoBrowser — Update to latest version', () => {
       ],
     })
     await renderBrowser()
+    // Opening the repo looks its picks up in that repo alone; only the
+    // button's own request is under test here.
+    mockApi.lookupPackages.mockClear()
     await act(async () => fireEvent.click(pinButton()))
 
     expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
     expect(mockApi.lookupPackages).toHaveBeenCalledWith({
       os: 'ubuntu24',
-      repos: ['base', 'intel-eci'],
+      repos: ['base'],
       names: ['vim', 'curl'],
     })
   })
@@ -311,13 +323,89 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     expect(pinButton().disabled).toBe(false)
   })
 
-  it("keeps a template pin no checked repo publishes, and says so", async () => {
-    mockApi.lookupPackages.mockResolvedValue({ packages: [versioned('curl', '8.3.0-1')], unavailableRepos: [] })
-    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
-    await act(async () => fireEvent.click(pinButton()))
+  it("leaves out a template pin the browsed repo doesn't publish, and says where it comes from", async () => {
+    // Base has curl 8.3.0-1; the template's 8.4.0-1ppa1 is Intel ECI's.
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('base')
+          ? [versioned('curl', '8.3.0-1'), versioned('vim', '2:9.1.0016-1')]
+          : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, ['vim']))
+    await act(async () => {})
 
-    expect(useStore.getState().addedPackages).toEqual([])
-    expect(screen.getByRole('status').textContent).toMatch(/Kept the template's own pinned version of curl/)
+    // vim is updated here; curl isn't, and the note says where it's from.
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+    const note = screen.getByText('1 pinned from Intel ECI')
+    expect(note.getAttribute('title')).toBe(
+      "1 template pin (curl) isn't updated here: its pinned version comes from Intel ECI, not Ubuntu Base. Browse Intel ECI to update it.",
+    )
+    await act(async () => fireEvent.click(pinButton()))
+    expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['vim'])
+  })
+
+  it('links the row’s “via” to where a template pin comes from, and warns on its chips', async () => {
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('base')
+          ? [versioned('curl', '8.3.0-1')]
+          : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => {})
+    await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
+
+    // The header's version is the template's pin, so its "via" links to
+    // where that pin is from, not the repo being browsed.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('8.4.0-1ppa1')
+    expect(screen.queryByText(/via Ubuntu Base/)).toBeNull()
+    expect(screen.getByRole('button', { name: '8.3.0-1' }).getAttribute('title')).toBe(
+      "8.3.0-1 from Ubuntu Base — replaces the template's own build, 8.4.0-1ppa1 from Intel ECI",
+    )
+    const repoPicker = () => (screen.getByRole('combobox') as HTMLSelectElement).value
+    expect(repoPicker()).toBe('base')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Intel ECI' })))
+    expect(repoPicker()).toBe('intel-eci')
+  })
+
+  it('makes the note a link to the one repo the pins come from', async () => {
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('base')
+          ? [versioned('curl', '8.3.0-1')]
+          : [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => {})
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '1 pinned from Intel ECI' })))
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('intel-eci')
+  })
+
+  it("doesn't name a repo the build doesn't read, even one publishing the pinned version", async () => {
+    useStore.setState({ enabledRepos: [] })
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve({
+        packages: asked?.includes('intel-eci')
+          ? [{ name: 'curl', version: '8.4.0-1ppa1', repository: 'intel-eci', versions: [{ version: '8.4.0-1ppa1', repository: 'intel-eci' }] }]
+          : asked?.includes('base')
+            ? [versioned('curl', '8.3.0-1')]
+            : [],
+        unavailableRepos: [],
+      }),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1ppa1' }, []))
+    await act(async () => {})
+
+    expect(pinButton().disabled).toBe(true)
+    expect(screen.getByText('1 pinned from another repository')).toBeTruthy()
+    expect(mockApi.lookupPackages).not.toHaveBeenCalledWith(expect.objectContaining({ repos: ['intel-eci'] }))
   })
 
   it("doesn't pin template packages past the build's package limit", async () => {
@@ -337,5 +425,95 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
 
     expect(useStore.getState().addedPackages).toEqual([{ name: 'htop', version: '3.3.0-4', repo: 'base' }])
     expect(screen.getByRole('status').textContent).toMatch(/over the 256 a build accepts/)
+  })
+})
+
+describe('PackageRepoBrowser — Update to latest version, per repository', () => {
+  it("counts and pins only what's selected from the browsed repo", async () => {
+    useStore.setState({
+      addedPackages: [
+        { name: 'vim', version: '', repo: 'base' },
+        { name: 'curl', version: '7.88.1-10', repo: 'intel-eci' },
+      ],
+    })
+    await renderBrowser()
+    // Browsing base: vim is selected from here, curl from Intel ECI.
+    expect(screen.getByText(/\(1 selected\)/)).toBeTruthy()
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+    mockApi.lookupPackages.mockClear()
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith(expect.objectContaining({ names: ['vim'] }))
+    const byName = Object.fromEntries(useStore.getState().addedPackages.map((p) => [p.name, p]))
+    expect(byName.vim.version).toBe('2:9.1.0016-1')
+    expect(byName.curl.version).toBe('7.88.1-10')
+  })
+})
+
+describe('PackageRepoBrowser — Show only selected', () => {
+  it("offers every version the browsed repo has for a pinned pick, not just the pinned one", async () => {
+    mockApi.lookupPackages.mockResolvedValue({
+      packages: [
+        {
+          name: 'vim',
+          version: '2:9.1.0016-1',
+          repository: 'base',
+          versions: [
+            { version: '2:9.1.0016-1', repository: 'base' },
+            { version: '2:9.1.0000-1', repository: 'base' },
+          ],
+        },
+      ],
+      unavailableRepos: [],
+    })
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '2:9.1.0016-1', repo: 'base' }] })
+    await renderBrowser()
+    await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
+
+    expect(screen.getByRole('button', { name: /9\.1\.0000-1/ })).toBeTruthy()
+  })
+
+  it("doesn't offer Show frequently used, even for a repo with a curated list", async () => {
+    const curated = repos.map((r) => (r.id === 'base' ? { ...r, hasCuratedPackages: true } : r))
+    function CuratedBrowser() {
+      const resolver = useVersionResolver('ubuntu24', ['base'])
+      return <PackageRepoBrowser repos={curated} os="ubuntu24" baseLock={noLock} resolver={resolver} />
+    }
+    await act(async () => {
+      render(<CuratedBrowser />)
+    })
+    expect(screen.queryByRole('checkbox', { name: /Show frequently used/ })).toBeNull()
+    expect(mockApi.searchPackages).not.toHaveBeenCalledWith(expect.objectContaining({ curated: true }))
+  })
+})
+
+describe('PackageRepoBrowser — Update to latest version puts the browsed repo in use', () => {
+  const browseEci = async (baseLock: BaseLock) => {
+    await act(async () => {
+      render(<Browser baseLock={baseLock} />)
+    })
+    await act(async () => fireEvent.change(screen.getByRole('combobox'), { target: { value: 'intel-eci' } }))
+    await act(async () => {})
+  }
+
+  it('turns on an optional repo it pins packages from', async () => {
+    // curl is unpinned in the template; Intel ECI, not yet in use, has 8.5.0-2.
+    useStore.setState({ addedPackages: [], enabledRepos: [] })
+    await browseEci(templateLock({}, ['curl']))
+    expect(pinButton().textContent).toBe('Update to latest version (1)')
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'curl', version: '8.5.0-2', repo: 'intel-eci' }])
+    expect(useStore.getState().enabledRepos).toEqual(['intel-eci'])
+  })
+
+  it('leaves the repo off when nothing is pinned from it', async () => {
+    // The template's pin is already Intel ECI's newest, so nothing changes.
+    useStore.setState({ addedPackages: [], enabledRepos: [] })
+    await browseEci(templateLock({ curl: '8.5.0-2' }, []))
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([])
+    expect(useStore.getState().enabledRepos).toEqual([])
   })
 })

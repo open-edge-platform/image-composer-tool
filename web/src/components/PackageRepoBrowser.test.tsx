@@ -196,9 +196,12 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    expect(screen.getByText(/Pinned to/)).toBeTruthy()
-    expect(screen.getByText('9.1')).toBeTruthy()
-    expect(screen.getByText('Intel ECI')).toBeTruthy()
+    // The header says what's pinned and where from; the note, what a chip
+    // here would do instead.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.getByText('Intel ECI', { selector: 'button' })).toBeTruthy()
+    expect(screen.getByText('Picking a version here pins Ubuntu Base instead of Intel ECI.')).toBeTruthy()
     const chip = screen.getByRole('button', { name: '9.0' })
     expect(chip.className).not.toContain('bg-[#0071c5]')
   })
@@ -216,12 +219,17 @@ describe('a package already selected from a different repository than the one be
     browse('intel-eci')
 
     await screen.findByText('vim')
-    expect(screen.queryByText(/Pinned to/)).toBeNull()
+    // The pin is one of this repo's chips, highlighted there, and beside the
+    // tag with no "via", since it's from the repo being browsed.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.queryByText(/^via /, { selector: 'span' })).toBeNull()
+    expect(screen.queryByText(/Picking a version here pins/)).toBeNull()
     const chip = screen.getByRole('button', { name: '9.1' })
     expect(chip.className).toContain('bg-[#0071c5]')
   })
 
-  it('shows "Latest" as selected in every repo once picked as the unpinned choice', async () => {
+  it('tags an unpinned pick Unpinned in every repo, with no version chip selected', async () => {
     useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'intel-eci' }] })
     mockApi.searchPackages.mockResolvedValue({
       packages: [{ name: 'vim', version: '9.0', repository: 'base', versions: [{ version: '9.0', repository: 'base' }] }],
@@ -230,8 +238,9 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    const latest = screen.getByRole('button', { name: 'Latest' })
-    expect(latest.className).toContain('bg-[#0071c5]')
+    expect(screen.getByText('Unpinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Unpinned' })).toBeNull()
+    expect(screen.getByRole('button', { name: '9.0' }).getAttribute('aria-pressed')).toBe('false')
   })
 })
 

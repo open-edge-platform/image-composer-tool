@@ -186,7 +186,13 @@ export function PackagesStep({
   const enabledRepoIds = (repos ?? [])
     .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id) || lockedRepoIds.has(r.id))
     .map((r) => r.id)
-  const resolver = useVersionResolver(os, enabledRepoIds)
+  // Each repo's priority, so "resolves to" follows the build's own rule: the
+  // highest-priority repo first, then the newest version in it.
+  const repoPriorities = useMemo(
+    () => Object.fromEntries((repos ?? []).filter((r) => r.priority != null).map((r) => [r.id, r.priority!])),
+    [repos],
+  )
+  const resolver = useVersionResolver(os, enabledRepoIds, repoPriorities)
 
   return (
     <div>
@@ -268,7 +274,7 @@ export function PackagesStep({
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+            <SelectedPackages repos={repos} os={os} lockedRepoIds={lockedRepoIds} resolver={resolver} />
           </div>
         </div>
       )}
@@ -746,8 +752,8 @@ function PackageSearch({
         )}
       </div>
       <p className="mb-4 mt-1.5 text-sm text-slate-500">
-        Search across all repositories. Pick &quot;Latest&quot; or a specific
-        version to add it.
+        Search across all repositories. Tick a package to add it unpinned, or
+        pick a version to pin it.
       </p>
     </>
   )
