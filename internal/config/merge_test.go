@@ -2089,6 +2089,7 @@ func TestMergePackagesSamePackage(t *testing.T) {
 	}{
 		{"user pin replaces default bare in place", []string{"base", "curl", "vim"}, []string{"curl_8.5.0-2"}, []string{"base", "curl_8.5.0-2", "vim"}},
 		{"user pin replaces default pin", []string{"ffmpeg_7:9.0.1-1ppa1"}, []string{"ffmpeg_7:9.1.0-2"}, []string{"ffmpeg_7:9.1.0-2"}},
+		{"first of two user pins replaces the default, the second is dropped", []string{"base", "curl"}, []string{"curl_8.5.0-2", "curl_8.6.0-1"}, []string{"base", "curl_8.5.0-2"}},
 		{"same pin is kept once", []string{"curl_8.5.0-2"}, []string{"curl_8.5.0-2"}, []string{"curl_8.5.0-2"}},
 		{"user bare keeps default pin", []string{"curl_8.4.0-1"}, []string{"curl"}, []string{"curl_8.4.0-1"}},
 		{"version prefix pin replaces default", []string{"kernel"}, []string{"kernel_6.12*"}, []string{"kernel_6.12*"}},

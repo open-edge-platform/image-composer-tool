@@ -622,7 +622,8 @@ func mergeBootloader(defaultBootloader, userBootloader Bootloader) Bootloader {
 // resolvers keep only one of two entries for a name and which one depends on
 // list order: a user entry pinning a version (name_version) replaces the
 // default's entry in place, and a bare user entry adds nothing over the
-// default's own. Glob entries are only deduplicated by exact string.
+// default's own. Of several user pins for one package the default lists, the
+// first wins. Glob entries are only deduplicated by exact string.
 func mergePackages(defaultPackages, userPackages []string) []string {
 	userPins := make(map[string]string)
 	for _, pkg := range userPackages {
@@ -654,8 +655,13 @@ func mergePackages(defaultPackages, userPackages []string) []string {
 		add(pkg)
 	}
 
+	// A user entry for a package the defaults list adds nothing: the loop
+	// above already emitted that package's one entry, the user's first pin
+	// if it has one, or the default's own. So a second user pin of the same
+	// package (curl_8.5 and curl_8.6 over a default curl) is dropped rather
+	// than left to compete with the first.
 	for _, pkg := range userPackages {
-		if name, ok := packageEntryName(pkg); ok && name == pkg && defaultNames[name] {
+		if name, ok := packageEntryName(pkg); ok && defaultNames[name] {
 			continue
 		}
 		add(pkg)
