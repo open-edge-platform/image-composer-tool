@@ -6,6 +6,7 @@
 
 **New**:
 
+- **Added**: Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. The `Ubuntu 26.04 Host` workflow runs on every pull request and merge, plus weekly, on a 26.04 runner: it runs the host-sensitive unit tests and builds the minimal raw image of Ubuntu 26.04, Ubuntu 24.04, Debian 13 and eLxr 12. It was previously experimental and did not run on pull requests. `scripts/install-ict.sh` and the Debian package install test already cover 26.04.
 - **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
   selected by explicit APT `name_version` requests with
   `packageOperation: additive-and-upgrade`. It defaults to false and does not
