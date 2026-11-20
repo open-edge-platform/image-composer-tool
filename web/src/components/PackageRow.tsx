@@ -177,10 +177,15 @@ export function PackageRow({
   // the template's own entry applies again. (Its own pin can't be unpinned
   // from here: an unpinned entry in a delta leaves the template's pin in
   // place.) Removing the package is the checkbox's job.
+  //
+  // Author mode edits the template itself, so there a pinned template package
+  // can be unpinned: choosing the selected chip again leaves it unpinned (or,
+  // where the template already leaves it unpinned, drops the override).
   const chooseVersion = (v: PackageVersion) => {
     const sameAsSelection = selection != null && selection.version === v.version && selection.repo === v.repository
     if (sameAsSelection) {
-      if (locked) (onRevert ?? (() => onToggle(false)))()
+      if (locked && removable && !currentIsFloating) onChooseVersion({ version: '', repository: selection.repo })
+      else if (locked) (onRevert ?? (() => onToggle(false)))()
       else onChooseVersion({ version: '', repository: selection.repo })
       return
     }
@@ -322,7 +327,8 @@ export function PackageRow({
                 : undefined
             }
             overridden={overridden}
-            onRevert={() => onToggle(false)}
+            canUnpin={removable}
+            onRevert={onRevert ?? (() => onToggle(false))}
             resolvesTo={resolvesTo}
             disabled={disabled}
           />
@@ -351,6 +357,7 @@ function VersionChips({
   currentVersion,
   currentIsFloating,
   overridden = false,
+  canUnpin = false,
   onRevert,
   replaces,
   resolvesTo,
@@ -370,6 +377,9 @@ function VersionChips({
   // choice is then no longer redundant: choosing it drops the override
   // (onRevert), so the template's entry applies again.
   overridden?: boolean
+  // Author mode: the template's own pin chip is live, and choosing it unpins
+  // the package.
+  canUnpin?: boolean
   onRevert?: () => void
   // The template's own build, when its pinned version comes from another
   // repository: each chip here would replace it, so says so.
@@ -426,7 +436,9 @@ function VersionChips({
         //
         // With an override in place it is the way back to the template's own
         // pin instead, so it drops the override rather than being disabled.
-        const isRedundant = isCurrent && !currentIsFloating && !overridden
+        const templatePin = isCurrent && !currentIsFloating && !overridden
+        const isRedundant = templatePin && !canUnpin
+        const unpinsTemplate = templatePin && canUnpin
         const revertsToTemplate = isCurrent && !currentIsFloating && overridden
         const selectedHere = pinned === v.version && pinnedRepo === v.repository
         return (
@@ -439,6 +451,8 @@ function VersionChips({
                 ? 'Resolve this package to enable picking a version'
                 : selectedHere
                   ? `${v.version} from ${repoLabelFor(v.repository)} — ${overridden ? 'your override; choose it again to drop it' : 'pinned; choose it again to unpin'}`
+                  : unpinsTemplate
+                    ? `${v.version} from ${repoLabelFor(v.repository)} — pinned by the template; choose it again to unpin`
                   : isRedundant
                 ? `${v.version} from ${repoLabelFor(v.repository)} — already pinned by the template`
                 : revertsToTemplate
@@ -456,14 +470,18 @@ function VersionChips({
                 onRevert?.()
                 return
               }
+              if (unpinsTemplate) {
+                onChoose({ version: '', repository: v.repository })
+                return
+              }
               onChoose(v)
             }}
-            aria-pressed={(pinned === v.version && pinnedRepo === v.repository) || isRedundant}
+            aria-pressed={(pinned === v.version && pinnedRepo === v.repository) || templatePin}
             className={chipClass({
               // The template's own pin reads as selected, the same as a pick
               // of the user's; it just isn't clickable, as choosing it changes
               // nothing.
-              active: (pinned === v.version && pinnedRepo === v.repository) || isRedundant,
+              active: (pinned === v.version && pinnedRepo === v.repository) || templatePin,
               disabled,
               dashed:
                 !!resolvesTo &&

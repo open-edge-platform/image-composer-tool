@@ -389,7 +389,10 @@ function MergedPane({
     const repoId = selectedRepo?.id
     if (!repoId) return
     const dispatched = addedPackages.filter((p) => p.repo === repoId)
-    const dispatchedTemplate = lockedRows.map((r) => r.name).filter((name) => !elsewhere.includes(name))
+    // A template package removed in Author mode stays removed.
+    const dispatchedTemplate = lockedRows
+      .map((r) => r.name)
+      .filter((name) => !elsewhere.includes(name) && !removedHere.includes(name))
     const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
@@ -601,7 +604,10 @@ function MergedPane({
   // the other repos the build reads (an unchecked one may publish the same
   // build, but a build never takes it from there).
   const elsewhere = pinnedElsewhere(lockedRows, baseLock)
-  const pinCount = selectedRows.length - elsewhere.length
+  // Template packages removed in Author mode: listed (to put back) but never
+  // updated.
+  const removedHere = authoring ? lockedRows.map((r) => r.name).filter((name) => removedPackages.includes(name)) : []
+  const pinCount = selectedRows.length - elsewhere.length - removedHere.length
   const elsewhereOthers = enabledRepoIds.filter((id) => id !== selectedRepo?.id)
   const elsewhereKey = `${os}|${selectedRepo?.id}|${elsewhere.join(',')}|${elsewhereOthers.join(',')}`
   const [elsewhereSources, setElsewhereSources] = useState<{ key: string; sources: Map<string, string[]> } | null>(
