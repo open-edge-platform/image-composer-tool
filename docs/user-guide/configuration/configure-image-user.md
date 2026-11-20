@@ -15,6 +15,9 @@ ICT supports two types of user password configuration:
 1. **Plaintext passwords** (for development/testing only)
 2. **Hashed passwords** (recommended for production)
 
+A user can also log in with SSH keys only, without a password. Each user needs
+at least one of a password or an SSH key.
+
 ## Step 2: Generate Password Hashes
 
 For production environments, generate secure password hashes:
@@ -51,7 +54,38 @@ systemConfig:
       hash_algo: "sha512"
       password: "$6$qisZydr7DPWjCwDk$uiFDXvewTwAqs4H0gO7lRkmc5j2IUiuxSA8Yi.kjN9aLu4w3vysV80mD6C/0DvaBPLYCWU2fJwatYxVASJVL20"
       groups: ["sudo"]
+
+    # Key-only user: the password is locked, and sudo needs no password
+    - name: operator
+      sudo: true
+      shell: /bin/bash          # default /bin/bash
+      home: /srv/operator       # new accounts only
+      passwordMaxAge: 90        # days; 0 = no limit
+      sshAuthorizedKeys:
+        - ssh-ed25519 AAAAC3Nza... operator@laptop
+      sshAuthorizedKeysFiles:   # read at build time, relative to the template
+        - keys/operator.pub
 ```
+
+A complete crypt(3) hash in `password` is set as-is, with or without
+`hash_algo`. Key-based login also needs `openssh-server` in
+`systemConfig.packages`. See
+[`systemConfig.users[]`](../architecture/image-composer-tool-templates.md#systemconfigusers)
+for every field.
+
+### Every user needs a credential
+
+A user with neither a `password` nor an SSH key would be created with an empty
+password, so ICT rejects it, whether or not the user has sudo. Only a user with
+a `startupScript` is exempt. Check a template before building with:
+
+```bash
+image-composer-tool validate --merged my-template.yml
+```
+
+To supply a key for one build without editing the template, use
+`build --ssh-authorized-key USER=FILE`. A key file that contains only comments
+does not count as a credential.
 
 ## Step 4: Common User Groups
 
@@ -101,8 +135,9 @@ id
 **Common Issues:**
 
 1. **User cannot login:** Check password hash generation and syntax
-2. **No sudo access:** Verify user is in `wheel` or `sudo` group
-3. **Permission denied:** Check group assignments for required resources
+2. **Build or `validate --merged` fails with `user <name> has no password or SSH authorized key`:** Add a `password`, an SSH key, or pass `--ssh-authorized-key <name>=FILE` to `build`
+3. **No sudo access:** Verify user is in `wheel` or `sudo` group
+4. **Permission denied:** Check group assignments for required resources
 
 **Debugging:**
 

@@ -17,7 +17,7 @@ run one command to get a RAW image ready for deployment (ISO installers require 
 
 **Supported distributions:** Azure Linux (azl3),
 [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.2/edge-microvisor-toolkit/index.html)
-(emt3), Wind River eLxr (elxr12), Ubuntu (ubuntu24), and Red Hat-compatible
+(emt3), Wind River eLxr (elxr12), Ubuntu (ubuntu24, ubuntu26), and Red Hat-compatible
 distributions (rcd10).
 
 ## Quick Start
@@ -32,12 +32,22 @@ To build from the command line in a Docker container, see the
 
 | Guide                                                                    | Description                                                 |
 | ------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| [Installation Guide](./get-started/installation.md)                         | Build methods, Debian packaging, prerequisites              |
-| [Usage Guide](./get-started/usage-guide.md)                                 | CLI commands, configuration, build output, shell completion |
+| [Quick Start](./get-started/quick-start.md)                                 | Build your first image in three steps                       |
+| [Web UI Quick Start](./get-started/web-ui-quick-start.md)                   | Run the web UI with Docker Compose and compose an image     |
+| [CLI Quick Start (Docker)](./get-started/cli-docker-quick-start.md)         | Build a template from the command line in a Docker container |
+| [Installation Guide](./get-started/installation.md)                         | Build methods, Debian package, `install-ict.sh`, prerequisites |
+| [Usage Guide](./get-started/usage-guide.md)                                 | CLI commands, building in Docker, web UI, configuration, shell completion |
+| [AI Template Generation](./get-started/ai-template-generation.md)           | Generate templates from natural language (RAG)              |
 | [CLI Reference](./architecture/image-composer-tool-cli-specification.md) | Complete command-line specification                         |
 | [Image Templates](./architecture/image-composer-tool-templates.md)       | Template structure, variables, best practices               |
 | [Build Process](./architecture/image-composer-tool-build-process.md)     | Pipeline stages, caching, troubleshooting                   |
+| [Caching](./architecture/image-composer-tool-caching.md)                 | Package and image caches and how to manage them             |
+| [Multiple Package Repo Support](./architecture/image-composer-tool-multi-repo-support.md) | Repository priority, conflicts and `allowPackages`  |
 | [Architecture](./architecture/architecture.md)                                        | System design and component overview                        |
+| [Security Objectives](./architecture/image-composition-tool-security-objectives.md) | Security goals and how ICT meets them               |
+| [Image Manifest Specification](./architecture/image-manifest-specification.md) | A/B update manifest format                               |
+| [Coding Style Guide](./architecture/image-composer-tool-coding-style.md) | Go conventions for contributors                             |
+| [Release Notes](./release-notes.md)                                      | Changes in each release                                     |
 
 ## Tutorials
 
@@ -48,7 +58,7 @@ To build from the command line in a Docker container, see the
 | [Full-Disk Encryption](./configuration/configure-fde.md)                          | Encrypting image partitions with LUKS    |
 | [Configure Users](./configuration/configure-image-user.md)                        | Adding users to images                   |
 | [Custom Build Actions](./configuration/configure-additional-actions-for-build.md) | Commands during image compose (chroot)   |
-| [Custom Initrd Script](./configuration/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
+| [Custom Initrd Script](./configuration/configure-custom-initrd-script.md)       | Debian 13 GRUB initrd script (initramfs-tools or dracut) and a first-boot script |
 | [Bare-Metal Networking + SSH](./configuration/configure-baremetal-network-ssh.md) | DHCP + SSH for a Debian 13 overlay on bare metal |
 | [Multiple Repos](./configuration/configure-multiple-package-repositories.md)      | Using multiple package repositories      |
 | [Unattended ISO Installer](./get-started/unattended-iso-provisioning.md)         | Hands-free install with users, SSH keys, proxy, cloud-init, and boot-time provisioning |

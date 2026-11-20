@@ -72,18 +72,36 @@ ssh -L 8080:127.0.0.1:8080 <user>@<docker-host>
 ## 3. Build an OS Image
 
 1. On the **Basic** tab, choose a **Use Case**, **SKU**, **Platform**, and
-   **Operating System**. Together they select a ready-made template.
-2. Select **Compose Image**. In the dialog that opens, enter a password or SSH
-   public key for any account that needs one, and confirm.
+   **Operating System**. Together they select a ready-made template, which the
+   **Image Configuration** summary beside the lists describes. A choice marked
+   *(coming soon)* is planned but has no template yet, and cannot be chosen.
+2. Select **Compose Image**. The **Users and credentials** dialog opens. Enter
+   a password or SSH public key for any account that needs one. To add an
+   account of your own, select **+ Add user**. Then select **Compose Image** in
+   the dialog.
 3. The **Compose Image** tab streams the build log. When the status reads
-   **Completed**, the **Artifacts** table lists what the build produced:
-   download the OS image, its software bill of materials (SBOM), and the
-   template the build used, with every inherited setting filled in. To reach
-   the files another way, see
+   **Completed**, the **Artifacts** table lists what the build produced: the OS
+   image and its software bill of materials (SBOM). Select a file's name to
+   download it. The template the build used, with every inherited setting
+   filled in, is under **Compose details**, with its own download button. To
+   reach the files another way, see
    [Where Your Files and Image Artifacts Are](#where-your-files-and-image-artifacts-are).
 
-The **History** sidebar lists every build, and you can reopen any of them,
-including after a restart.
+To add packages, or change the disk layout or image name, before you compose,
+select **Edit in Advanced** instead of **Compose Image**. The **Advanced** tab
+starts from the same choices and walks you through the **Target**,
+**Packages**, **Disk**, and **Review** steps.
+
+The UI runs one build at a time. While one runs, the **Compose Image** button
+on the Basic and Advanced tabs is disabled, with the note *additional
+concurrent builds are currently restricted* beside it.
+
+The **History** list on the **Compose Image** tab shows every build, newest
+first, 10 to a page. You can reopen any of them, including after a restart.
+
+The **?** (Help) button at the right of the top bar opens the in-app **User
+Guide**, which walks through the Basic, Advanced, and Compose Image tabs step
+by step.
 
 ## 4. Stop and Restart
 
@@ -100,11 +118,12 @@ filesystems and detach its loop devices. Let `docker compose down` finish
 rather than killing the container, or those mounts and loop devices stay
 behind on the host.
 
-After you pull new commits, add `--build` so the container image picks them
-up:
+After you pull new commits, stop the UI and start it with `--build` so the
+container image picks them up:
 
 ```bash
 git pull
+docker compose down
 docker compose up --build
 ```
 
@@ -118,8 +137,8 @@ docker compose down -v
 ## Where Your Files and Image Artifacts Are
 
 Builds run inside the container, so every path the UI shows, such as the
-**Path** column of the **Artifacts** table, is a path inside the container,
-not on your host:
+one in the tooltip of a file name in the **Artifacts** table, is a path inside
+the container, not on your host:
 
 ```text
 /opt/ict/webui-workspace/builds/<build-id>/work/<os>-<dist>-<arch>/imagebuild/<config>/<image-file>
@@ -144,11 +163,13 @@ when the container stops. Each build has its own directory under `builds/`:
 
 You can get a file out in three ways:
 
-- **Download it from the UI.** Use the download icon in the build's
-  **Artifacts** table. If Docker runs on another machine, forward the port
-  first, as described in [Open the UI](#2-open-the-ui).
+- **Download it from the UI.** Select the file's name in the build's
+  **Artifacts** table, or, for the template, the download button on the
+  **Template** line under **Compose details**. If Docker runs on another
+  machine, forward the port first, as described in
+  [Open the UI](#2-open-the-ui).
 - **Copy it out with Compose.** Run this from your checkout, with the path the
-  UI shows:
+  UI shows when you hover over the file's name:
 
   ```bash
   docker compose cp ict:/opt/ict/webui-workspace/builds/<build-id>/work/<os>-<dist>-<arch>/imagebuild/<config>/<image-file> .
@@ -177,12 +198,14 @@ anything you want to keep first.
 
 Export your proxy settings before you start the UI. Compose passes them to the
 container image build and to the running server, which passes them on to
-every build:
+every build. If the UI is already running, stop it first so the new settings
+take effect:
 
 ```bash
 export http_proxy=http://proxy.example.com:911
 export https_proxy=http://proxy.example.com:912
 export no_proxy=localhost,127.0.0.1
+docker compose down
 docker compose up --build
 ```
 
@@ -201,8 +224,8 @@ for every build.
 credentials** dialog that opens on **Compose Image** has a **GitHub token for
 the OEP Installer** field. The server passes the token to that build only, in a
 file it deletes when the build process ends. It is not saved with the build,
-so **Retry** does not reuse it: start a new build from the Basic or Advanced
-tab instead, and enter the token again. When the server already has a token,
+so **Retry compose** does not reuse it: start a new build from the Basic or
+Advanced tab instead, and enter the token again. When the server already has a token,
 the field is optional and an entered token takes precedence for that build.
 
 **For every build,** through a Compose secret:
@@ -216,7 +239,7 @@ the field is optional and an entered token takes precedence for that build.
 
 2. In `docker-compose.yml`, uncomment the `ICT_OEP_INSTALLER_TOKEN_FILE` line,
    the service's `secrets` entry, and the top-level `secrets` section.
-3. Run `docker compose up --build`.
+3. Restart the UI with `docker compose down`, then `docker compose up --build`.
 
 Without a token, a build of such a template fails while downloading, with a
 message that the file may be in a private repository.
@@ -227,9 +250,9 @@ message that the file may be in a private repository.
 |---------|-----|
 | `permission denied while trying to connect to the Docker daemon socket` | Your user may not run `docker`. Add it to the `docker` group and log in again, or put `sudo` in front of the command. |
 | `port is already allocated` or `address already in use` on start | Another service uses port 8080. Stop it, or change the host port in the `ports` entry of `docker-compose.yml`, keeping the `127.0.0.1:` prefix, for example `"127.0.0.1:9090:8080"`. |
-| Building the container image fails while downloading npm, Go, or apt packages | Set your proxy variables as shown in [Behind a Proxy](#behind-a-proxy), then run `docker compose up --build` again. |
+| Building the container image fails while downloading npm, Go, or apt packages | Set your proxy variables as shown in [Behind a Proxy](#behind-a-proxy), then run `docker compose down` and `docker compose up --build` again. |
 | A build in the UI fails while resolving or downloading packages | The build log in the UI names the repository it could not reach. Behind a proxy, check that `no_proxy` does not send that host around the proxy. |
-| The UI still behaves as before after `git pull` | Run `docker compose up --build`, then hard-refresh the browser (Ctrl+Shift+R). |
+| The UI still behaves as before after `git pull` | Run `docker compose down`, then `docker compose up --build`, then hard-refresh the browser (Ctrl+Shift+R). |
 
 ## Next Steps
 

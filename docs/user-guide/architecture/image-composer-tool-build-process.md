@@ -172,7 +172,8 @@ For **raw images**:
 - Create an empty raw disk image file in `workspace/{provider-id}/imagebuild/{systemConfigName}/`
 - Create partitions according to the disk configuration (boot, root, swap, data, etc.)
 - Format partition filesystems (ext4, xfs, vfat, etc.)
-- Set up loop devices for partition access
+- Set up loop devices for partition access, first detaching any loop device an
+  interrupted earlier build left attached to the same image file
 
 For **ISO images**:
 - Create ISO directory structure
@@ -185,7 +186,11 @@ For **ISO images**:
   - Subsequent builds: Reuses existing chroot (significant time savings)
 - Mount necessary pseudo-filesystems (proc, sys, dev)
 - Execute pre-installation scripts (if specified in template)
-- Install all packages from the packages stage in correct dependency order
+- Install all packages from the packages stage in correct dependency order. On
+  Debian-family images, `uname -r` reports the newest kernel under the image's
+  `/boot` rather than the build host's kernel while packages install, so
+  post-install scripts that build kernel modules (DKMS) build them for the
+  image's kernel
 - Configure base OS environment:
   - Set hostname and timezone
   - Configure network settings (interfaces, DNS, routes)
@@ -480,10 +485,28 @@ Error: Failed to download package openssh-server
 
 **Solutions:**
 - Check network connectivity to package repositories
+- Behind a proxy, run the build with `sudo -E` so your proxy variables reach
+  it. ICT passes `http_proxy`, `https_proxy`, `ftp_proxy` and `no_proxy` to the
+  commands it runs in both lowercase and uppercase spellings, so tools that
+  read only one of them, such as `wget`, also use the proxy
 - Verify repository URLs in template are correct
 - Check if package name is spelled correctly
 - Ensure GPG keys are properly configured
 - Try using a different package mirror
+
+A package download waits up to 5 minutes for the server's response headers,
+which a TLS-inspecting proxy holds back until it has scanned the whole file. A
+failed download is attempted up to 3 times. When the server answers 429, 502,
+503 or 504, which means it is shedding load, it is instead attempted up to 6
+times over about 5.5 minutes, honoring a `Retry-After` header of up to 2
+minutes; a server that asks for a longer wait fails the download at once.
+
+**Problem: A configuration command fails**
+
+When a command in `systemConfig.configurations` fails, its output is appended
+to the error and logged, so you can tell, for example, a DNS failure from a
+proxy failure or a 404. The output of commands that succeed is logged at DEBUG
+level.
 
 **Problem: Insufficient disk space**
 

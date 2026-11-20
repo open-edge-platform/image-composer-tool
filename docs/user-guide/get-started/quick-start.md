@@ -10,7 +10,7 @@ build from the command line in a Docker container, see the
 
 ## Build and Run
 
-1. Clone and build (requires Go 1.24+)
+1. Clone and build (requires Go 1.26+)
 
 ```bash
 git clone https://github.com/open-edge-platform/image-composer-tool.git

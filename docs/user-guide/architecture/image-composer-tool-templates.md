@@ -46,6 +46,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.cloudInit`](#systemconfigcloudinit)
       - [`systemConfig.aptPolicy`](#systemconfigaptpolicy)
       - [`systemConfig.oepInstaller`](#systemconfigoepinstaller)
+    - [Fields ICT Writes](#fields-ict-writes)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Template Extends (Inheritance)](#template-extends-inheritance)
     - [Syntax](#syntax)
@@ -162,7 +163,11 @@ systemConfig:   # Required in merged template - packages, kernel, users, etc.
 
 ### `metadata`
 
-Optional block for AI-powered template discovery. Ignored by the build engine.
+Optional block for AI-powered template discovery. The build does not read it,
+but it is kept in the resolved template (the `resolve` output, the template the
+Web UI shows and archives for a build, and `template-dump.yaml`). It is **not**
+inherited: a template that `extends` another, or is merged with an OS default,
+has only the `metadata` it declares itself, and none when it declares none.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -202,7 +207,7 @@ Target platform. All four fields are required.
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `os` | string | **Yes** | `azure-linux`, `edge-microvisor-toolkit`, `wind-river-elxr`, `ubuntu`, `redhat-compatible-distro` | Target operating system |
+| `os` | string | **Yes** | `azure-linux`, `edge-microvisor-toolkit`, `wind-river-elxr`, `ubuntu`, `redhat-compatible-distro`, `debian` | Target operating system |
 | `dist` | string | **Yes** | See OS constraints below | Distribution identifier |
 | `arch` | string | **Yes** | `x86_64`, `aarch64`, `armv7hl` | Target CPU architecture |
 | `imageType` | string | **Yes** | `raw`, `iso`, `img`, `wsl2` | Output image format |
@@ -213,8 +218,9 @@ Target platform. All four fields are required.
 |----|-------------|
 | `azure-linux` | `azl3` |
 | `edge-microvisor-toolkit` | `emt3` |
-| `wind-river-elxr` | `elxr12` |
+| `wind-river-elxr` | `elxr12`, `elxr13` |
 | `ubuntu` | `ubuntu24`, `ubuntu26` |
+| `debian` | `debian13` |
 | `redhat-compatible-distro` | Any (e.g., `el10`) |
 
 ```yaml
@@ -357,7 +363,8 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > **Unsupported systemConfig sections.** Because overlay mode does not re-run the
 > boot/system-provisioning stages, the following `systemConfig` sections cannot be
 > applied to an overlay build: `hostname`, `network`, `initramfs`, `kernel`,
-> `immutability`, `fde`, and `bootloader`. Previously these were silently ignored;
+> `immutability`, `fde`, `bootloader`, `dkms`, `provisioning`, `cloudInit`,
+> `aptPolicy`, and `oepInstaller`. Previously some of these were silently ignored;
 > now setting any of them in an overlay template **fails the build up front** with
 > a message naming every offending section. Configure them in the baseline image
 > (a `create`-mode build) instead. The overlay-supported `systemConfig` inputs are
@@ -485,6 +492,14 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > Retained Debian dependency checks, the post-install dependency audit, and
 > bootloader/kernel protections remain enforced. No removal is authorized by
 > this flag; unresolved dependencies still fail the build.
+>
+> **Package plan.** After preflight, and before the image is resized or any
+> package is installed, the build log shows an `OVERLAY PACKAGE PLAN` report
+> listing the packages the overlay will add, the baseline packages whose version
+> it will change (listed as `upgraded`, with the from and to versions), and the
+> approved removals. Cascade removals decided at install time (see below) can
+> differ; the `OVERLAY PACKAGE STATISTICS` report at the end of the build shows
+> the result.
 >
 > **Retained baseline dependencies (Debian).** Baseline `Depends` and
 > `Pre-Depends` retain their version constraints and alternatives. Under
@@ -662,11 +677,23 @@ boot and ext4 root partitions).
 |-------|------|----------|-------------|
 | `name` | string | **Yes** (schema) | Disk configuration name (e.g., `"Default_Raw"`) |
 | `path` | string | No | Disk device path used by the live installer (e.g., `/dev/sda`, `/dev/disk/by-id/<id>`); must be a clean `/dev/...` path |
+| `selectionPolicy` | object | No | Live installer only: how to pick the target disk when `path` is empty (see below) |
+| `extendLastPartitionToFillDisk` | bool | No | `imageType: raw` only: add a first-boot service that grows the last partition and its file system to the end of the disk the image was written to. The last partition must be the root (`mountPoint: /`), and immutability must be off; rejected for `iso` |
 | `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`. In create mode this is the exact disk size; in overlay mode the resize unconditionally expands the baseline to this size first (see the overlay **Sizing** note) |
 | `maxSize` | string | No | Overlay-mode-only ceiling on further, package-driven growth beyond `disk.size` (e.g., `"16GiB"`). Must be greater than `disk.size`, and requires `disk.size` to also be set (see the overlay **Sizing** note) |
 | `partitionTableType` | string | No | `gpt` or `mbr` |
 | `artifacts` | artifact[] | No | Output formats and optional compression |
 | `partitions` | partition[] | No | Partition layout definitions |
+
+`selectionPolicy` fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy` | string | — | `first`, `largest`, or `fastest` eligible disk. Required when `path` is empty |
+| `excludeRemovable` | bool | `true` | Skip removable or externally attached disks (judged from the removable flag, transport, hotplug, udev, and sysfs) |
+| `requireEmpty` | bool | `true` | Only consider disks with no partitions. Raw data on an unpartitioned disk is not detected; with `false`, the installer may overwrite existing data |
+
+Disks too small for the partition layout are never eligible.
 
 #### `disk.artifacts[]`
 
@@ -684,6 +711,7 @@ Each entry defines one partition:
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Partition identifier (e.g., `boot`, `rootfs`, `roothashmap`, `userdata`) |
+| `index` | int | Partition index |
 | `name` | string | Partition label |
 | `type` | string | Partition type (e.g., `esp`, `linux-root-amd64`, `linux`) |
 | `typeUUID` | string | GPT type GUID (e.g., `8300`) |
@@ -779,11 +807,15 @@ Optional list of additional package repositories beyond the OS base repos.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `codename` | string | **Yes** | Repository identifier (e.g., `company-internal`) |
-| `url` | string | **Yes** | Repository base URL (must be a valid URI) |
-| `pkey` | string | **Yes** | GPG key URL, absolute file path, or `[trusted=yes]` to skip verification |
+| `url` | string | One of `url`, `path`, `packages` | Repository base URL (must be a valid URI) |
+| `path` | string | One of `url`, `path`, `packages` | Absolute local directory of a file-based repository |
+| `packages` | string[] | One of `url`, `path`, `packages` | Files that populate the local repository `path`: `https://` URLs (downloaded), local directories (every `.deb`/`.rpm` inside is copied), or local files (`.deb`, `.rpm`, `.tar`, `.tar.gz`, `.zip`; archives are extracted) |
+| `insecureSkipVerify` | bool | No | Skip TLS certificate verification when downloading `packages` URLs (default `false`; insecure) |
+| `pkey` | string | `pkey` or `pkeys` | GPG key URL (`http://`, `https://`, `file://`), absolute file path, or `[trusted=yes]` to skip verification |
+| `pkeys` | string[] | `pkey` or `pkeys` | Several GPG key URLs or absolute paths, as an alternative to `pkey` |
 | `component` | string | No | Repository component (e.g., `main`, `restricted`) |
 | `priority` | int | No | Priority from `-9999` to `9999` (default: `0`, higher = preferred) |
-| `AllowPackages` | string[] | No | Specific packages to include from this repo (package pinning) |
+| `allowPackages` | string[] | No | Specific packages to include from this repo (package pinning) |
 
 ```yaml
 packageRepositories:
@@ -822,7 +854,10 @@ user templates (as defaults already provide a complete base).
 | `packages` | string[] | No | Packages to install (additive with defaults) |
 | `kernel` | object | No | Kernel configuration |
 | `bootloader` | object | No | Bootloader configuration |
+| `network` | object | No | Network interfaces of the installed OS |
 | `immutability` | object | No | dm-verity / Secure Boot configuration |
+| `fde` | object | No | LUKS2 full-disk encryption |
+| `dkms` | object | No | Build and verify DKMS kernel modules |
 | `users` | user[] | No | User account definitions |
 | `initramfs` | object | No | Initramfs config (ISO/initrd builds) |
 | `additionalFiles` | file[] | No | Extra files to copy into the image |
@@ -840,6 +875,7 @@ and must be unique within the list.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `name` | string | Kernel package name (typically set by defaults) |
 | `version` | string | Kernel version (e.g., `"6.12"`, `"6.14"`) |
 | `cmdline` | string | Kernel boot command line |
 | `packages` | string[] | Kernel packages (e.g., `["linux-image-generic-hwe-24.04"]`) |
@@ -1084,20 +1120,30 @@ default is kept.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | **Yes** | Username |
-| `password` | string | No | Password (plain text or pre-hashed with `$` prefix). Without one, the password is locked when the user has SSH keys (key login only) and deleted otherwise. A user with sudo access (`sudo: true`, or membership of the `sudo` or `wheel` group) and SSH keys but no password also gets passwordless sudo (`NOPASSWD`) in `/etc/sudoers.d/90-ict-key-only-admins`, because a locked password could never satisfy the default sudo prompt. Such a user, or the `root` account, with neither a password nor an SSH key is rejected at build time, so it cannot be left with an empty password; a `root` account with a `startupScript` (the installer environment's console account) is exempt |
+| `password` | string | No | Password: plain text, or a complete crypt(3) hash (`$6$…`, `$y$…`, …). Without one, the password is locked when the user has SSH keys (key login only). A user with sudo access (`sudo: true`, or membership of the `sudo` or `wheel` group) and SSH keys but no password also gets passwordless sudo (`NOPASSWD`) in `/etc/sudoers.d/90-ict-key-only-admins`, because a locked password could never satisfy the default sudo prompt. Every user, `root` included, needs a password or at least one SSH key (see below); only a user with a `startupScript`, such as the installer environment's console account, is exempt, and its password is deleted |
 | `hash_algo` | string | No | Hash algorithm: `bcrypt`, `sha512`, `sha256`, `md5` (md5 is insecure — avoid in production) |
 | `passwordMaxAge` | int | No | Max password age in days. `0` means no limit and overrides a value inherited through `extends`; omit it to inherit |
 | `startupScript` | string | No | Script to run on login |
 | `groups` | string[] | No | Additional groups |
 | `sudo` | bool | No | Grant sudo permissions |
-| `home` | string | No | Custom home directory for a new account (absolute path). Not applied to an account that already exists in the image, such as `root`: its home is left unchanged and a warning is logged |
-| `shell` | string | No | Login shell (absolute path, default `/bin/bash`); also applied to accounts that already exist, such as `root` |
+| `home` | string | No | Custom home directory for a new account (clean absolute path without spaces, `:`, or `..`). Not applied to an account that already exists in the image, such as `root`: its home is left unchanged and a warning is logged |
+| `shell` | string | No | Login shell (clean absolute path without spaces, `:`, or `..`; default `/bin/bash`); also applied to accounts that already exist, such as `root` |
 | `sshAuthorizedKeys` | string[] | No | Public key lines (`[options] <type> <base64> [comment]`) written to `~/.ssh/authorized_keys`. Each line is parsed as sshd would parse it, so a malformed or truncated key, an unknown option, or a private key is rejected |
 | `sshAuthorizedKeysFiles` | string[] | No | Host files (absolute or template-relative) whose key lines are read at build time and added to `sshAuthorizedKeys`; blank lines and `#` comments are skipped |
 
-A value in `password` that is already a crypt(3) hash (`$6$…`, `$y$…`, …) is
-always set as-is, even without `hash_algo`. SSH keys are installed with the
-modes sshd requires: `~/.ssh` is `0700` and `authorized_keys` is `0600`, both
+A value in `password` that is already a complete crypt(3) hash (`$6$…`, `$y$…`,
+…) is always set as-is, even without `hash_algo`; a value that only starts like
+one (for example a truncated `$6$salt`) is treated as plain text.
+
+A user without a password and without SSH keys would be left with an empty
+password, so it is rejected. `image-composer-tool validate --merged` reports it,
+a raw build fails when it creates the users, and an ISO build fails as soon as
+it starts, before it builds the installer. Keys read from
+`sshAuthorizedKeysFiles` count only when the file holds at least one key line,
+so a file of comments does not satisfy the check; the
+`build --ssh-authorized-key USER=FILE` flag adds a key for one build.
+
+SSH keys are installed with the modes sshd requires: `~/.ssh` is `0700` and `authorized_keys` is `0600`, both
 owned by the user. Key-based login also needs `openssh-server` in
 `systemConfig.packages`; validation warns when it is missing.
 
@@ -1114,7 +1160,9 @@ systemConfig:
       sshAuthorizedKeysFiles:
         - keys/admin.pub
     - name: service-account
-      shell: /usr/sbin/nologin
+      shell: /usr/sbin/nologin       # no interactive login
+      sshAuthorizedKeysFiles:        # still needs a credential
+        - keys/service-account.pub
 ```
 
 #### `systemConfig.initramfs`
@@ -1155,6 +1203,16 @@ systemConfig:
 > immutable-image apt policy files, the cloud-init datasource file, the key-only
 > sudoers file, and the provisioning unit files and stamp directory.
 > `/etc/environment` is exempt because the proxy settings are merged into it.
+
+To use a different host file for one build, for example a vendor tarball that
+changes per build, pass `build --replace-additional-file FINAL=FILE`: it
+replaces the `local` file of the entry whose `final` is `FINAL`. It does not add
+entries, so the build fails when no entry has that `final` path or `FILE` is not
+an existing regular file. A replacement that ICT would later overwrite with a
+file it generates (an apt sources, preferences, or key file from
+`packageRepositories`) fails the build, and a replacement for the cloud-init
+`user-data` seed must start with a cloud-init header. See the
+[CLI reference](./image-composer-tool-cli-specification.md).
 
 > **Overlay mode:** `additionalFiles` are honored in overlay builds, and each
 > entry's copy timing is controlled by its `stage` marker:
@@ -1534,6 +1592,20 @@ kernel or kernel parameters on the branch still needs the template to change
 with it. For a release, pin `sbomUrl` to a commit or tag and set `sbomSha256`:
 the output then pins the CLI by commit and, with `cli-sha256`, by digest.
 
+### Fields ICT Writes
+
+Two top-level fields are in the schema so that a template ICT has written can
+be loaded again. Do not set them in a template you author.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `resolvedKernelPackages` | string[] | The concrete kernel packages a build resolved, kept so the ISO installer installs the same kernel |
+| `sbomPackageMetadata` | object[] | Per-package SBOM data (supplier, checksum, license, URL). An ISO build writes it to a `sbom-metadata.yaml` file next to `template-dump.yaml` (in the build directory and on the ISO), not into the dump; a template that carries the block inline, such as a dump from an earlier release, has it moved to that file |
+
+The live installer reads `sbom-metadata.yaml` to write the full SBOM of the
+system it installs, and falls back to an inline `sbomPackageMetadata` block, so
+an ISO built by an earlier release still works.
+
 ## Package Repositories
 
 Use `packageRepositories` to add extra Debian or RPM repositories to a build.
@@ -1586,6 +1658,7 @@ follow different strategies:
 
 | Section | Strategy |
 |---------|----------|
+| `metadata` | Not merged: the user template's own block, or none |
 | `image.name`, `image.version` | User overrides default if non-empty |
 | `target` | User value used entirely |
 | `disk` | User replaces entire default if non-empty |
@@ -1598,6 +1671,9 @@ follow different strategies:
 | `systemConfig.configurations` | **Additive** - user commands appended after defaults |
 | `systemConfig.immutability` | Merged only if user explicitly provides the section |
 | `systemConfig.fde` | Merged only if user explicitly provides the section |
+| `systemConfig.dkms` | Merged only if user explicitly provides the section (see [`systemConfig.dkms`](#systemconfigdkms)) |
+| `systemConfig.proxy`, `.cloudInit`, `.aptPolicy`, `.oepInstaller` | User section replaces the default's as a whole when provided |
+| `systemConfig.provisioning` | `scripts` merged by `name` (a same-name script replaces the inherited one as a whole); `beforeLogin` overrides when set |
 | `packageRepositories` | Merged by `codename` - same codename overrides; new repos appended |
 
 ## Template Extends (Inheritance)
@@ -1670,9 +1746,13 @@ full behavior across a chain:
 | `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
 | `systemConfig.kernel` | Per-field override: `version`, `cmdline`, `packages`, `enableExtraModules` |
-| `systemConfig.bootloader` | Per-field override: `bootType`, `provider` |
+| `systemConfig.bootloader` | Per-field override: `bootType`, `provider`, `bootEntryPolicy`, `timeoutSec` (a child's `timeoutSec: 0` overrides) |
 | `systemConfig.network` | Per-field: `backend` overrides if non-empty; `interfaces` replaced when the child provides them |
 | `systemConfig.immutability` | Merged only when the child provides some immutability configuration |
+| `systemConfig.fde`, `.dkms` | Taken from the child when it provides the section (`dkms` field rules in [`systemConfig.dkms`](#systemconfigdkms)) |
+| `systemConfig.proxy`, `.cloudInit`, `.aptPolicy`, `.oepInstaller` | Replaced as a whole by the child's section when it provides one |
+| `systemConfig.provisioning` | `scripts` accumulate; a child script with an inherited `name` replaces it as a whole. `beforeLogin` overrides when set |
+| `metadata` | **Not inherited**: each level has only the block it declares |
 | `packageRepositories` | Merged by `codename`: same codename overrides; new codenames appended |
 | `extends` | **Stripped from the final merged output** — it is a build-time directive, not part of the built template |
 

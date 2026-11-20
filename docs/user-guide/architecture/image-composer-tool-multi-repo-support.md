@@ -133,6 +133,9 @@ Notes:
 - Supported formats are `.deb`, `.rpm`, `.tar`, `.tar.gz`/`.tgz`, and `.zip`.
 - Archive entries are filtered to `.deb` (DEB repos) or `.rpm` (RPM repos) payloads during extraction.
 - `insecureSkipVerify` defaults to `false`; only set to `true` when necessary for untrusted certificates.
+- RPMs from a path-based repository are signature-checked like those from any
+  other repository, so an RPM path-based repository needs a `pkey`, or
+  `pkey: "[trusted=yes]"` to opt out of the check for that repository only.
 
 ## Package Conflict Priority Consideration
 
@@ -157,6 +160,13 @@ Debian resolver supports additional APT-like priority behavior:
 - `priority = 990`: prefer over default repos
 - `priority = 1000`: install even if version is lower
 - `priority > 1000`: force preference
+
+For a template with `systemConfig.oepInstaller`, the Debian resolver also
+applies the apt preferences in the OEP Installer's output, so it selects the
+same versions apt selects on the deployed system. As in apt, a preference
+naming a package (by name or glob) takes precedence over `Package: *`
+preferences, and a package no preference matches keeps its repository's
+`priority`. Only origin and version pins are accepted.
 
 ### Resolution Process
 

@@ -39,16 +39,21 @@ recommendation is to test the support for `RSA3072SHA384` before moving to
 ## Step 2: Configure Your Template
 
 Edit your ICT template YAML file to include the Secure Boot
-configuration:
+configuration in the `immutability` section under `systemConfig`:
 
 ```yaml
-# Add this section to your template
-immutability:
-  enabled: true
-  secureBootDBKey: "/data/secureboot/keys/DB.key"
-  secureBootDBCrt: "/data/secureboot/keys/DB.crt"
-  secureBootDBCer: "/data/secureboot/keys/DB.cer"
+systemConfig:
+  # ... other system configuration
+  immutability:
+    enabled: true
+    secureBootDBKey: "/data/secureboot/keys/DB.key"
+    secureBootDBCrt: "/data/secureboot/keys/DB.crt"
+    secureBootDBCer: "/data/secureboot/keys/DB.cer"
 ```
+
+The shipped `*-edge-raw.yml` templates, such as
+`image-templates/elxr12/elxr12-x86_64-edge-raw.yml`, already contain these
+three fields, commented out; uncomment them and set your paths.
 
 **Important:** Use absolute paths to your key files.
 

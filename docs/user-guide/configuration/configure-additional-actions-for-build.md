@@ -134,15 +134,27 @@ All commands are executed using `chroot` to the image root filesystem. This mean
 - Commands run as if the target system is the root filesystem
 - All paths are relative to the image being built
 - Standard system tools and shell are available
-- Network access is available (if needed for downloads)
+- Network access is available (if needed for downloads), through the build
+  host's network and its `http_proxy`/`https_proxy`/`no_proxy` environment, not
+  the `systemConfig.proxy` settings, which are written into the image after the
+  commands run
 
 ### Execution Order
 
 The build process follows this sequence:
 
 1. **Package Installation**: All packages listed in `packages` are installed
-2. **Custom Configurations**: Commands in `configurations` are executed sequentially
+2. **Files, users, and provisioning settings**: `additionalFiles` are copied,
+   `users` are created, and the `provisioning`, `cloudInit`, and `aptPolicy`
+   sections are applied, so a command can still adjust their result
+3. **Custom Configurations**: Commands in `configurations` are executed sequentially
+4. **Proxy**: The `systemConfig.proxy` settings are written into the image
 
+Commands from every layer of an `extends` chain run in chain order, parent
+first. Overlay builds (`baseline.mode: overlay`) also run `configurations`,
+after the overlay packages are installed, followed by the proxy settings.
+To run a script on the deployed system at boot instead of at build time, use
+[`systemConfig.provisioning`](../architecture/image-composer-tool-templates.md#systemconfigprovisioning).
 
 ## Best Practices
 

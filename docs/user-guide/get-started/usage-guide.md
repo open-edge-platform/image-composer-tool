@@ -6,8 +6,8 @@ command reference, see the
 
 ## Table of Contents
 
-  - [Binary Location](#binary-location)
   - [Debian Package CI](#debian-package-ci)
+  - [Binary Location](#binary-location)
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
@@ -46,7 +46,10 @@ The `ict` amd64 package includes the ICT CLI, live-installer, OS configurations
 under `/etc/image-composer-tool`, and upstream example templates. Configuration
 files are conffiles: removal retains local edits and purge deletes them.
 CI verifies installation, CLI version, configuration, removal, and purge in
-Ubuntu 24.04 and Debian 12 containers. It does not compose an OS image.
+Ubuntu 24.04 and 26.04 and Debian 12 and 13 containers, and checks on the same
+releases that [`install-ict.sh`](./installation.md#install-from-a-github-release-with-one-script)
+installs the package and the host tools a build uses. It does not compose an
+OS image.
 
 Scans include the shared workflow's Gitleaks, Trivy, Zizmor and Bandit checks,
 plus govulncheck and CodeQL's extended Go security queries. CodeQL analysis
@@ -58,8 +61,8 @@ ZIP archives; no external publishing is configured.
 
 Tags such as `ict-2026.3` produce version `2026.3`; `ict-2026.3-rc1` produces
 `2026.3~rc1` and a GitHub prerelease. The workflow must exist at the tagged
-commit. After all gates pass, a tag run uploads the `.deb`, SPDX SBOM and
-checksums to GitHub Releases. Release notes include package metadata, the
+commit. After all gates pass, a tag run uploads the `.deb`, `install-ict.sh`,
+SPDX SBOM and checksums to GitHub Releases. Release notes include package metadata, the
 source commit, an installation command, validation details, and a workflow
 report link. Release filenames replace `~` with `.`, while
 the version inside the package retains `~`. Reruns replace assets on the same
@@ -135,7 +138,7 @@ sudo -E ./image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.ym
 sudo -E ./build/image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Debian package — binary is on PATH
-sudo image-composer-tool build /usr/share/image-composer-tool/examples/azl3-x86_64-edge-raw.yml
+sudo image-composer-tool build /usr/share/image-composer-tool/examples/azl3/azl3-x86_64-edge-raw.yml
 
 # Override config settings with flags
 sudo -E ./image-composer-tool build --workers 16 --cache-dir /tmp/cache image-templates/azl3/azl3-x86_64-edge-raw.yml
@@ -147,12 +150,19 @@ sudo -E ./image-composer-tool build --no-cache image-templates/azl3/azl3-x86_64-
 sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
   --http-proxy http://proxy.example.com:3128 --ssh-authorized-key admin=$HOME/.ssh/id_ed25519.pub \
   image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
+
+# Supply a new host file for an additionalFiles entry for one build
+sudo -E ./image-composer-tool build \
+  --replace-additional-file /opt/vendor/driver.tar.gz=./driver-2.1.tar.gz my-template.yml
 ```
 
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`. Composition overrides: `--disk-strategy`,
 `--hostname`, `--http-proxy`, `--https-proxy`, `--ftp-proxy`,
-`--no-proxy`, `--ssh-authorized-key`. For `systemConfig.oepInstaller` files in a
+`--no-proxy`, `--ssh-authorized-key`, `--replace-additional-file`. The last
+replaces the host file of the `systemConfig.additionalFiles` entry installed at
+the given path; it does not add files, so the template must already list that
+destination. For `systemConfig.oepInstaller` files in a
 private repository, `--oep-installer-token-file FILE` reads the GitHub token
 for that build from `FILE`.
 See the full
@@ -181,7 +191,8 @@ configuration file.
 An ISO build also leaves the SPDX SBOM of the installed system
 (`spdx_manifest_*.json`), a composition manifest
 (`<image-name>-<version>.composition.json`), and the merged template
-(`template-dump.yaml`) in this directory. See the
+(`template-dump.yaml`) in this directory, with the per-package SBOM metadata
+the ISO's installer uses in `sbom-metadata.yaml` beside it. See the
 [Unattended ISO Installer Tutorial](./unattended-iso-provisioning.md).
 
 ## Building an Image in a Docker Container
@@ -335,7 +346,15 @@ Check a template for errors before starting a build:
 
 ```bash
 ./image-composer-tool validate image-templates/azl3/azl3-x86_64-edge-raw.yml
+
+# Validate the template as build merges it: its extends chain and, in create
+# mode, the OS defaults
+./image-composer-tool validate --merged image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
+
+`--merged` also fails when a user in `systemConfig.users` ends up with no
+usable credential: any user, other than one with a `startupScript`, that has
+neither a password nor an SSH authorized key.
 
 ## Resolving a Template
 

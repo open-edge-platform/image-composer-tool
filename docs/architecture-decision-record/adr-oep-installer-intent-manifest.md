@@ -292,3 +292,16 @@ separate decision.
 5. Verify that repeated package installation by `oep-installer` is a no-op on
    the composed image and that remaining first-boot content installs under the
   template-defined user with network connectivity.
+
+## Implementation Note
+
+As implemented, the dependency interface is the `openedge-cli list --sbom`
+command, which writes a versioned YAML stream rather than JSON. Its output
+depends on the host's OS and running kernel, so the OEP Installer publishes it
+for each supported configuration, and ICT downloads the published file named
+by `systemConfig.oepInstaller.sbomUrl` instead of running the query at build
+time. On first boot ICT runs `openedge-cli install` as
+`systemConfig.oepInstaller.user`. See
+[Interface Specification: OEP Installer → ICT Profile Package Requirements](./oep-installer-sbom-interface.md)
+and the
+[`systemConfig.oepInstaller` reference](../user-guide/architecture/image-composer-tool-templates.md#systemconfigoepinstaller).

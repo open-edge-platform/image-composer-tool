@@ -13,6 +13,7 @@ prerequisites.
   - [Install via Debian Package](#install-via-debian-package)
     - [Build the Debian Package](#build-the-debian-package)
     - [Install the Package](#install-the-package)
+    - [Install from a GitHub Release with One Script](#install-from-a-github-release-with-one-script)
     - [Verify Installation](#verify-installation)
     - [Package Contents](#package-contents)
     - [Package Dependencies](#package-dependencies)
@@ -29,7 +30,7 @@ prerequisites.
 
 - **OS**: Ubuntu 24.04 (recommended; other standard Linux distributions may
   work but are not validated)
-- **Go**: Version 1.24.0 or later — see
+- **Go**: Version 1.26.0 or later — see
   [Go installation instructions](https://go.dev/doc/manage-install)
 
 ## Development Build (Go)
@@ -90,7 +91,7 @@ works without them.
 
 | Requirement | What it provides | Install |
 |-------------|-----------------|---------|
-| Go 1.24+ with `gopls` | Go workspace tools (diagnostics, search, references) | VS Code Go extension installs `gopls` automatically |
+| Go 1.26+ with `gopls` | Go workspace tools (diagnostics, search, references) | VS Code Go extension installs `gopls` automatically |
 | Node.js 18+ with `npx` | GitHub, fetch, context7, sequential-thinking, memory servers | [nodejs.org](https://nodejs.org/) |
 | GitHub PAT (optional) | GitHub MCP server authentication | [Creating a PAT](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) |
 
@@ -117,16 +118,26 @@ package with proper package management.
 
 ### Build the Debian Package
 
-```bash
-# Build with default parameters (latest git tag, amd64)
-earthly +deb
+`scripts/build-deb.sh` builds the same package that each release publishes. It
+needs Go 1.26.1 or newer, `git` and `dpkg-deb`, but not Docker or Earthly:
 
-# Build with custom version
-earthly +deb --VERSION=1.2.0
+```bash
+# Build a snapshot version
+bash scripts/build-deb.sh
+
+# Build with a release version
+bash scripts/build-deb.sh --version 2026.3
 ```
 
-The package is created in the `dist/` directory as
-`ict_<VERSION>_<ARCH>.deb`.
+The package is created in the `dist/` directory as `ict_<VERSION>_amd64.deb`,
+next to its `SHA256SUMS`. `--output DIR` selects another directory. See
+[Debian Package CI](./usage-guide.md#debian-package-ci) for how releases build
+and test it.
+
+`earthly +deb` (`--VERSION=1.2.0` sets the version) also builds an `ict`
+package, but it installs its files under `/etc/ict` and `/usr/share/ict` rather
+than the paths in [Package Contents](#package-contents), and leaves out
+`live-installer`.
 
 ### Install the Package
 
@@ -139,7 +150,7 @@ Alternatively, using `dpkg`:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y bash coreutils unzip dosfstools xorriso grub-common
+sudo apt-get install -y bash ca-certificates coreutils unzip dosfstools xorriso grub-common
 sudo dpkg -i dist/ict_1.0.0_amd64.deb
 # Optional bootstrap tools:
 sudo apt-get install -y mmdebstrap || sudo apt-get install -y debootstrap
@@ -186,7 +197,7 @@ Ubuntu 24.04 or 26.04 or Debian 13 as the build host for them.
 ### Verify Installation
 
 ```bash
-dpkg -l | grep image-composer-tool
+dpkg -l ict
 image-composer-tool version
 ```
 
@@ -195,17 +206,18 @@ image-composer-tool version
 | Path | Description |
 |------|-------------|
 | `/usr/local/bin/image-composer-tool` | Main executable |
+| `/usr/local/bin/live-installer` | Installer that ISO images run |
 | `/etc/image-composer-tool/config.yml` | Global configuration |
 | `/etc/image-composer-tool/config/` | OS variant configuration files |
 | `/usr/share/image-composer-tool/examples/` | Sample image templates |
-| `/usr/share/doc/image-composer-tool/` | README, LICENSE, CLI specification |
+| `/usr/share/doc/ict/` | README, LICENSE, CLI specification, build information |
 | `/var/cache/image-composer-tool/` | Package cache storage |
 
 ### Package Dependencies
 
 **Required:**
 
-- `bash`, `coreutils`, `unzip`, `dosfstools`, `xorriso`, `grub-common`
+- `bash`, `ca-certificates`, `coreutils`, `unzip`, `dosfstools`, `xorriso`, `grub-common`
 
 **Recommended (installed if available):**
 
@@ -220,10 +232,10 @@ image-composer-tool version
 
 ```bash
 # Remove package (keeps config files)
-sudo dpkg -r image-composer-tool
+sudo dpkg -r ict
 
 # Remove package and config files
-sudo dpkg --purge image-composer-tool
+sudo dpkg --purge ict
 ```
 
 ## Image Composition Prerequisites

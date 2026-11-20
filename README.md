@@ -37,7 +37,7 @@ combinations. The table below lists the OS and architecture combinations that ar
 
 ### 1. Build the Tool
 
-Requires Go 1.24+.
+Requires Go 1.26+.
 Recommended Ubuntu 24.04
 
 ```bash
@@ -56,7 +56,9 @@ earthly +build
 ```
 
 See the [Installation Guide](./docs/user-guide/get-started/installation.md) for Debian
-package installation, prerequisite setup, and other options.
+package installation, prerequisite setup, and other options. To install a
+released package together with the host tools a build uses, download
+`install-ict.sh` from the GitHub release and run `bash install-ict.sh --tag <tag>`.
 
 ### 2. Install Prerequisites
 

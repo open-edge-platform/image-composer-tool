@@ -214,6 +214,10 @@ of the system the ISO installs (`spdx_manifest_*.json`), a composition manifest
 (`<image-name>-<version>.composition.json`) listing the base OS, repositories,
 packages with versions, kernel, and every additional file with its SHA-256, and
 the merged template (`template-dump.yaml`), all in the build output directory.
+The per-package SBOM metadata (supplier, checksum, license, URL) that the ISO's
+installer uses to write the installed system's SBOM is in
+`sbom-metadata.yaml` beside `template-dump.yaml`, both in the build output
+directory and on the ISO, so `template-dump.yaml` is a plain template.
 
 **Note:** The build command typically requires sudo privileges for operations like creating loopback devices and mounting filesystems.
 
@@ -1025,7 +1029,8 @@ logging:
 | `config_dir` | string | Directory for configuration files. Default: "./config" |
 | `temp_dir` | string | Temporary directory. Default: system temp directory |
 | `logging.level` | string | Log level (debug/info/warn/error). Default: "info" |
-| `oep_installer.token_file` | string | File holding a GitHub token with read access, for templates whose `systemConfig.oepInstaller` files are in a private repository. The `ICT_OEP_INSTALLER_TOKEN` and `ICT_OEP_INSTALLER_TOKEN_FILE` environment variables take precedence. Keep the file owned by root with mode 0600. Not set by default |
+| `logging.file` | string | File the log is also written to (`--log-file` overrides it). Not set by default |
+| `oep_installer.token_file` | string | File holding a GitHub token with read access, for templates whose `systemConfig.oepInstaller` files are in a private repository. `build --oep-installer-token-file` and the `ICT_OEP_INSTALLER_TOKEN` and `ICT_OEP_INSTALLER_TOKEN_FILE` environment variables take precedence. Keep the file owned by root with mode 0600. Not set by default |
 
 ### Image Template File
 

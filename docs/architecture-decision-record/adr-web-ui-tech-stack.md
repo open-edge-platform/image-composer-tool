@@ -43,6 +43,18 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 | **Advanced** | `<AdvancedPage>` | Step wizard. MVP-1 steps: Target (same as Basic + Image Type/Name), Packages (repos + search/add), Disk (size/partitions), Review (summary + Validate + Export YAML + Build). Live YAML preview panel on right. More steps may be added later. |
 | **Build Image** | `<BuildImagePage>` | Streaming log viewer (SSE) with "Build Status" title, artifacts table (Image + SBOM with copy-path icon) |
 
+> **Implementation note (2026.3).** The shipped UI departs from the prototype
+> in these user-visible ways: the third tab is **Compose Image**, with a
+> paged **History** list; the Basic tab's first dropdown is **Use Case** and
+> its **Image Configuration** summary shows without a review checkbox; the
+> Advanced tab builds an `extends` delta over the matched template rather than
+> a complete edited YAML (see
+> [ADR: Advanced Mode Builds via a Generated `extends` Delta](adr-web-ui-advanced-mode-extends.md)),
+> and its Review step has no **Validate** button or live YAML preview; the
+> Artifacts table has **Artifact**, **Name**, and **Size** columns, each name
+> being its download link with the on-disk path in its tooltip (#1147), and
+> the build's template is downloaded from **Compose details** (#1074).
+
 ### Constraints
 
 - **Single binary deployment**: The compiled React frontend (static HTML/JS/CSS from `web/dist/`) is embedded into the Go binary via `embed.FS` and served by the same process that serves the API. Shipping and running ICT means shipping and running one executable — no separate web server, container, or Node.js runtime is required at deploy time.
