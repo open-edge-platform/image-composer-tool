@@ -38,8 +38,8 @@ export function AdvancedModeSwitch() {
       </div>
       {mode === 'author' && (
         <p className="text-xs text-slate-500">
-          Author mode edits the whole template. Opening and saving templates is coming
-          soon; until then, your changes build the same way as in Customize.
+          Author mode edits the whole template: you can also remove its packages, and
+          save it to your machine from the Review step.
         </p>
       )}
     </div>

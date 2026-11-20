@@ -29,11 +29,11 @@ const repos: PackageRepo[] = [
   { id: 'intel-eci', displayName: 'Intel ECI', url: 'http://example/eci', enabledByDefault: false },
 ]
 
-function Browser({ os = 'ubuntu24', baseLock = noLock }: { os?: string; baseLock?: BaseLock }) {
+function Browser({ os = 'ubuntu24', baseLock = noLock, authoring = false }: { os?: string; baseLock?: BaseLock; authoring?: boolean }) {
   const enabledRepos = useStore((s) => s.enabledRepos)
   const enabledRepoIds = repos.filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
   const resolver = useVersionResolver(os, enabledRepoIds)
-  return <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} resolver={resolver} />
+  return <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} resolver={resolver} authoring={authoring} />
 }
 
 // A template listing vim unpinned and curl pinned to an older version than
@@ -294,6 +294,26 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
       render(<Browser baseLock={baseLock} />)
     })
   }
+
+  it('leaves a template package removed in Author mode removed, and out of the count', async () => {
+    mockApi.lookupPackages.mockResolvedValue({
+      packages: [versioned('vim', '2:9.1.0016-1'), versioned('curl', '8.5.0-2', '8.4.0-1')],
+      unavailableRepos: [],
+    })
+    useStore.setState({ removedPackages: ['vim'] })
+    try {
+      await act(async () => {
+        render(<Browser baseLock={templateLock({ curl: '8.4.0-1' }, ['vim'])} authoring />)
+      })
+      expect(pinButton().textContent).toBe('Update to latest version (1)')
+      await act(async () => fireEvent.click(pinButton()))
+
+      expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['curl'])
+      expect(useStore.getState().removedPackages).toEqual(['vim'])
+    } finally {
+      useStore.setState({ removedPackages: [] })
+    }
+  })
 
   it('counts and pins the template packages too, as overrides', async () => {
     mockApi.lookupPackages.mockResolvedValue({

@@ -466,6 +466,7 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		DeltaYaml: optStr(r.DeltaYAML),
 		BaseYaml:  optStr(r.BaseYAML),
 	}
+	out.TemplateYaml = optStr(r.TemplateYAML)
 	if len(r.BasePackages) > 0 {
 		basePackages := r.BasePackages
 		out.BasePackages = &basePackages

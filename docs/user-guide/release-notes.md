@@ -16,7 +16,24 @@
   It is off by default; turn it on with `image-composer-tool serve
   --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose. The UI
   asks the new `GET /api/v1/session` endpoint whether it is allowed. When it
-  is, Advanced starts in Author mode. Author mode is a placeholder for now; opening, editing and saving whole templates follow.
+  is, Advanced starts in Author mode.
+- **Author mode edits the template itself.** Template packages can be removed
+  (uncheck them in the repository browser), given another version, or
+  unpinned (choose the selected version chip again; choosing the template's
+  own pin chip puts the pin back). **Update to latest version** leaves removed
+  packages removed. New packages, the image name and the disk layout go into
+  the template too. The Review step shows the whole edited template, with **Save Template** and
+  **Save As…** to keep it on your machine. Only the lines you changed differ
+  from the original; comments and formatting stay as written. Chrome and Edge
+  save in place; other browsers download a copy. Templates that use `extends`
+  can't be edited in Author mode yet, and building an edited template comes
+  next.
+- **Changed**: the Advanced tab's **Selected** panel is now **Changes**. It
+  lists how your packages differ from the template under **Added**,
+  **Modified** (a template package given another version, shown as
+  *old → new*) and, in Author mode, **Removed**. Each can be undone on its
+  own. **Clear** is now **Reset to template defaults**, styled like the Disk
+  step's, and also puts back removed packages.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time
