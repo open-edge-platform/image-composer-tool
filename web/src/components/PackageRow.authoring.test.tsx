@@ -52,14 +52,45 @@ describe('PackageRow in Author mode', () => {
     expect(onToggle).toHaveBeenCalledWith(true)
   })
 
-  it('reverts a version change without removing the package', () => {
+  it("unpins a template-pinned package when its pinned chip is chosen", () => {
+    const { onChooseVersion } = renderRow({ removable: true })
+    const chip = screen.getByRole('button', { name: '2:9.1' }) as HTMLButtonElement
+    expect(chip.disabled).toBe(false)
+    expect(chip.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(chip)
+    expect(onChooseVersion).toHaveBeenCalledWith({ version: '', repository: 'base' })
+  })
+
+  it('keeps the template pin chip inert outside Author mode', () => {
+    const { onChooseVersion } = renderRow({})
+    const chip = screen.getByRole('button', { name: '2:9.1' }) as HTMLButtonElement
+    expect(chip.disabled).toBe(true)
+    fireEvent.click(chip)
+    expect(onChooseVersion).not.toHaveBeenCalled()
+  })
+
+  it('unpins a template package from a version you chose, rather than going back to the pin', () => {
     const onRevert = vi.fn()
-    const { onToggle } = renderRow({
+    // The template pins 2:9.1; choosing your 2:9.2 again leaves it unpinned.
+    const { onChooseVersion, onToggle } = renderRow({
       removable: true,
       selection: { name: 'vim', version: '2:9.2', repo: 'base' },
       onRevert,
     })
     fireEvent.click(screen.getByRole('button', { name: '2:9.2' }))
+    expect(onChooseVersion).toHaveBeenCalledWith({ version: '', repository: 'base' })
+    expect(onRevert).not.toHaveBeenCalled()
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it("goes back to the template's pin from its chip without removing the package", () => {
+    const onRevert = vi.fn()
+    const { onToggle } = renderRow({
+      removable: true,
+      selection: { name: 'vim', version: '', repo: 'base' },
+      onRevert,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '2:9.1' }))
     expect(onRevert).toHaveBeenCalled()
     expect(onToggle).not.toHaveBeenCalled()
   })
