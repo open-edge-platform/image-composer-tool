@@ -199,7 +199,9 @@ The OS image and its SBOM land in `./out/<system-config-name>/`, owned by you.
 The container runs privileged with the host's `/dev` mounted, so it is
 root-equivalent on the host. The
 [CLI Quick Start (Docker)](./cli-docker-quick-start.md) covers writing a
-template, the mounts, and every option of the script.
+template, the mounts, and every option of the script. To use a prebuilt
+container image without a checkout, see the
+[CLI Quick Start (Prebuilt Container Image)](./cli-prebuilt-image-quick-start.md).
 
 The script wraps one `docker run`, which runs
 `/opt/ict/scripts/container-build.sh` inside the container. To run that
