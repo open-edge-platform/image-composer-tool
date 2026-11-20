@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, skuLabelFor } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
@@ -94,6 +95,8 @@ export function BasicPage({
   }, [active, complete, selection])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
+  const skuLabel = skuLabelFor(manifest, selection.vertical)
+  const platformFirst = cascadeOrder(manifest, selection.vertical)[1] === 'platform'
 
   const requirements = review?.credentials ?? []
   // The backend rejects a build whose template leaves an account without a
@@ -149,8 +152,8 @@ export function BasicPage({
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed. Fields marked{' '}
+        Select a Use Case to load the default configuration. The remaining
+        selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
@@ -168,24 +171,14 @@ export function BasicPage({
               options={opts.verticals}
               onChange={(v) => setSel('vertical', v)}
             />
-            <Select
-              label="SKU"
-              // SKU is optional where the manifest offers none for this use case.
-              labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-              placeholder="-- Select SKU --"
-              value={selection.sku}
-              options={opts.skus}
-              disabled={!selection.vertical}
-              onChange={(v) => setSel('sku', v)}
-            />
-            <Select
-              label="Platform"
-              labelSuffix={REQUIRED}
-              placeholder="-- Select Platform --"
-              value={selection.platform}
-              options={opts.platforms}
-              disabled={!selection.sku && opts.skus.length > 0}
-              onChange={(v) => setSel('platform', v)}
+            <SkuPlatformSelects
+              skus={opts.skus}
+              platforms={opts.platforms}
+              selection={selection}
+              setSel={setSel}
+              skuLabel={skuLabel}
+              platformFirst={platformFirst}
+              required={REQUIRED}
             />
             <Select
               label="Operating System"

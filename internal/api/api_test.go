@@ -76,7 +76,8 @@ func newTestServerWithICT(t *testing.T, ictScript string) (*Server, string) {
   - {vertical: robotics, sku: amr, platform: wcl, os: ubuntu24, imageType: iso, template: robotics.yml}
   - {vertical: retail, sku: dv, platform: arl, os: debian13, imageType: iso, template: retail.yml}
 verticals:
-  - {id: robotics, displayName: Robotics}
+  - {id: robotics, displayName: Robotics, skuLabel: Robot Kit}
+  - {id: retail, displayName: Retail}
 platforms:
   - {id: wcl, displayName: WCL}
 targets:
@@ -147,6 +148,14 @@ func TestHandleGetManifest(t *testing.T) {
 	// Wire-format check: optional sku present, required camelCase fields.
 	if m.Combinations[0].Sku == nil || *m.Combinations[0].Sku != "amr" {
 		t.Errorf("combination sku not serialized: %+v", m.Combinations[0])
+	}
+	// skuLabel is carried when a use case sets it and omitted when it doesn't,
+	// so the UI falls back to "SKU".
+	if l := m.Verticals[0].SkuLabel; l == nil || *l != "Robot Kit" {
+		t.Errorf("vertical skuLabel = %v, want Robot Kit", l)
+	}
+	if strings.Contains(rr.Body.String(), `"skuLabel":""`) || m.Verticals[1].SkuLabel != nil {
+		t.Errorf("unset skuLabel should be omitted: %s", rr.Body)
 	}
 }
 
