@@ -250,42 +250,67 @@ describe('BuildView artifacts table layout', () => {
     logFileText.mockResolvedValue('')
   })
 
-  it('is headed Artifacts, with Artifact, Name, Size, Location and Actions columns', async () => {
+  it('is headed Artifacts, with Artifact, Name and Size columns', async () => {
     await renderBuildView(false)
     await screen.findByText(IMAGE_ARTIFACT.name)
 
     expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy()
     expect(
       screen.getAllByRole('columnheader').map((h) => h.textContent?.trim()),
-    ).toEqual(['Artifact', 'Name', 'Size', 'Location', 'Actions'])
+    ).toEqual(['Artifact', 'Name', 'Size'])
   })
 
-  it('shows each row as kind, file name, size, location, then the download', async () => {
+  it('shows each row as kind, file name, then size', async () => {
     await renderBuildView(false)
     await screen.findByText(IMAGE_ARTIFACT.name)
 
-    expect(cellsOf(IMAGE_ARTIFACT.name)).toEqual([
-      'Image',
-      IMAGE_ARTIFACT.name,
-      IMAGE_ARTIFACT.size,
-      IMAGE_ARTIFACT.path,
-      '',
-    ])
+    expect(cellsOf(IMAGE_ARTIFACT.name)).toEqual(['Image', IMAGE_ARTIFACT.name, IMAGE_ARTIFACT.size])
     expect(cellsOf(SBOM_ARTIFACT.name)).toEqual([
       'Bill of Materials',
       SBOM_ARTIFACT.name,
       SBOM_ARTIFACT.size,
-      SBOM_ARTIFACT.path,
-      '',
     ])
+    // The on-disk path is no longer printed in the table.
+    expect(screen.queryByText(IMAGE_ARTIFACT.path)).toBeNull()
   })
 
-  it('is headed Partial artifacts after a failed build', async () => {
+  it('makes each file name its own download link', async () => {
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    for (const a of [IMAGE_ARTIFACT, SBOM_ARTIFACT]) {
+      const row = screen.getByText(a.name).closest('tr')!
+      const link = within(row).getByRole('link') as HTMLAnchorElement
+      // A screen reader announces the link by the file name alone: the
+      // download tile in front of it is decoration.
+      expect(link.textContent).toBe(a.name)
+      expect(link.querySelector('[aria-hidden="true"] svg')).not.toBeNull()
+      expect(link.getAttribute('href')).toBe(`/api/v1/builds/abc/artifacts/${encodeURIComponent(a.name)}`)
+      expect(link.getAttribute('download')).toBe(a.name)
+      // The path the Location column used to show moved to the tooltip.
+      expect(link.getAttribute('title')).toBe(`Download ${a.name}\nOn disk: ${a.path}`)
+    }
+  })
+
+  it('still links a file whose path was not recorded, without an on-disk line', async () => {
+    buildArtifacts.mockResolvedValue([{ ...IMAGE_ARTIFACT, path: '' }])
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    const link = within(screen.getByText(IMAGE_ARTIFACT.name).closest('tr')!).getByRole('link')
+    expect(link.getAttribute('title')).toBe(`Download ${IMAGE_ARTIFACT.name}`)
+  })
+
+  it('is headed Partial artifacts after a failed build, with the same columns', async () => {
     buildDetails.mockResolvedValue({ ...DETAILS, status: 'failed', errMsg: 'boom' })
     await renderBuildView(false)
     await screen.findByText(IMAGE_ARTIFACT.name)
 
     expect(screen.getByRole('heading', { name: 'Partial artifacts' })).toBeTruthy()
+    expect(screen.getByText(/Click a name to download it, or hover over it to see where it is on disk\./)).toBeTruthy()
+    expect(
+      screen.getAllByRole('columnheader').map((h) => h.textContent?.trim()),
+    ).toEqual(['Artifact', 'Name', 'Size'])
   })
 })
 
