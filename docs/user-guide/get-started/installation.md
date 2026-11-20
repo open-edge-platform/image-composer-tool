@@ -171,7 +171,7 @@ works.
 
 | Option | Description |
 | --- | --- |
-| `--tag TAG` | Download the release asset for `TAG` and verify its SHA-256. Set `GITHUB_TOKEN` to avoid API rate limits or to read a private repository. |
+| `--tag TAG` | Download the release asset for `TAG` and verify its SHA-256. The package may be named `ict_<version>_amd64.deb` or `image-composer-tool_<version>_amd64.deb`. Set `GITHUB_TOKEN` to avoid API rate limits or to read a private repository. To download from another repository's release (a fork or an internal copy), set `ICT_GITHUB_REPOSITORY=OWNER/REPO`. |
 | `--deb FILE` | Install a local `.deb`. |
 | `--with-cross-arch` | Also install user-mode QEMU for builds that target another CPU architecture (`qemu-user-static`, or `qemu-user-binfmt` on Ubuntu 26.04). |
 | `--skip-prerequisites` | Install only the package and what apt requires for it. |
