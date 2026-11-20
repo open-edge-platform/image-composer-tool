@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useStore, cascadingOptions, encodePackage } from '../store'
 import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import type { Selection } from '../store'
@@ -22,8 +22,8 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
-import { applyAuthorEdits, authoringProblem } from '../lib/authorTemplate'
-import type { SavedFile } from '../lib/saveFile'
+import { applyAuthorEdits, authoringProblem, basedOnOf } from '../lib/authorTemplate'
+import { openFile, type SavedFile } from '../lib/saveFile'
 import { AuthorReview } from './AuthorReview'
 import { parse as parseYaml } from 'yaml'
 import { useBaseLock } from '../lib/baseLock'
@@ -133,6 +133,21 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   )
 
   const complete = !!opts?.matched
+
+  // A template the user opened from their machine in Author mode, used in
+  // place of the use case's own template. It stays in use only while the
+  // selection still resolves to the template it was opened against.
+  const selectCombination = useStore((s) => s.selectCombination)
+  const [opened, setOpened] = useState<{ template: string; text: string; name: string } | null>(null)
+  const [openMessage, setOpenMessage] = useState<{ error: boolean; text: string } | null>(null)
+  const matchedTemplate = opts?.matched?.template
+  const openedActive = advancedMode === 'author' && !!opened && opened.template === matchedTemplate
+  useEffect(() => {
+    if (opened && matchedTemplate && opened.template !== matchedTemplate) {
+      setOpened(null)
+      setOpenMessage(null)
+    }
+  }, [opened, matchedTemplate])
 
   // Every field the Target step requires, by label, that is still empty. SKU and
   // Kernel only count when the cascade offers them — the selectors are hidden
@@ -257,6 +272,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     () => ({
       ...selection,
       imageName: imageNameEdited ? debouncedImageName : undefined,
+      templateYaml: openedActive ? opened?.text : undefined,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
@@ -266,7 +282,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
     }),
     [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
-      debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
+      debouncedDiskKey, debouncedCredentials, debouncedNewUsers, openedActive, opened?.text],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -470,7 +486,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const authoring = author && !!composed?.templateYaml && !authorProblem
   // The file saved last, kept while the same template stays selected.
   const [authorSaved, setAuthorSaved] = useState<{ template: string; file: SavedFile; text: string } | null>(null)
-  const authorEdit = useMemo((): { text: string } | { error: string } | null => {
+  const authorEdit = useMemo((): { text: string; baseline: string } | { error: string } | null => {
     if (!authoring || !composed?.templateYaml) return null
     try {
       // The repositories new packages need come from the generated delta,
@@ -482,12 +498,102 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         imageName: imageNameEdited ? imageName : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
         repos: delta?.packageRepositories,
+        basedOn: composed.template,
       })
-      return { text }
+      // The template as it would save with no changes, recording basedOn, so
+      // that alone doesn't count as a change.
+      const baseline = applyAuthorEdits(composed.templateYaml, { packages: [], removed: [], basedOn: composed.template })
+      return { text, baseline }
     } catch (e) {
       return { error: (e as Error).message }
     }
   }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, diskEdited, disk, overlay])
+
+  // Opens a template from the user's machine. Its metadata.basedOn names the
+  // template it was authored from, which selects the matching use case; a
+  // template without one is opened against the current selection.
+  const onOpenTemplate = async () => {
+    setOpenMessage(null)
+    let result
+    try {
+      result = await openFile()
+    } catch (e) {
+      setOpenMessage({ error: true, text: `Could not open the file: ${(e as Error).message}` })
+      return
+    }
+    if (!result || !manifest) return
+    const problem = authoringProblem(result.text)
+    if (problem) {
+      setOpenMessage({ error: true, text: problem })
+      return
+    }
+    const based = basedOnOf(result.text)
+    const combos = manifest.combinations.filter((c) => c.template.trim() !== '' && c.template === based)
+    // Several combinations can share one template (one per platform, say):
+    // keep the current one if it is among them.
+    const current = opts?.matched
+    const combo = combos.find((c) => c === current) ?? combos[0] ?? current
+    if (!combo) {
+      setOpenMessage({
+        error: true,
+        text: "This template doesn't record which use case it belongs to. Choose the use case first, then open it again.",
+      })
+      return
+    }
+    if (combos.length === 0) {
+      setOpenMessage({
+        error: false,
+        text: based
+          ? `It is based on ${based}, which no use case here offers, so it was opened for the current selection.`
+          : "It doesn't record which use case it belongs to, so it was opened for the current selection. Saving records it.",
+      })
+    }
+    // A fresh start from the opened file: no changes carried over.
+    selectCombination(combo)
+    useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [] })
+    setOpened({ template: combo.template, text: result.text, name: result.file.name })
+    setAuthorSaved({ template: combo.template, file: result.file, text: result.text })
+    setStep(0)
+  }
+
+  const openTemplateBar: ReactNode =
+    advancedMode === 'author' ? (
+      <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void onOpenTemplate()}
+            className="rounded-md border border-slate-300 bg-white px-4 py-1.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+          >
+            Open Template…
+          </button>
+          {openedActive && opened ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white py-0.5 pl-3 pr-1 text-slate-700">
+              Editing <span className="font-semibold">{opened.name}</span>
+              {/* Closing goes back to the use case's own template. */}
+              <button
+                type="button"
+                aria-label={`Close ${opened.name}`}
+                title="Close this template and start from the use case's template"
+                onClick={() => {
+                  setOpened(null)
+                  setOpenMessage(null)
+                  if (opts?.matched) selectCombination(opts.matched)
+                }}
+                className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-red-600"
+              >
+                ×
+              </button>
+            </span>
+          ) : (
+            <span className="text-slate-500">Open a template you saved, or start from a use case below.</span>
+          )}
+        </div>
+        {openMessage && (
+          <p className={'mt-2 text-xs ' + (openMessage.error ? 'text-red-700' : 'text-amber-700')}>{openMessage.text}</p>
+        )}
+      </div>
+    ) : null
 
   const exportYaml = () => {
     if (!composed || !deltaYaml) return
@@ -563,6 +669,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         {step === 0 && (
           <TargetStep
             opts={opts}
+            header={openTemplateBar}
             selection={selection}
             setSel={setSel}
             imageName={imageName}
@@ -607,7 +714,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   <AuthorReview
                     templateName={composed.template}
                     text={authorEdit.text}
-                    original={composed.templateYaml ?? ''}
+                    original={authorEdit.baseline}
                     removed={removedPackages}
                     saved={authorSaved?.template === composed.template ? authorSaved : null}
                     onSaved={(s) => setAuthorSaved({ template: composed.template, ...s })}
@@ -759,12 +866,15 @@ const REQUIRED = <span className="text-red-600"> *</span>
 // Basic tab), plus the editable Image Name override.
 function TargetStep({
   opts,
+  header,
   selection,
   setSel,
   imageName,
   setImageName,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
+  // Shown above the selection, such as Author mode's Open Template.
+  header?: ReactNode
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
@@ -778,6 +888,8 @@ function TargetStep({
         Operating System selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
+
+      {header}
 
       <Select
         label="Use Case"

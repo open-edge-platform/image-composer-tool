@@ -473,3 +473,51 @@ func TestComposeTemplateYAMLOnlyWhenAuthoring(t *testing.T) {
 		t.Errorf("TemplateYAML = %q, want the file as written", res.TemplateYAML)
 	}
 }
+
+func TestComposeOpenedTemplate(t *testing.T) {
+	s := newTestService(t)
+	sel := Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
+	opened := strings.Replace(minimalTemplate, "name: test-image", "name: opened-image", 1) + "# my edits\n"
+	if opened == minimalTemplate+"# my edits\n" {
+		t.Fatal("test template has no image name to change")
+	}
+	sel.TemplateYAML = opened
+
+	if _, err := s.Compose(sel); err == nil || !strings.Contains(err.Error(), "authoring") {
+		t.Fatalf("Compose without the authoring capability: err = %v, want it refused", err)
+	}
+
+	s.cfg.Authoring = true
+	res, err := s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if res.Template != "robotics.yml" {
+		t.Errorf("Template = %q, want the matched curated template", res.Template)
+	}
+	if res.TemplateYAML != opened {
+		t.Errorf("TemplateYAML = %q, want the opened text", res.TemplateYAML)
+	}
+	if res.Summary.ImageName != "opened-image" {
+		t.Errorf("summary image name = %q, want the opened template's", res.Summary.ImageName)
+	}
+
+	// Overrides apply on top of the opened template.
+	sel.Packages = []string{"htop"}
+	res, err = s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose with a package: %v", err)
+	}
+	if !strings.Contains(res.YAML, "htop") || !strings.Contains(res.YAML, "opened-image") {
+		t.Errorf("resolved YAML lacks the opened template or the override:\n%s", res.YAML)
+	}
+	assertNoLeakedDeltas(t, s.cfg.TemplatesDir)
+	if leftovers, _ := filepath.Glob(filepath.Join(s.cfg.TemplatesDir, ".ict-open-*")); len(leftovers) > 0 {
+		t.Errorf("opened template files left behind: %v", leftovers)
+	}
+
+	sel.TemplateYAML = "extends: robotics.yml\n"
+	if _, err := s.Compose(sel); err == nil || !strings.Contains(err.Error(), "extends") {
+		t.Errorf("Compose of a template with extends: err = %v, want it refused", err)
+	}
+}

@@ -26,6 +26,12 @@ type Selection struct {
 	OS        string
 	ImageType string
 
+	// TemplateYAML is a template the user opened in Author mode, used in place
+	// of the matched template's own file. Empty means use the matched file.
+	// Lookup-neutral: the selection still picks the curated template, which
+	// the opened one is written beside so its relative paths resolve alike.
+	TemplateYAML string
+
 	// ImageName overrides the matched template's image.name. Empty means
 	// "not overridden".
 	ImageName string
@@ -531,10 +537,22 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		sel.NewUsers = created
 	}
 
+	// parentTmpl is what a generated delta extends: the matched template, or
+	// the template the user opened, written beside it.
+	parentTmpl := tmpl
+	if sel.TemplateYAML != "" {
+		opened, openedTmpl, cleanup, oerr := s.openTemplate(tmpl, path, sel.TemplateYAML)
+		if oerr != nil {
+			return nil, oerr
+		}
+		defer cleanup()
+		path, parentTmpl = opened, openedTmpl
+	}
+
 	resolvePath := path
 	var deltaYAML string
 	if sel.hasOverrides() {
-		deltaPath, data, cleanup, derr := s.deltaForOverride(tmpl, path, sel)
+		deltaPath, data, cleanup, derr := s.deltaForOverride(parentTmpl, path, sel)
 		if derr != nil {
 			return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID", derr.Error())
 		}

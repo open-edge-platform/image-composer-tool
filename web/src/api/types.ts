@@ -58,6 +58,9 @@ export interface ComposeRequest {
   os: string
   kernel?: string
   imageType: string
+  // A template opened in Author mode, used in place of the matched template's
+  // own file. Omitted means use the matched file.
+  templateYaml?: string
   // Advanced-mode override for the matched template's image.name. Omitted (not
   // just empty) means "not overridden" — the backend resolves the curated
   // template directly rather than generating an override delta for it.
