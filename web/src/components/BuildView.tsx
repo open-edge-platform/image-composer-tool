@@ -243,7 +243,6 @@ export function BuildView({
   }, [logs])
 
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
-  const copyPath = (path: string) => navigator.clipboard.writeText(path)
 
   // Only the tail of a long log is kept in the DOM. Keys stay absolute to the
   // full log rather than relative to the window, so appending a burst adds and
@@ -542,50 +541,47 @@ export function BuildView({
           {(status === 'failed' || status === 'cancelled') && (
             <p className="mb-2 text-xs text-slate-500">
               These outputs were left on disk when the compose stopped early — they
-              are incomplete. Their on-disk location is shown below.
+              are incomplete. Click a name to download it, or hover over it to see
+              where it is on disk.
             </p>
           )}
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="bg-[#e6f2fa] text-left">
                 <th className="px-3 py-2">Artifact</th>
-                <th className="px-3 py-2">Name</th>
+                {/* Indented by the width of each link's download tile plus the
+                    gap after it, so the heading sits over the file names. */}
+                <th className="py-2 pr-3 pl-13">Name</th>
                 <th className="px-3 py-2">Size</th>
-                <th className="px-3 py-2">Location</th>
-                <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {artifacts.map((a) => (
                 <tr key={a.path} className="border-b border-slate-200">
                   <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-700">{artifactKindLabel(a.type)}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
-                  <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                   <td className="px-3 py-2">
-                    {/* Click location (or hover copy icon) to copy to clipboard */}
-                    {a.path ? (
-                      <button
-                        className="group flex max-w-full items-center gap-1.5 text-left font-mono text-xs text-slate-500 hover:text-slate-800"
-                        title="Click to copy location"
-                        onClick={() => copyPath(a.path as string)}
-                      >
-                        <span className="break-all">{a.path}</span>
-                        <CopyIcon className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-100" />
-                      </button>
-                    ) : (
-                      <span className="font-mono text-xs text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right">
+                    {/* The name is the download link. The tile marks it as one at
+                        a glance, with no underline running under a long file
+                        name; hovering either part fills the tile and underlines
+                        the name. The on-disk path is in the tooltip. */}
                     <a
-                      className="inline-flex rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      title="Download artifact"
+                      className="group inline-flex max-w-full items-center gap-3 rounded-md font-medium text-[#0071c5] transition-colors outline-none hover:text-[#00285a] focus-visible:ring-2 focus-visible:ring-[#0071c5] focus-visible:ring-offset-2"
+                      title={a.path ? `Download ${a.name}\nOn disk: ${a.path}` : `Download ${a.name}`}
                       href={`/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`}
                       download={a.name}
                     >
-                      <DownloadIcon className="h-4 w-4" />
+                      <span
+                        aria-hidden="true"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#e6f2fa] text-[#0071c5] transition-colors group-hover:bg-[#0071c5] group-hover:text-white group-active:bg-[#005a9e]"
+                      >
+                        <DownloadIcon className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 decoration-[#00285a]/40 underline-offset-[3px] [overflow-wrap:anywhere] group-hover:underline">
+                        {a.name}
+                      </span>
                     </a>
                   </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                 </tr>
               ))}
             </tbody>
