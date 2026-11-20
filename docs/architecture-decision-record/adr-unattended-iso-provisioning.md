@@ -74,7 +74,10 @@ Each script gets one oneshot unit, ordered after `network-online.target`,
 after `cloud-final.service` (ignored by systemd when cloud-init is not
 installed, so scripts can rely on what cloud-init applies), and after the
 previous script. First-boot scripts use a stamp file written only on
-success, so a failed script is retried on the next boot.
+success, so a failed script is retried on the next boot. (Later addition: a
+script with `stopOnFailure` is instead held until an administrator runs
+`ict-provision-report retry` or `done`, and a failed script is reported at the
+login prompt and in the message of the day.)
 
 The script units are in no target's wants directory. `multi-user.target` is
 implicitly ordered after every unit it wants, and cloud-init's
@@ -183,8 +186,10 @@ the ISO, and no file mode protects every copy.
   without an `aptPolicy` section.
 - Build commands now inherit the host's `no_proxy` and `ftp_proxy`, not just
   `http_proxy`/`https_proxy`.
-- The `proxy`, `provisioning`, `cloudInit`, and `aptPolicy` sections are
-  rejected in overlay mode, which does not run the configuration step.
+- The `provisioning`, `cloudInit`, and `aptPolicy` sections are rejected in
+  overlay mode, which does not run the configuration step. (`proxy` was at
+  first rejected too; overlay builds now write it with the same writer, after
+  `configurations[]`.)
 - Additional files are stored on the ISO in a directory derived from their
   in-image destination, under their source basename, so two files with the
   same basename no longer collide. Keeping the basename preserves the

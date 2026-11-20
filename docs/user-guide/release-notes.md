@@ -6,286 +6,696 @@
 
 **New**:
 
-- **Added**: Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. The `Ubuntu 26.04 Host` workflow runs on every pull request and merge, plus weekly, on a 26.04 runner: it runs the host-sensitive unit tests and builds the minimal raw image of Ubuntu 26.04, Ubuntu 24.04, Debian 13 and eLxr 12. It was previously experimental and did not run on pull requests. `scripts/install-ict.sh` and the Debian package install test already cover 26.04.
-- **Added**: `scripts/install-ict.sh` installs the ICT Debian package and the host tools a build uses on Ubuntu and Debian. `--tag TAG` downloads the package and `SHA256SUMS` from the GitHub release of the tag and verifies the checksum before installing; `--deb FILE` installs a package you already have. `--tag` also accepts a package named `image-composer-tool_<version>_amd64.deb`, and `ICT_GITHUB_REPOSITORY=OWNER/REPO` downloads from another repository's release.
-- **Added**: `build --replace-additional-file FINAL=FILE` replaces the host file of the `systemConfig.additionalFiles` entry installed at `FINAL` for one build, so an input that changes per build (for example a vendor tarball) can be supplied on the command line without editing the template. It does not add files: it fails if no entry has that `final` path or `FILE` is not an existing regular file. Repeatable.
-- **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
-  selected by explicit APT `name_version` requests with
-  `packageOperation: additive-and-upgrade`. It defaults to false and does not
-  bypass dependency integrity, protected boot packages, or removal policy.
-  Unpinned packages and dependencies are not automatically selected for
-  downgrade; RPM overlay builds are not supported end-to-end.
-- Overlay builds now print a planned package-change report after dependency
-  resolution and preflight, before the build begins. It lists resolver-selected
-  dependency upgrades along with additions and approved removals; install-time
-  cascade removals may differ from the plan and appear in the final statistics.
-- **Fixed**: raw image builds no longer fail when a package's post-install script builds for `uname -r`, as the Edge Pack 2026.3 `edge-*-dkms` packages do. Inside the build chroot `uname -r` reports the build host's kernel, so those scripts built for the wrong kernel, exited 1, and aborted the install before ICT's own `dkms autoinstall -k <target kernel>` step. While Debian packages are installed, ICT now swaps the image's `/usr/bin/uname` (with `dpkg-divert`) for a temporary wrapper that reports the newest installed kernel (under `/boot`, or `/lib/modules` when `/boot` is still empty) for `uname -r`, and restores the real `uname` when installation finishes. Every other `uname` call is unchanged, and before a kernel is installed `uname -r` still reports the host's. This is a stop-gap; the packages should stop assuming `uname -r` is the target kernel.
-- Compose OEP Installer blueprints into Ubuntu images with the new `systemConfig.oepInstaller` template section. ICT imports the package list the OEP Installer publishes for a blueprint, installs its Debian packages and apt repositories at build time (checking them against the template's kernel and kernel parameters), and runs `openedge-cli install` for the blueprint on first boot as the template's user. Set `ICT_OEP_INSTALLER_TOKEN` to download from a private GitHub repository.
-- Follow an OEP Installer development branch from a template. In `systemConfig.oepInstaller`, only `sbomUrl` and `user` are now required: without `url`, ICT installs the CLI the package list names in its `cli-url` header, verified against its `cli-sha256` header when present; without `modules` or `args`, it uses the list's own; without `sbomSha256`, the list is not verified. A template can point `sbomUrl` at a branch and pick up OEP Installer fixes without changing. The template the image carries records the CLI and digests that were used.
-- **Fixed**: Debian overlay planning preserves baseline `Depends`/`Pre-Depends`
-  constraints and alternatives. With `packageOperation: additive-and-upgrade`,
-  library upgrades that break previously satisfied requirements automatically
-  seed affected retained native-architecture baseline packages as internal
-  upgrade targets, using the existing `Breaks` repair loop (at most four extra
-  resolves). `Requested` is unchanged; `CompatibilityUpgrades` tracks actual
-  forced installs. Preflight blocks unresolved newly unsatisfied retained
-  dependencies, including unavailable or unchanged candidates and blocking pins.
-  Explicit pins are not relaxed; no blanket upgrades, removals or downgrades are
-  authorized. RPM baseline reverse-dependency auto-repair is not implemented.
-  Upgraded versioned `Provides` and `Multi-Arch` metadata are preserved, and the
-  parsed metadata cache version is bumped to re-parse older entries.
-  Retained-dependency checks treat `Architecture: all` as the native architecture
-  before applying qualifiers and `Multi-Arch` rules, so an unannotated `all`
-  replacement cannot hide newly broken foreign-architecture dependencies.
-- **Fixed**: Debian overlay dependency audits now ignore apt's changing installed-
-  version explanation when comparing a broken dependency across package transactions.
-  The comparison still distinguishes different requirements and multiarch package
-  instances, avoiding false build failures when an unrelated package upgrade changes
-  the version named in `apt-get check` output.
-- **Fixed**: Ubuntu `linux-main-modules-*` packages are classified as kernel
-  companions, not extra bootable kernel images. Old companions are removable
-  only under a valid explicit kernel replacement, preserving the replacement
-  dependency-closure keep-set.
-- **Changed**: the overlay installer dependency audit compares failure
-  descriptors before and after every nonempty install or removal transaction,
-  including upgrade-only transactions, ignoring pre-existing failures. Newly
-  introduced upgrade-only failures fail closed without cascade removal, even
-  with `allowPackageRemoval: true`. Existing explicitly authorized removal
-  cascades retain their bounds and protected-package guards.
-- **Fixed**: overlay kernel replacement now treats a Debian `name_version`
-  request as the canonical package name when its name and version match resolved
-  or dependency-closure metadata, avoiding false extra-kernel-image ambiguity.
-- **Fixed**: under `packageOperation: additive-and-upgrade`, an exact APT
-  `name_version` pin differing from the baseline now enters the install set even
-  when older. Preflight rejects it unless `allowDowngrade` is explicitly enabled,
-  instead of silently ignoring the pin and later reporting unsatisfied dependencies.
-  Matching follows the Debian resolver for omitted epochs and artifact-style
-  requests, so these downgrade pins also reach preflight instead of being skipped.
-  Pins that compare equal under Debian version rules (for example, `2.12-1` and
-  `0:2.12-1`) remain no-ops, preventing an unclassified bootloader reinstall.
-- Overlay templates now support `systemConfig.proxy`, reusing the create-mode
-  writer for login, APT and systemd settings after build-time configuration
-  commands. Add site-specific settings in a local or internal template. Build
-  downloads still use the host proxy environment.
-- **Fixed**: a `systemConfig.proxy` with only `noProxy` now removes a stale
-  ICT-managed APT proxy file from the base image. Other APT files are unchanged.
-- **Changed**: platform-enablement templates requiring private repositories are
-  maintained in the internal template repository, not the public template catalog.
-  The workspace `cbkc-to-overlay-template` skill covers repeatable script migration.
-- Provide the GitHub token for OEP Installer files in private repositories from a file. Besides `ICT_OEP_INSTALLER_TOKEN`, ICT now reads the token from the file that `ICT_OEP_INSTALLER_TOKEN_FILE` or the new `oep_installer.token_file` setting in `image-composer-tool.yml` names. This lets the Web UI build such templates with `serve --sudo`, which does not pass the token variable through `sudo`, and from Docker Compose through a secret that `docker-compose.yml` shows commented out. Keep the file owned by root with mode 0600; ICT warns when other users can read it.
-- Pass the GitHub token for OEP Installer files for a single build with `build --oep-installer-token-file FILE`. It takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`, so a build can use its own token even when the environment it runs in has another.
-- Enter a GitHub token for OEP Installer files in the Web UI. For a template with `systemConfig.oepInstaller`, the **Users and credentials** dialog has a **GitHub token for the OEP Installer** field. The token is used for that build only: it is not stored, and **Retry** does not reuse it.
-- **Fixed**: when a provisioning script fails, the console login prompt and the
-  message after login (including SSH) now name the script and the
-  `sudo journalctl -u` command that shows its log, until the script succeeds
-  (on an image whose `/etc` is not persistent, such as `imageType: img`, only until the next reboot).
-- **Added**: the script field `stopOnFailure` (first-boot scripts) keeps a failed
-  script from running again at every boot. The notice then tells an administrator
-  to fix the problem and run `sudo /usr/libexec/ict-provision-report retry <name>`.
-- **Fixed**: the OEP Installer is no longer run again at every boot after it
-  fails. The login notice tells an administrator to fix the problem and run
-  `sudo /usr/libexec/ict-provision-report retry oep-installer`, or to resume by
-  hand and then run `sudo /usr/libexec/ict-provision-report done oep-installer`.
-  Templates can show their own hint with the new `recoveryHint` script field.
-- **Fixed**: on Ubuntu 26.04, `sudo` failed for every user with `cannot open sudoers file /run/ict-oep-installer.d` on boots where the OEP Installer's first-boot script had not run yet, such as before it started and after it had succeeded. The image's sudoers file includes a directory in `/run`, which is empty after each boot, and sudo-rs treats a missing included directory as an error. A `tmpfiles.d` entry now creates the directory at every boot.
-- **Fixed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser pushed the **Back** and **Next** buttons below the bottom of the window on common laptop screens (1440×900, for example). The repository list, package list and **Selected** panel had fixed heights; they now follow the window height, so the buttons stay in view. Each list keeps a minimum height, so on a very short window the page scrolls rather than squeezing the lists below a few rows, and on a tall window the lists grow somewhat taller than before.
-- **Changed**: on the Web UI's Advanced tab, the Packages step's **Repositories** browser picks the repository to browse from a **Choose repository** dropdown instead of a list down the left side, so the package list now spans the full width. Browsing a repository never puts it in use for the build: an optional repository comes into use when a package or version is picked from it, and is released when the last package from it is removed. The dropdown groups repositories under *Currently in template* and *Available (not in template)* and marks each available repository in use with ✓, and an *N of M repositories in use* count sits alongside. Package rows are more compact, with the version chips beside the package name rather than under it, so about five packages fit on a 1440×900 screen without scrolling.
-- **Changed**: the Web UI says the same thing wherever a compose is held back because another build is running: **additional concurrent builds are currently restricted**. This replaces *a build is already in progress (&lt;build id&gt;); only one compose runs at a time*, which the server returned and the credentials dialog and the Compose Image tab's retry banner showed, and *A compose is already in progress. Switch to the Compose Image tab to monitor it.* on the Basic and Advanced tabs. The server still answers such a start with `409 BUILD_IN_PROGRESS`; it no longer returns the id of the running build, which it logs instead.
-- **Changed**: Web UI wording and layout tidy-up. In a build's **Compose details**, the selection card is now titled **Basic Selection** (was *Your Selection*) and lists Use Case, SKU, Platform and OS by the same display names the dropdowns use — for example *PTL (Panther Lake)* rather than `ptl` — and the Advanced-tab changes card is titled **Advanced customization** (was *Your changes*), in the same heading style. The Edge Packs tab's base-runtime package list now reads **Included with Standard Edge Pack Profile** (and *Real-time Edge Pack Profile* once real-time is offered). The long help paragraphs under the Edge Packs domain grid and the Repositories browser are removed. The Basic tab now marks Use Case, SKU, Platform, Operating System and Kernel as required with a red asterisk, as the Advanced tab already did; **Compose Image** was already unavailable until they were all set.
-- Build an OS image from the command line in a Docker container, with nothing but Docker installed on the host. Build the ICT container image, then `scripts/build-in-container.sh TEMPLATE OUTPUT_DIR` builds a template you write on the host inside it and copies the OS image and its SBOM into `OUTPUT_DIR/<system-config-name>/`, owned by you. `--mount-point` sets where `OUTPUT_DIR` is mounted inside the container, `--context` mounts a wider directory when the template references files outside its own, and two named volumes keep downloaded packages and the build's work tree for later builds. Like the Web UI container, it runs privileged. See the [CLI Quick Start (Docker)](./get-started/cli-docker-quick-start.md).
-- Run the Web UI with only Docker installed. `docker compose up --build` from a checkout builds the ICT container image and serves the UI at <http://127.0.0.1:8080>; Go, Node.js, the programs a build runs, and sudoers rules are not needed on the host. Build history and OS images are kept in Docker named volumes, so they survive `docker compose down` and `docker compose up`. **The container is privileged and has the host's `/dev` mounted, so it is root-equivalent on the host**, and the UI has no authentication of its own: the port is published on `127.0.0.1` only, and should stay that way. See the [Web UI Quick Start](./get-started/web-ui-quick-start.md).
-- **Changed**: a new ICT container image, defined by `build/ict/Dockerfile`, replaces the builder image (`build/builder/Dockerfile`), which only its own CI check used. The new image holds everything needed to build OS images with nothing but Docker on the host: the `image-composer-tool` binary with the web UI compiled in, `live-installer`, `config/`, `image-templates/`, and every program a build runs, all under `/opt/ict` in the same layout as a checkout. The builder image could not complete a build: it had no CA certificates, so HTTPS downloads failed, and it lacked `arch-test`, `qemu-user-static`, and `debian-archive-keyring`, which Ubuntu, eLxr, and Debian builds install when missing and cannot install inside the image. Build the new image with `earthly +ict-image` (named `ict` unless you set `ICT_IMAGE_NAME`), and check that it contains every program ICT may run with `earthly +ict-image-preflight`. The `+builder-image`, `+builder-image-push`, and `+builder-image-preflight` Earthly targets are removed.
-- An in-app **User Guide** in the Web UI. The **?** (Help) button at the right of the top bar opens it as a page of its own, with its own address (`#guide/<topic>`) so it can be bookmarked and left with the browser's Back button. It introduces Image Composer Tool and walks step by step through composing with the **Basic** and **Advanced** tabs, including setting a password or SSH key for the image's users. The guide works even when the API server is unreachable.
-- New `systemConfig.bootloader.timeoutSec` template field sets how long GRUB shows its menu before booting the default entry (`GRUB_TIMEOUT`), so a template no longer needs an `/etc/default/grub.d` drop-in for it. It applies to create-mode builds with the `grub` provider; with `systemd-boot` the template is rejected.
-- Add users to an image from the Web UI's Basic tab. The credentials dialog now opens on every **Compose Image**, not only when the chosen template leaves an account without a login, and carries an **Add a user** section at the bottom. An added account takes the same options a template may set for one — password and/or SSH public key, administrator (sudo), additional groups, login shell, home directory, startup script, and password maximum age — and is created through the same generated `extends` delta the credentials use, so the curated template is never rewritten and a password is hashed before it reaches disk. A name the template already declares is refused, with the dialog pointing at that account's own fields instead: supplying a login for an existing account must never change its privileges. Every added account needs a password or an SSH key, except one confined to a startup script, which has no interactive login. When **Compose Image** is unavailable the dialog now names what is missing, including accounts scrolled out of view.
-- **Fixed**: the Web UI's compose view became unresponsive while a build was streaming logs — the artifact table's download buttons did nothing for the whole of a long compose, then fired all at once when the stream stopped. Every log line arriving over the event stream was appended to the view as it landed, which re-stripped ANSI escapes from, and re-rendered, every line already on screen; package resolution emits hundreds of lines a second and nothing caps how many accumulate, so the work grew with the log until it saturated the browser and starved clicks elsewhere in the page. Arrivals are now batched into about ten updates a second and each line is cleaned once, when it arrives, instead of on every render. **The log pane now keeps only the most recent 5,000 lines on screen**, with a line above the output saying how many earlier ones are hidden; copying the log and downloading the log file both still give the complete output, and a build's full log is unchanged on disk.
-- **Changed**: the template a build ran against is back in the Web UI's **Compose details** panel instead of the Artifacts table. The panel's subtitle now reads *template, paths*, and it carries a **Template** line under the selection and image configuration, with a download button that serves the same template file as before. The Artifacts table now lists only what the build produced. Because every build has a template, the panel is offered even for a build submitted as raw YAML, which has no configuration summary. Only the Web UI changed; the API and builds on the host are unaffected.
-- **Changed**: the Web UI's Artifacts table on the Compose Image page now has the columns **Artifact**, **Name**, **Size**, **Location** and **Actions**. The new first column names what each row is, **Image** or **Bill of Materials**, based on the type the server reports. It replaces the former **Type** column, and a type the UI does not recognise is still shown as reported (for example `UNKNOWN`). **Path** is now **Location**. The rows, their order and the downloads are unchanged. The column names now match the hosted Web UI.
-- **Changed**: the Web UI's Artifacts table on the Compose Image page now has three columns: **Artifact**, **Name** and **Size**. Each file name is its own download link, with a download tile in front of it; hovering the link fills the tile and underlines the name, and keyboard focus draws a ring around it. The **Location** column, which printed each file's full path on disk, and the **Actions** column, whose small icon was the only way to download, are gone. The on-disk path is now in the link's tooltip, and the note above **Partial artifacts** says to hover over a name to see where a leftover file is. Only the Web UI changed; the API and the download endpoint are unaffected.
-- **Fixed**: the Web UI Advanced tab's Edge Pack view no longer stays on "Loading Edge Pack…" for 30–90 s when the Edge Pack repository is slow or unreachable, for example when `NO_PROXY` covers `.intel.com` and so sends `apt.repos.intel.com`, which is reachable only through the proxy, direct. The server now waits at most 3 s for that repository's index and answers without package versions if it is still loading; the page shows a loading panel meanwhile and fills the versions in once the index arrives.
-- **Fixed**: package downloads no longer time out behind a TLS-inspecting proxy. Such a proxy holds a response's headers until it has fetched and scanned the file, which took 27–36 s for 26–39 MB packages fetched one at a time and longer with the 8 download workers sharing it, so large packages ran out of the 30 s header timeout on every attempt and failed the build. Package downloads now wait up to 5 minutes for the response headers; other HTTP requests keep the 30 s limit. A server that accepts a package request and then never answers now takes up to 15 minutes (3 attempts) to fail instead of about 90 s; one that cannot be reached still fails on the 30 s connection timeout.
-- **Fixed**: a package download that a mirror answers with 429, 502, 503 or 504 now gets a longer retry budget instead of failing the build after about 10 s of retries. Such a status means the server, or a gateway in front of it, is shedding load: Launchpad's PPA snapshot host answered 503 for under a minute and failed a 1650-package build on two packages that downloaded fine minutes later. While the latest failure is one of those statuses, a download gets up to 6 attempts, waiting 15 s and doubling up to 2 minutes, plus one second per download worker so parallel retries do not land together (at most about 6½ minutes of waiting with the default 8 workers). A `Retry-After` header is honoured up to that 2-minute limit; a server that asks for longer fails the download at once with the delay it asked for. Every other failure, a 500 or a header timeout included, keeps the previous 3 attempts.
-- **Changed**: In the Web UI Basic and Advanced tabs, credential fields now open in a dialog when **Compose Image** is clicked instead of remaining visible beneath the image summary or review.
-- **Fixed**: Advanced-mode builds now keep their generated override template available until the asynchronous build has finished using it, preventing a missing-template failure at startup.
-- **Fixed**: Web UI builds launched with `--sudo` now pass the server's sanitized `NO_PROXY`/`no_proxy` settings into the privileged image-composer process, instead of letting sudo's default environment handling strip or replace them with machine-level defaults — which bypassed the proxy for public Intel repositories. Only a variable that is actually set is forwarded, so a host with no proxy configured is unaffected even before re-running the generator. The generated sudoers rules (`serve --print-sudoers` / `install-sudoers.sh`) now scope an `env_keep` for just these two variables to the build command alone, so installs that *do* set a proxy need to re-run the generator/installer to pick up the change. `scripts/build-and-serve-webui.sh` normalizes `NO_PROXY` on every run so public Intel repository traffic always routes through the proxy; it logs each entry it drops for covering that repository, and reads any other always-direct hosts (e.g. an internal test repository) from the new optional `EXTRA_NO_PROXY` environment variable rather than hard-coding them.
-- The Web UI Advanced tab's Edge Pack view now shows a base runtime or domain as already checked when the Basic tab's matched template installs it, the same "already in template" treatment the Repositories tab already gives an individual package row. A locked runtime or domain can't be unticked here — its packages came from the template, not from this tab — but opening it still shows each package's own row with its current version and a live chip to pin an explicit override. Picking a domain or runtime the template does not already install works exactly as before.
-- **Fixed**: the Advanced tab's Repositories tab left an Edge Pack repository unchecked even when the Basic tab's matched template already installs a package from it — for example `intel-eci`, carrying the `standard` base runtime. A repository the matched template already draws an Edge Pack package from now renders checked and disabled, with an "In template — already included" badge, the same treatment the OS's own base repository already gets; any repository that package itself requires (such as `intel-graphics` under the `standard` runtime) is locked the same way.
-- **Fixed**: removing or clearing packages in the Advanced tab's Packages step could uncheck a repository the matched template still needed. The "last package depending on this repository was just removed, so uncheck it too" logic only ever looked at packages explicitly added in this tab — it had no way to see that the template's own locked Edge Pack packages (which never appear in that list) still drew from the same repository, so the repository was dropped from the actual build request even though the template required it. A repository the Repositories tab already locks as "in template" is now excluded from every removal path that can release a repository — the Selected rail's per-package remove and **Clear**, cross-repository search, and the Repositories tab's per-row remove, re-pin, and "Select all" — so it stays enabled regardless of what else is removed.
-- **Changed**: the Advanced tab's Repositories tab now shows packages from whichever repository was last clicked, rather than merging every checked repository's catalog into one list. Checking a repository's box still only controls whether it is used at build time; clicking its name (anywhere but the checkbox) browses its catalog without changing that. This keeps checking Ubuntu's base repository from flooding the package list with its ~85,000 packages — nothing from it shows until it is clicked. A package already pinned to a specific version from a different repository than the one being browsed now shows no version chip as selected, while the row's header names the actual pinned version and repository; the same package pinned to the browsed repository's own version still shows its chip as selected.
-- **Fixed**: picking **Unpinned** for a package while browsing one repository could leave it attributed to that repository's own version, even when a different checked repository actually publishes a newer one — a regression from scoping the package browser to one repository's catalog at a time, above. Picking **Unpinned** (from the Repositories tab, the search box, or a bulk "Select all") now resolves automatically, no "Resolve" click needed, against every repository currently checked — the same cross-repository comparison the build itself uses — and the row says *Resolved to* that version, naming the repository it resolves from. This resolution now runs through one shared mechanism everywhere an **Unpinned** pick is shown, so the same pick always reports the same resolved version and repository no matter where it's viewed. A resolved **Unpinned** version now also renders in a visibly distinct dashed badge labeled "unpinned," so it can't be mistaken for an actual pin at a glance.
-- **Changed**: the Advanced tab's **Selected** panel lists only the packages added or changed in this tab, under a **You are adding** header on a light blue background, grouped by the repository each resolves from. The matched template's own packages aren't listed there; the **Repositories** tab shows them ticked in each repository that publishes them.
-- **Changed**: the Advanced tab's Repositories tab keeps a "Show only selected" checkbox, now scoped to whichever repository is currently browsed — checking it swaps the paged catalog for just what's already been picked from that repository, plus whatever the matched template already ships from it, with a per-row and bulk "Resolve version" control for anything still unresolved, instead of requiring a dig through a 100-package page to find them. Unchecking it always goes back to page 1 of the catalog, rather than whatever page browsing happened to be left on. The currently-browsed repository's row in the left-hand rail is now a darker, more visible blue, and the package pane on the right picks up the same color, so the two read as one selection rather than two unrelated panels.
-- The Advanced tab's Repositories tab now shows how many packages are already selected from the repository being browsed, right in the "Show only selected" checkbox label — e.g. "Show only selected (12 selected)". Picks are spread across 100-package catalog pages, so the count was previously only visible by ticking that checkbox. The count still shows when nothing is selected from the browsed repository, as "(0 selected)": an Edge Pack template's own packages come from the OS base repository, so browsing the Edge Pack repository shows zero even though the Selected panel lists them.
-- **Fixed**: the Advanced tab's Packages step now shows every repository the selected template installs from as in use (*In template — already included*), not just the base repository and repositories it draws Edge Pack packages from. This covers the template's `packageRepositories` through its whole `extends` chain and the default configuration, so, for example, the Robotics template's ROS 2, Gazebo and Intel repositories no longer appear as unticked optional repositories. The compose response reports them as `templateRepos`.
-- **Changed**: the Web UI Advanced tab's step indicator now reflects whether each step is complete and valid. **Next** stays disabled on the Target step until Use Case, SKU, Platform, Operating System, Kernel (when offered) and Image Name are all filled, with a note naming what is missing, and the later steps cannot be jumped to until then. Target turns green only when those fields are filled. Packages and Disk, which start from the template's own values, turn green only once something was changed there, not merely because the step was passed. A step whose values will not build turns red: Packages when Edge Pack domain packages are selected with no base runtime beneath them, Disk when it shows a validation error. While Disk shows an error, **Next** and the Review step stay locked. Compulsory fields on the Target and Disk steps (Disk Name, each partition's filesystem, each output artifact's format, and compression for WSL2 images) are now marked with a red asterisk.
-- An **Update to latest version** button in the Web UI Advanced tab's Packages step, above the package list in the **Repositories** tab. It acts on the repository being browsed: the packages **Show only selected** lists and counts for it, less the template pins described below. It pins each package added from that repository, whether **Unpinned** or on an older version, to the newest version that repository offers, so the template records that exact version, and every pin it sets is one of the version chips shown for that repository. If that repository isn't in use yet, pinning from it puts it in use, as picking a version chip does. An **Unpinned** package stays unpinned in the template and is resolved only when the image is built, so the same template can install a different version later. It also pins the template's own packages that repository publishes, as overrides listed under **You are adding**: an unpinned one to the newest version, and one the template pins to a version only when that repository publishes that version and a newer one. A template pin whose version that repository doesn't publish, such as a vendor build pinned from another repository, is left as it is, since that repository's newest version could be older. Such pins aren't in the button's count; a note beside it gives their number and the repository their pinned versions come from, for example *73 pinned from* a vendor snapshot, which is where to browse to update them, and lists them when hovered; when they all come from one repository, clicking the note browses it. Each such package's row says so too: its header names that repository after the version, as a link that browses it, and hovering one of the browsed repository's version chips says that choosing it replaces the template's own build. If those template packages would take the selection past the 256 packages a build accepts, they are left as they are and the step says so. If the repository can't be read at that moment, nothing is changed and the step says so. A package whose version is changed, or that is removed, while the lookup runs keeps that change.
-- **Fixed**: in the Web UI Advanced tab's **Repositories** tab, **Show only selected** left out the matched template's packages for every repository except the base one. A template package from, for example, Intel EdgePack or Intel RealSense showed checked in the package list, yet the repository read "0 selected" and the selected-only list was empty. The base repository had the opposite problem: it listed every template package, including ones it does not publish. A template package now counts under each repository that publishes it, the same rule the package list uses to check it. The count reads "checking…" while that is looked up. The lookup is one request per repository rather than one per package, so it no longer holds up the repository's package list. And when the Packages step opens, the server starts downloading every repository's package index in the background, so a repository picked later usually lists its packages straight away instead of waiting on the upstream mirror the first time. The `GET /packages/search` endpoint gains a `names` parameter for this, which looks up an exact list of package names in one request.
+1. **Web UI for composing images**
 
-- Intel EdgePack platform-enablement images in the Web UI Basic tab. A new **Platform Enablement** use case offers two SKUs — **EdgePack Minimal Desktop** and **EdgePack Minimal Server** — on both Ubuntu 24.04 and 26.04, and on both **Panther Lake** and **Wildcat Lake** for every SKU/OS pair, since the templates behind them support the two platforms identically.
+   `image-composer-tool serve` serves a browser UI for composing images, at
+   <http://127.0.0.1:8080> by default. Run it from a checkout, or with only
+   Docker installed (item 2). See the
+   [Web UI Quick Start](./get-started/web-ui-quick-start.md).
 
-- A new **EdgePack Standard Base Only (Demo)** SKU under **Platform Enablement**, on Ubuntu 24.04 for both **Panther Lake** and **Wildcat Lake**. It builds an unattended ISO installing only the `intel-edge-base-standard` metapackage, with no Media (FFmpeg/GStreamer) or Manageability add-ons, so it demonstrates the Advanced tab's Edge Pack "already in template" pre-check against a selection that locks in just the base runtime and leaves every domain unselected. Selecting **Ubuntu 26.04** is also new as a distinct option from the existing **Ubuntu 26.04 Server** target. The Advanced tab's repository picker gains the two repositories these templates introduce: EdgePack's Ubuntu 26.04 (`resolute`) suite, kept separate from the existing `edgepack` entry because that repository's standard base runtime also requires `intel-graphics`, which is not published for 26.04; and the pinned kobuk-team Intel Graphics PPA snapshot the Ubuntu 24.04 desktop template installs its client GPU compute runtime from, kept separate from the rolling `intel-graphics` entry so both remain searchable.
+   - **Server**: `serve` takes `--host`, `--port`, `--templates-dir`,
+     `--work-dir` and `--ict-binary`; `--manifest`, `--package-repos` and
+     `--edge-pack` replace the shipped Basic-tab template list, repository
+     catalog and Edge Pack catalog. With `--sudo`, builds run through `sudo`;
+     `serve --print-sudoers` prints the rules they need and
+     `scripts/install-sudoers.sh` installs them.
+   - **Proxy**: `serve` passes its own `HTTP_PROXY`, `HTTPS_PROXY`,
+     `FTP_PROXY` and `NO_PROXY` to each build as `--http-proxy`,
+     `--https-proxy`, `--ftp-proxy` and `--no-proxy`, so an image built behind
+     a proxy gets a matching `systemConfig.proxy` and first-boot provisioning
+     can reach the network. These override a template's own proxy and are not
+     passed for overlay templates. Proxy credentials are redacted in the logs.
+     The generated sudoers rules keep only these variables, and only for the
+     build command; only a variable that is set is forwarded.
+     `scripts/build-and-serve-webui.sh` removes `NO_PROXY` entries that would
+     send public Intel repository traffic around the proxy, logging each one
+     it drops, and reads other always-direct hosts from `EXTRA_NO_PROXY`.
+   - **Basic tab**: pick a Use Case, SKU, Platform and Operating System, all
+     required, to build a curated template (a Kernel choice appears only when
+     the template list offers kernel variants). Use cases include
+     **Platform Enablement** (the EdgePack SKUs in item 6 and the Nova Lake
+     **Upstream BKC** SKU in item 7) and **Fed Aero**, which offers the two
+     generic host-OS blueprints on Ubuntu 24.04 for Panther Lake. Choices
+     without a template yet are shown as *(coming soon)*.
+   - **Users and credentials**: **Compose Image** opens a **Users and
+     credentials** dialog on both tabs.
+     - It asks for a password or SSH public key for every template user that
+       has neither, except one whose login is a `startupScript`, instead of
+       letting the build fail minutes in.
+     - **+ Add user** adds an account with the options a template can set:
+       password and/or SSH key, sudo, groups, shell, home directory, startup
+       script and password maximum age. An added account needs a password or
+       SSH key unless it is confined to a startup script, and a name the
+       template already declares is refused, so a login supplied for an
+       existing account never changes its privileges.
+     - Passwords are hashed on the host as soon as they are received and are
+       never written to disk, logged or archived in plain text. Logins are
+       asked for again for every build.
+     - When **Compose Image** is unavailable, the dialog names what is
+       missing.
+   - **Advanced tab**: start from the Basic selection and change the image
+     name, packages and disk layout in four steps (Target, Packages, Disk,
+     Review). The changes are written to a generated `extends` template, so
+     the curated template is never changed. The step indicator turns Target
+     green once its fields are filled, Packages and Disk once something is
+     changed there, and a step red when its values will not build. **Next**
+     stays disabled until the required fields are filled, with a note naming
+     what is missing; required fields are marked with a red asterisk.
+   - **Packages step, Repositories tab**:
+     - Search every repository the target offers at once. Results appear as
+       each repository answers, and the list says when some repositories
+       could not be reached. Package indexes are cached, and every
+       repository's index starts downloading when the step opens.
+     - Browse one repository at a time, picked from the **Choose repository**
+       dropdown, which groups repositories under *Currently in template* and
+       *Available (not in template)*. Every repository the template installs
+       from through its `extends` chain is listed and in use, including ones
+       the catalog does not carry, such as a vendor snapshot, labelled by host
+       and path. An optional repository comes into use when you add a package
+       from it and is released when its last package is removed; ✓ marks and
+       an *N of M repositories in use* count show which are in use.
+     - Each package is listed once, with every version it is available at as
+       a chip, newest first by the target's version rules. Choosing a chip
+       pins that version; choosing the pinned chip again unpins it. A selected
+       or template package is tagged **Pinned** or **Unpinned**, followed in
+       bold by the version a build would install: for **Unpinned**, the one
+       the build picks, from the highest-priority repository first and then
+       the newest, with *via* naming the repository when it is not the one
+       being browsed. A template package whose version you change is tagged
+       **Modified**.
+     - **Show only selected (N selected)** lists what is picked from the
+       browsed repository, including the template's own packages that it
+       publishes, with all their versions. **Select all on this page** adds
+       every package shown.
+     - **Update to latest version** pins every package added from the browsed
+       repository, and the template's own packages that it publishes, to the
+       newest version it offers. A template pin whose version that repository
+       does not publish, such as a vendor build, is left as it is, and a note
+       names the repository it comes from. Nothing changes if the repository
+       cannot be read, or if the template's packages would take the selection
+       past the 256 packages a build accepts.
+     - The **Selected** panel lists the packages added or changed in this
+       tab under **You are adding**, grouped by the repository each resolves
+       from.
+     - Each catalog repository carries the signing key the shipped templates
+       use for it, so an Advanced build verifies it as a hand-written template
+       would. Package search accepts a repository's `Release` only when it is
+       signed by a key in that repository's keyring.
+     - The optional repository catalog is per target. `intel-oneapi` and
+       `mozilla-apt` are offered for every target, and Debian 13 and Ubuntu
+       26.04 Server have Docker CE, Gazebo and ROS 2 Lyrical repositories.
+   - **Packages step, Edge Packs tab**: browse Intel Edge Pack packages by
+     capability rather than by repository.
+     - Choose a **Base Runtime**, then domains (**Media**, **Manageability**)
+       or individual packages in them, pinned the same way as on the
+       Repositories tab. No domain can be selected until a base runtime is
+       chosen. **Standard** is available; **Real-time** is shown, with the
+       reason it cannot be selected yet.
+     - A collapsible **Included with Standard Edge Pack Profile** list shows
+       what the runtime's metapackage installs, read from the repository
+       index so it always matches the build.
+     - A runtime or domain the matched template already installs is shown
+       checked and locked. One the target does not publish, or whose
+       prerequisite repositories are not offered for it, is shown locked with
+       the reason.
+     - Both tabs share one selection. Any Edge Pack package turns on
+       `systemConfig.dkms.enabled` in the generated template, so its DKMS
+       modules are built for the image's kernel (see item 6).
+     - Ubuntu 24.04 and 26.04 each use their own EdgePack repository. Edge
+       Packs are not offered for overlay templates.
+     - When the Edge Pack repository is slow, the tab waits at most 3 s and
+       lists the packages without versions until its index arrives.
+   - **Disk step**: edit the disk name and size, and add, remove, reorder and
+     resize GPT partitions, either by size (offsets are calculated for you)
+     or by offset, including offsets from the end of the disk
+     (`end: "-20GiB"`). The output artifacts can be `raw`, `qcow2`, `vhd`,
+     `vhdx`, `vmdk` or `vdi`, with optional `gz`, `xz` or `zstd` compression,
+     for RAW images, and exactly one `tar` + `gz` artifact for WSL2. Values
+     are checked against what the builder accepts: overlapping partitions are
+     errors and gaps are warnings, and the 1 MiB the builder keeps before
+     end-relative partitions is counted. MBR is shown but not yet
+     selectable. The **Partitions** and **Output Artifacts** sections are
+     collapsed by default, with a one-line summary. For an overlay template,
+     the baseline's partition layout is kept, and only the size, maximum size
+     and output artifacts can be changed. See
+     [ADR: Advanced mode Disk step](../architecture-decision-record/adr-web-ui-disk-step.md).
+   - **Review step**: an **Advanced customization** card lists what the build
+     changes: the image name, packages added, repositories enabled, the disk
+     layout, users added and users given a login (names only). **Export
+     YAML** downloads the generated template.
+   - **Compose Image tab**:
+     - Follow a build's status and log. The log pane shows the latest 5,000
+       lines; copying or downloading the log gives the whole log.
+     - Only one build runs at a time. While one is running, the UI says
+       **additional concurrent builds are currently restricted**.
+     - **Artifacts** lists the images and the SBOM, in that order, under
+       **Artifact**, **Name** and **Size**. Click a name to download the file;
+       hover over it to see its path on disk.
+     - **Compose details** shows the Basic selection, the Advanced
+       customization card, and the template the build ran against, for
+       download. The download is always the full, merged template.
+     - **Retry compose** resubmits exactly what the build used, including
+       logins, added users, packages and disk changes, even after a server
+       restart. A GitHub token for the OEP Installer is not reused.
+     - **History** is paged, 10 builds per page, newest first. Each row is
+       titled with the SKU and shows the use case, platform, OS and image
+       type beneath it.
+   - **User Guide**: the **?** button opens an in-app guide, with its own
+     address (`#guide/<topic>`), that walks through the Basic and Advanced
+     tabs and following a compose. It works even when the API server is
+     unreachable.
+   - **Shutdown**: when `serve` is stopped, it stops accepting builds,
+     cancels a running build and waits up to 20 s for it to clean up, so it
+     does not leave mounts and loop devices behind on the host.
 
-- Build a Nova Lake BKC (Best Known Configuration) image from the Web UI. The Basic and Advanced tabs now offer an **Upstream BKC** SKU under **Platform Enablement**, on **NVL (Nova Lake)** with **Ubuntu 26.04**. It is an overlay build: it layers the BKC stack onto an installed Ubuntu 26.04 RAW image rather than building the OS from scratch. `image-templates/ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml` is a starter template that adds a single package; the full BKC template replaces it under the same name where it is deployed. For overlay templates like this one, the Advanced tab now keeps the baseline image's partition layout (its Disk step offers only size, max size and output artifacts) and does not offer Edge Packs, whose DKMS driver builds an overlay cannot run.
+2. **Run ICT with only Docker installed**
 
-- The Web UI's Basic and Advanced tabs now prompt for a password or SSH public key when a template resolves to a user with neither, instead of letting the build fail minutes into package installation. The rule applies to **every** templated user, not only a sudo or root one: any account would otherwise be created with an empty, unusable login unless its login is a `startupScript` (the installer console account). Either a password or an SSH key satisfies the requirement; a password is hashed on the host the moment it is received and never written to disk, logged, or archived as plain text.
-- **Fixed**: `image-composer-tool validate --merged` now fails when a sudo (or passwordless-root) user resolves to no password and no SSH authorized key, instead of validating cleanly and only surfacing the gap deep inside a full build. The four EdgePack unattended-ISO templates (`ubuntu24`/`ubuntu26`, desktop and server) ship `admin.pub` as an intentional placeholder with no real key, so a build against them without `--ssh-authorized-key admin=FILE` now fails at validate time rather than producing an ISO with no way to log in. Both EdgePack server unattended-ISO templates also now pin `systemctl set-default multi-user.target` and drop leftover desktop packages (`firefox`, `language-pack-gnome-en`, `language-pack-gnome-en-base`), so a headless server install stays on a console boot rather than defaulting to `graphical.target` with no display manager to serve it.
-- **Fixed**: the Ubuntu 24.04 and 26.04 EdgePack desktop unattended-ISO templates (`ubuntu24-x86_64-edgepack-unattended-iso.yml`, `ubuntu26-x86_64-edgepack-unattended-iso.yml`) built images with no terminal emulator. `ubuntu-desktop-minimal` only *recommends* its terminal (`gnome-terminal` on 24.04, `ptyxis` on 26.04), and ICT does not install recommended packages, so the desktop session had no way to open a shell. The 24.04 template now lists `gnome-terminal` and the 26.04 template lists `ptyxis` explicitly. The server templates are headless and unchanged.
-- **Fixed**: the Ubuntu 24.04 and 26.04 EdgePack desktop templates (`edgepack-raw`, `edgepack-unattended-iso`, and on 24.04 also `edgepack-standard-only-unattended-iso`) built images with no working Firefox. Ubuntu's own `firefox` package is only a thin wrapper whose install script runs `snap install firefox`, and it skips that step without an error when snapd is not running, which is always the case in the build chroot. The image therefore had `/usr/bin/firefox` but no browser, no `firefox.desktop` launcher entry, and no snap, and nothing installed Firefox on first boot. The templates now add the Mozilla Team PPA (`ppa.launchpadcontent.net/mozillateam/ppa`, series `noble` or `resolute`), pinned at priority 1001 for the `firefox` package only, so a real `firefox` `.deb` is installed. Other packages still come from the Ubuntu archive. To keep it that way on the running system, ICT now narrows the apt pin it writes into the image for any repository that sets `allowPackages`: only the listed packages (and the names the build-time filter accepts for them, which includes names that start with a listed entry) get the repository's priority, where before the pin covered every package the repository publishes. The repository's other packages stay at apt's default priority. This also applies to other templates that set `allowPackages`, for example the Intel overlay and Debian backports entries, whose other packages no longer get that repository's priority. Images that cannot upgrade from a repository (immutable images and `aptPolicy`) keep the whole-repository pin as before. Repositories whose pin file name would collide (same suite and host, no IDs) now each keep their own file. `image.version` is bumped to `24.04.1` (24.04 raw), `24.04.4` (24.04 desktop ISO), `24.04.1` (24.04 standard-only ISO), `26.04.2` (26.04 raw) and `26.04.5` (26.04 desktop ISO) to mark the changed behavior. The Advanced tab's repository picker gains a **Mozilla Team PPA (Ubuntu 26.04)** entry for the `resolute` suite the 26.04 templates now install from, kept separate from the existing 24.04 entry. The server templates are headless and unchanged.
-- **Fixed**: the Ubuntu 26.04 EdgePack desktop templates (`ubuntu26-x86_64-edgepack-raw.yml`, `ubuntu26-x86_64-edgepack-unattended-iso.yml`) left the Mozilla Team PPA configured on the image, and that PPA broke `apt-get update` on the running system. The PPA's `InRelease` is signed with an rsa1024 key, which Ubuntu 26.04's apt rejects (`untrusted public key algorithm: rsa1024`), so any later `apt-get update` exited with status 100. On first boot this stopped the OEP Installer at its first apt step (`intel_lpmd`), so provisioning did not finish and `openedge-cli resume` failed at the same step. Both templates now install Firefox from Mozilla's official repository (`https://packages.mozilla.org/apt`, suite `mozilla`), whose signing key is RSA 2048 and is accepted. It is still pinned at priority 1001 for the `firefox` package only. `image.version` is bumped to `26.04.3` (raw) and `26.04.6` (desktop ISO). The Advanced tab's repository picker no longer offers the **Mozilla Team PPA (Ubuntu)** and **Mozilla Team PPA (Ubuntu 26.04)** entries, since images that use them hit the same apt failure; use the existing **Mozilla** entry (`packages.mozilla.org`) instead. A template that still lists the PPA keeps working in the picker as an uncatalogued repository.
-- **Fixed**: the Ubuntu 24.04 templates that took Firefox from the Mozilla Team PPA now take it from Mozilla's official repository (`https://packages.mozilla.org/apt`, suite `mozilla`), as the 26.04 EdgePack desktop templates now do. The PPA's `InRelease` is signed with an rsa1024 key. Ubuntu 24.04's apt (2.8) still accepts that, but it already defines `rsa2048` as its next minimum key size (`APT::Key::Assert-Pubkey-Algo::Next`), so a later apt update would make `apt-get update` fail on every image that keeps the PPA. Changed templates: `ubuntu24-x86_64-edgepack-raw.yml`, `ubuntu24-x86_64-edgepack-unattended-iso.yml`, `ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml`, `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`, `generic-handheld-os-template.yml` and `generic-companion-os-server-template.yml`. The repository is still pinned at priority 1001 for the `firefox` package only; the server template, which installs no Firefox, now also limits it to `firefox` where it used to pin the whole PPA. `image.version` is bumped to `24.04.2` (EdgePack raw), `24.04.5` (EdgePack desktop ISO) and `24.04.2` (EdgePack standard-only ISO).
-- **Fixed**: the Ubuntu 24.04 and 26.04 EdgePack server unattended-ISO templates now request DHCP with the NIC's MAC address instead of a machine-id-derived DUID. The installed system's `/etc/machine-id` is generated anew on every install, so netplan/systemd-networkd presented a different DHCP client identifier after each re-flash and a lab DHCP server holding a static reservation for the board gave it a pool address instead of its reserved one. Both templates now seed cloud-init with `additionalfiles/base-platform/network-config` (DHCP on `en*` interfaces with `dhcp-identifier: mac`) via `systemConfig.cloudInit.networkConfigFile`, and install `netplan.io` explicitly. `image.version` is bumped to `24.04.1` and `26.04.1` to mark the changed behavior. The desktop unattended-ISO templates are unchanged.
-- **Changed**: the `admin` user in the four EdgePack unattended-ISO templates (`ubuntu24`/`ubuntu26`, desktop and server) is now also a member of the `video`, `render` and `audio` groups, in addition to `sudo`, so the account can use GPU render nodes, display/video devices and audio devices without further setup. Any of these groups missing from the image is created during user setup. `image.version` is bumped to `24.04.1` (24.04 desktop), `24.04.2` (24.04 server) and `26.04.2` (both 26.04 templates) to mark the changed behavior.
-- **Changed**: the four EdgePack unattended-ISO templates (`ubuntu24`/`ubuntu26`, desktop and server) now install `acpica-tools` and pin their kernel to `linux-image-7.0.0-38-generic`/`linux-headers-7.0.0-38-generic` instead of `7.0.0-34`. `edge-gfx-dkms` 7.0 detects the kernel's `intel_vsec` API form from the installed headers, so it builds against the `7.0.0-38` kernel. The raw EdgePack templates keep their `7.0.0-34` pin. `image.version` is bumped to `24.04.2` (24.04 desktop), `24.04.3` (24.04 server) and `26.04.3` (both 26.04 templates) to mark the changed behavior.
-- **Fixed**: the four EdgePack unattended-ISO templates now set `systemConfig.network.backend: netplan` explicitly. Leaving it unset made ICT also enable `systemd-networkd`, whose unit ships with the base `systemd` package, and it then competed with NetworkManager and cloud-init's netplan output for control of the NIC. DHCP still succeeded and `nmcli` still reported "connected", but routing became inconsistent and outbound connectivity failed. ICT now enables `systemd-networkd` only when a template selects `backend: systemd-networkd`.
-- **Fixed**: the four EdgePack unattended-ISO templates now install `iptables`. First-boot provisioning installs Docker as static binaries with no apt dependency resolution of its own, so `dockerd` failed to start (`failed to register "bridge" driver: failed to create NAT chain DOCKER: iptables not found`) on a device provisioned from these templates. `image.version` is bumped to `24.04.3` (24.04 desktop), `24.04.4` (24.04 server) and `26.04.4` (both 26.04 templates) to mark the changed behavior.
+   - A new ICT container image, defined by `build/ict/Dockerfile`, holds
+     everything needed to build OS images: the `image-composer-tool` binary
+     with the Web UI compiled in, `live-installer`, `config/`,
+     `image-templates/`, and every program a build runs, under `/opt/ict` in
+     the same layout as a checkout. Build it with `earthly +ict-image` (named
+     `ict` unless you set `ICT_IMAGE_NAME`), and check that it has every
+     program ICT may run with `earthly +ict-image-preflight`.
+   - Web UI: `docker compose up --build` from a checkout builds the image and
+     serves the UI at <http://127.0.0.1:8080>. Go, Node.js, build programs and
+     sudoers rules are not needed on the host. Build history and OS images
+     are kept in Docker named volumes, so they survive `docker compose down`.
+     See the [Web UI Quick Start](./get-started/web-ui-quick-start.md).
+   - CLI: `scripts/build-in-container.sh TEMPLATE OUTPUT_DIR` builds a
+     template from the host inside the container and copies the OS image and
+     its SBOM into `OUTPUT_DIR/<system-config-name>/`, owned by you.
+     `--mount-point` sets where `OUTPUT_DIR` is mounted in the container,
+     `--context` mounts a wider directory when the template references files
+     outside its own, and two named volumes keep downloaded packages and the
+     work tree for later builds. See the
+     [CLI Quick Start (Docker)](./get-started/cli-docker-quick-start.md).
+   - **The container is privileged and has the host's `/dev` mounted, so it is
+     root-equivalent on the host.** The Web UI has no authentication of its
+     own; its port is published on `127.0.0.1` only, and should stay that way.
 
-- **Fixed**: disk partition offsets in image templates are now validated before a build starts or an installation disk is wiped. Positive offsets are measured from disk start; negative offsets such as `-20GiB` are resolved back from the selected disk's end. This supports layouts such as rootfs ending at `-20GiB`, `/data` spanning `-20GiB` to `-4GiB`, and swap spanning `-4GiB` to `0`. Only the final partition may use `end: "0"`; overlapping, reversed, zero-start, and end-relative offsets beyond the selected disk are rejected. Mixed positive/negative overlap checks occur after disk selection, when its size is known, but before wiping. Policy-based disk selection includes the largest absolute and end-relative offsets plus a 1 MiB margin in its minimum-size check. The same resolver serves raw builds and the ISO live installer; an explicit disk path bypasses selection policy but not the pre-wipe layout check.
-- **Changed**: the Web UI's Compose Image **History** list is now paged, 10 builds per page, newest first, instead of listing every compose ever recorded in one ever-growing column. **‹ Newer** and **Older ›** controls with a `21–30 of 97` count sit below the list once there is more than one page. The list opens on the page holding the build shown alongside it, returns to page 1 when a new compose starts, and stays on the page being browsed while a running build refreshes the list.
-- **Fixed**: two builds in the Web UI's Compose Image **History** list were indistinguishable when they differed only by SKU. The row label was built from the use case, platform, OS and image type and left the SKU out altogether, so composing both Fed Aero host-OS blueprints — which share everything but their SKU — produced two rows reading `fed-aero / ptl / ubuntu24 / RAW`, with only the relative time to tell them apart. A row now leads with its **SKU** as the title and carries the use case, platform, OS and image type beneath it as subtext, with the relative time on its own line. The values are also resolved to the display names the Basic tab's dropdowns use (`Generic Handheld Blueprint`, `Fed Aero`, `Ubuntu 24.04`) rather than the raw manifest ids the server records, so a row reads in the same vocabulary as the selection that produced it; **a value the manifest no longer lists — a retired SKU on an older build, say — still shows its raw id** rather than disappearing. The platform is the one exception, abbreviated to its acronym (`PTL`, not `PTL (Panther Lake)`): the glossed codename is what a dropdown wants but costs a third of the row's width, enough to truncate the image type off the end. A build that recorded no SKU, which is what a use case offering a single combination does, keeps the use case as its title instead of rendering a blank one, and a build with no configuration summary at all still falls back to its template filename. Both rendered lines truncate rather than wrap, so the full selection — including the platform's full name — is available as a tooltip on the row; the history panel widens slightly to fit the longer titles. Server-side records are unchanged — the SKU was already present in every build's summary and in the Compose details panel, and was only missing from the list label.
-- The Web UI now lists what an Advanced-tab build changed relative to the template it extends, in an **Advanced customization** card: the image name, each package added, each repository enabled, the disk layout with its partitions, accounts added, and accounts a login was set for (names only — no password or key is recorded). The card appears in the Advanced tab's review step, open by default, and in a build's **Compose details** on the Compose Image page, also open by default, with a one-line digest (for example *image name, 13 packages, 2 repos, disk layout*) so builds of the same template can be told apart without expanding them. Lists longer than eight entries show the first eight with a **Show N more** toggle. The review step no longer shows the raw delta YAML, since the card lists the same changes; **Export YAML** still downloads it. Builds composed before this change have no recorded changes and show no card.
+3. **Install ICT from a GitHub release**
 
-- **Fixed**: the Web UI's Compose Status stepper turned every step green — including **Done** — while the compose was still running and the badge still read "Composing...". The phase is derived from the build log, and the `done` phase was matched on the substring `image build completed successfully`. That wording is emitted by the individual image makers too ("Raw image build completed successfully", and the ISO and initrd equivalents), and those lines are logged *before* image compression, the SBOM copy into the image filesystem, and chroot teardown — so the stepper claimed completion with minutes of work left. There is no longer any log marker for `done`: completion is taken only from the build's terminal status, so the stepper reaches **Done** exactly when the badge flips to Succeeded. `Compressing image file` was added as a **Generating image** marker instead, so the final stretch of a RAW build still advances the stepper. The Web UI also ignores a `done` phase arriving on the log stream, so a server emitting one cannot light the stepper early.
+   - Each `ict-*` release tag publishes the ICT Debian package
+     (`ict_<version>_amd64.deb`), its SPDX SBOM, `install-ict.sh` and
+     `SHA256SUMS` on GitHub Releases, after install, remove and purge tests on
+     Ubuntu 24.04 and 26.04 and Debian 12 and 13. A release-candidate tag such
+     as `ict-2026.3-rc1` is published as a prerelease, with the package
+     version `2026.3~rc1`.
+   - `scripts/install-ict.sh` installs the package and the host tools a build
+     uses on Ubuntu and Debian. `--tag TAG` downloads the package and
+     `SHA256SUMS` from that tag's release and verifies the checksum before
+     installing; `--deb FILE` installs a package you already have. `--tag`
+     also accepts a package named `image-composer-tool_<version>_amd64.deb`,
+     and `ICT_GITHUB_REPOSITORY=OWNER/REPO` downloads from another
+     repository's release, such as a fork.
+   - `scripts/build-deb.sh --version V` builds the same package locally.
 
-- **Fixed**: the unattended installer's "Another unattended installer instance is already running" message misled anyone watching a console other than the one running the install, such as QEMU with `-nographic`. Every console starts the installer and only the first runs it. The others now say so and follow `/tmp/unattended-installer.log` until the installer finishes or fails, so a failure is visible on every console.
+4. **Unattended ISO provisioning**
 
-- **Fixed**: the Web UI Artifacts table reported every build output as type `IMAGE`, including the SBOM and files that are not build outputs at all. Two causes, both server-side — the table itself always displayed whatever type the API sent. The API's log parser fell back to `image` for any file it did not recognise, so a chroot's leftovers in the image build directory (`bash.bashrc`, `debconf.conf`, `debian_version`, `UPLOAD-MANIFEST.txt`) were listed as images; and its directory scanner, used for history builds and for partial outputs after a failed or cancelled compose, looked for SBOMs ending in `.spdx.json` and so missed the `spdx_manifest_<deb|rpm>_<image>_<timestamp>.json` file ICT actually writes — dropping the SBOM from those views entirely. Both now share one set of naming rules (`internal/utils/artifact`), covering every image format the builder emits (`raw`, `img`, `iso`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar`, with optional `gz`/`xz`/`zstd` compression) and both SBOM naming conventions (the create-mode manifest and the overlay `.delta.spdx.json` / `.complete.spdx.json` sidecars). **An output that matches no rule is now reported as `unknown` rather than guessed to be an image** — `unknown` is a new value on the `Artifact.type` enum in the API contract, so a client that handles only `image` and `sbom` should expect it. Separately, the CLI's "Generated Artifacts" summary listed every file in the image build directory; it now lists only the images and SBOMs, which is also what the web API parses.
+   An `imageType: iso` template can now install a fully configured system
+   hands-free, applied the same way by raw builds and by the live installer.
+   See the [Unattended ISO Installer Tutorial](./get-started/unattended-iso-provisioning.md)
+   and [ADR: Provisioning Settings for the Unattended ISO Installer](../architecture-decision-record/adr-unattended-iso-provisioning.md).
 
-- **Fixed**: the Web UI Artifacts table listed outputs in whatever order they came off disk, so the SBOM appeared wherever its filename happened to sort. Images are now listed first and the SBOM last. Ordering is applied when a build is read rather than when its artifact list is built, so it also holds for a past build whose recorded order predates this change, and the live completion view and a reloaded history build agree.
+   - `systemConfig.users[].sshAuthorizedKeys` and `sshAuthorizedKeysFiles`
+     install SSH public keys with the correct ownership and modes.
+   - `systemConfig.proxy` writes `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY` and
+     `NO_PROXY` to `/etc/environment`, apt and the systemd default
+     environment.
+   - `systemConfig.provisioning.scripts[]` runs your scripts from generated
+     systemd units at first boot or every boot, in a configured order. A
+     script takes command-line arguments (`args`) and environment variables
+     (`env`) from the template, can be limited with `timeoutSec`, and can be
+     followed by a reboot with `rebootAfter`.
+     `systemConfig.provisioning.beforeLogin: true` runs the scripts before the
+     login prompt, so console and SSH logins (except root) wait until
+     provisioning has finished.
+   - When a provisioning script fails, the console login prompt and the
+     message after login, including over SSH, name the script and the
+     `sudo journalctl -u` command that shows its log, until the script
+     succeeds. On an image whose `/etc` is not persistent, such as
+     `imageType: img`, the notice lasts only until the next reboot.
+   - `stopOnFailure: true` keeps a failed first-boot script from running
+     again at every boot. The notice then tells an administrator to fix the
+     problem and run `sudo /usr/libexec/ict-provision-report retry <name>`, or
+     to finish by hand and run `sudo /usr/libexec/ict-provision-report done
+     <name>`. `recoveryHint` adds the template's own hint to the notice.
+   - `systemConfig.cloudInit` installs cloud-init and seeds it through a
+     pinned NoCloud datasource.
+   - `systemConfig.aptPolicy.upgradeAllowedRepos` limits which template
+     repositories may upgrade installed packages. Ubuntu and Debian archives
+     keep upgrading unless the image is immutable, in which case nothing
+     upgrades.
+   - `systemConfig.bootloader.bootEntryPolicy` (`preserve` or `exclusive`):
+     the installer now sets the firmware `BootOrder` explicitly, with the
+     installed disk first.
+   - Partition `start` and `end` accept offsets from the end of the disk
+     (`end: "-20GiB"`), so the root partition can fill a disk of any size
+     while fixed-size data or swap partitions follow it.
+   - ISO builds keep the SPDX SBOM of the installed system and a
+     `<image>-<version>.composition.json` file next to the ISO.
+   - The `build` flags `--disk-strategy`, `--hostname`, `--http-proxy`,
+     `--https-proxy`, `--ftp-proxy`, `--no-proxy` and
+     `--ssh-authorized-key USER=FILE` override the matching template fields.
+     The disk, hostname and proxy overrides are rejected for overlay
+     templates.
+   - `systemConfig.provisioning`, `cloudInit`, `aptPolicy` and `oepInstaller`
+     are create-mode only: an overlay template that sets any of them fails
+     up front, naming each such section.
 
-- **Changed**: the template a build ran against is now listed in the Web UI Artifacts table, with type `TEMPLATE` and a download action, instead of appearing in the Compose details panel. It sits after the images and before the SBOM, so the SBOM remains the table's last row. For an Advanced-mode build the row follows the template the server keeps: while the build runs it is the generated `extends` delta, and once the build concludes — whether it succeeded, failed or was cancelled — it is the self-contained resolved copy archived in the build directory. The raw `image-composer-tool build …` command line has been removed from that panel altogether — it restated information already shown as the selection and image configuration. The panel now carries only those two summaries, and is not offered at all for a build submitted as raw YAML, which has no configuration summary to show.
+5. **OEP Installer blueprints**
 
-- **Changed**: user-facing Web UI copy uses the US spelling "artifact" throughout ("Artifacts", "Partial artifacts", "Output Artifacts", "Download artifact"), including the Disk step's validation messages for that section. It matches the API contract's `artifacts` field and the `disk.artifacts` template key.
+   - Compose OEP Installer blueprints into Ubuntu images with the new
+     `systemConfig.oepInstaller` template section. ICT imports the package
+     list the OEP Installer publishes for a blueprint, installs its Debian
+     packages and apt repositories at build time, checking them against the
+     template's kernel and kernel parameters, and applies its apt preferences
+     when resolving packages, so the image gets the versions `apt` would
+     pick on the device. On first boot it runs `openedge-cli install` for the
+     blueprint as the template's user.
+   - Only `sbomUrl` and `user` are required. Without `url`, ICT installs the
+     CLI that the package list names in its `cli-url` header, verified
+     against its `cli-sha256` header when present; without `modules` or
+     `args`, it uses the list's own; without `sbomSha256`, the list is not
+     verified. A template can point `sbomUrl` at a branch and pick up OEP
+     Installer fixes without changing. The template the image carries
+     records the CLI and digests that were used.
+   - Files in a private GitHub repository need a GitHub token. ICT reads it,
+     in order of precedence, from `build --oep-installer-token-file FILE`,
+     `ICT_OEP_INSTALLER_TOKEN`, the file `ICT_OEP_INSTALLER_TOKEN_FILE`
+     names, or the file the `oep_installer.token_file` setting in
+     `image-composer-tool.yml` names. A token file lets the Web UI build
+     such templates with `serve --sudo`, which does not pass the token
+     variable through `sudo`, and from Docker Compose through a secret that
+     `docker-compose.yml` shows commented out. Keep the file owned by root
+     with mode 0600; ICT warns when other users can read it.
+   - In the Web UI, the **Users and credentials** dialog has a **GitHub token
+     for the OEP Installer** field for a template with
+     `systemConfig.oepInstaller`. The token is used for that build only: it
+     is not stored, and **Retry compose** does not reuse it.
+   - When the OEP Installer fails on first boot, it is not run again at every
+     boot. The login notice tells an administrator to fix the problem and run
+     `sudo /usr/libexec/ict-provision-report retry oep-installer`, or to
+     resume by hand and then run
+     `sudo /usr/libexec/ict-provision-report done oep-installer`.
 
-- **Fixed**: the template download (`GET /builds/{id}/template`) returned 404 for any build read back from disk, which is every build after a server restart. `meta.json` never recorded the template's on-disk path, so there was nothing left to resolve once the in-memory record was gone — the download icon in the old details panel was already broken there. The path is now persisted, and a record written before this change falls back to the archived resolved copy at `<build-root>/template.yml`. `BuildDetails` also gained a `templatePath` field so the UI can show where the template lives; it is `omitempty`, and a build against a curated template whose record predates this change reports none rather than guessing.
+6. **Intel EdgePack templates and DKMS module builds**
 
-- **Fixed**: `template-dump.yaml` — the resolved template an installer ISO carries, and the copy left in the image build directory — was thousands of lines long because the per-package SBOM metadata (supplier, checksum, licence, URL for every installed package) was folded into it as a `sbomPackageMetadata` block. It is now a plain template, matching what the web UI shows for the same build. The metadata moved to a `sbom-metadata.yaml` sidecar written beside it, both in the build directory and in the ISO, so the live-installer still emits a full SPDX document for the system it installs. `sbomPackageMetadata` remains a template field, so a build whose input already carries the block inline — a rebuild from a dump written by an earlier release, say — has it moved to the sidecar rather than written back out, and its dump is short too. **An ISO built by an earlier release is unaffected**: the installer reads the sidecar when present and falls back to the template's inline block when it is not.
-- **Changed**: MBR is no longer selectable in the Advanced tab's Disk Layout step, and the chip now reads "MBR is not yet enabled." It is shown locked rather than hidden, so a template that already declares `partitionTableType: mbr` still displays its real value — it can be moved to GPT, but not back. The schema and the builder both still accept MBR, so a hand-authored template is unaffected.
+   - Raw image templates for Intel's EdgePack platform-enablement packages
+     (Panther Lake and Wildcat Lake), on Ubuntu 24.04 and 26.04:
+     `ubuntu24-x86_64-edgepack-raw.yml` and
+     `ubuntu26-x86_64-edgepack-raw.yml` (desktop), and the headless
+     `ubuntu24-x86_64-edgepack-server-raw.yml` and
+     `ubuntu26-x86_64-edgepack-server-raw.yml`, which add
+     `ubuntu-server-minimal` instead of the desktop packages. They install
+     `intel-edge-base-standard`, `intel-edge-media-ffmpeg`,
+     `intel-edge-media-gst` and `intel-edge-manageability` from the signed
+     EdgePack repository (`noble` or `resolute` suite), plus the packages the
+     platform minimal template needs, such as build, debug, network and
+     storage tools. NPU, IPU and edge-compute-essentials
+     enablement comes with `intel-edge-base-standard`. The kernel is pinned
+     to `linux-image-7.0.0-34-generic` rather than the rolling HWE
+     metapackage. The 26.04 templates use a 12 GiB disk, the 24.04 ones
+     6 GiB.
+   - Unattended-ISO templates for the same package sets:
+     `ubuntu24-x86_64-edgepack-unattended-iso.yml`,
+     `ubuntu24-x86_64-edgepack-server-unattended-iso.yml`,
+     `ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml` (only
+     `intel-edge-base-standard`, without the Media or Manageability
+     packages), `ubuntu26-x86_64-edgepack-unattended-iso.yml` and
+     `ubuntu26-x86_64-edgepack-server-unattended-iso.yml`. They pin the kernel
+     to `7.0.0-38`, which `edge-gfx-dkms` 7.0 builds against, and install
+     `acpica-tools` and `iptables`. Their `admin` user is in the `sudo`,
+     `video`, `render` and `audio` groups, and their `systemConfig.network.backend`
+     is `netplan`. The desktop templates install a terminal emulator
+     (`gnome-terminal` on 24.04, `ptyxis` on 26.04), and the 26.04 ones do
+     not list `dbus-x11`, which kept GDM from starting a desktop. The server
+     templates boot to `multi-user.target` and request DHCP with the NIC's
+     MAC address, so a DHCP reservation for the board keeps working after a
+     re-flash.
+     `admin.pub` is a placeholder with no key, so build with
+     `--ssh-authorized-key admin=FILE`, or set a password or key in the
+     template, or the build fails at validation.
+   - The desktop templates install a real Firefox `.deb` from Mozilla's
+     repository (`packages.mozilla.org`), pinned at priority 1001 for the
+     `firefox` package only; Ubuntu's own `firefox` package installs nothing
+     in an image build.
+   - In the Web UI Basic tab, the **Platform Enablement** use case offers
+     **EdgePack Minimal Desktop** and **EdgePack Minimal Server** on Ubuntu
+     24.04 and 26.04, and **EdgePack Standard Base Only (Demo)** on Ubuntu
+     24.04, all for Panther Lake and Wildcat Lake. They build the unattended
+     ISOs, and the credentials dialog asks for the `admin` user's login.
+   - The new `systemConfig.dkms` section builds and verifies the DKMS
+     modules that installed packages register, such as EdgePack's
+     `edge-gfx-dkms`, `edge-edac-dkms`, `edge-issei-dkms` and
+     `edge-mei-dkms`, against the image's target kernel instead of the build
+     host's. A module that displaces an in-tree driver is handled. When
+     package installation or a module build fails, the available `make.log`
+     files are kept under `imagebuild/<systemConfigName>/dkms-logs/`.
 
-- **Fixed**: a template's `metadata` block was dropped from its resolved output. The AI-searchable discovery text (`description`, `use_cases`, `keywords`) that most curated templates open with — it is optional, and a number of shipped templates declare none — never reached `resolve --full` or the Web UI's resolved view, because the template struct had no field for it. It now round-trips through load, merge and marshal. **It still does not inherit**: a child that declares no `metadata` resolves to none rather than adopting its parent's, since the block is read per file for discovery and a child is a different image than its parent describes; a child that declares its own replaces the parent's whole block rather than merging it field by field. Top-level keys are also emitted in the order the curated templates are authored in (`metadata` → `image` → `target` → … → `systemConfig`), where previously `systemConfig` was followed by `packageRepositories` and `metadata` was absent entirely, so a resolved template now reads like a hand-written one.
-- Web UI Advanced tab: Edge Pack, a capability view of the package catalog. The Choose Packages to Compose step now offers two browsing surfaces behind a tab switcher — **Edge Pack** and **Repositories** — over one shared selection. A repository answers "where does this package come from"; an Edge Pack domain answers "what does this let the image do", which is usually the question someone composing an edge image actually arrives with. Edge Pack packages are grouped into domains (**Media** and **Manageability**), each domain showing its own selection count and expanding to a list where individual packages can be picked and version-pinned exactly as they can under Repositories. **Only capabilities that are genuinely a choice are domains**: `intel-edge-base-standard` installs the NPU (`intel-edge-npu`), IPU (`intel-edge-ipu`) and `edge-compute-essentials` profiles itself, so none of those is offered as a domain — presenting one would let it be unticked in the UI while the base metapackage installed it anyway. A domain's checkbox selects everything in it; a domain only partly selected shows the mixed (indeterminate) state, as does the pack-level "Domains" checkbox above the grid, so a selection is never rounded up to "all" or down to "none" in the display. Selecting a group skips packages already selected, so a version pinned by hand is not reset to floating latest by a later "select all". A **Base Runtime** selector (Standard / Real-time) sits above the domain grid, independent of it: every domain's packages need a base runtime beneath them, so **no domain — and no individual package within one — can be selected until a base runtime is chosen**, and the step says so rather than leaving a greyed-out checkbox to be puzzled over. The relationship is one-directional: choosing a runtime unlocks the domains, but clearing a domain never clears the runtime, which is an independent choice. The gate blocks adding rather than clearing, so a selection that ends up without a runtime — by clearing the runtime after picking a domain — can always be emptied again, and the step warns that those packages will not build instead of leaving them checked behind a locked control. Real-time is shown but disabled, with its reason stated — there is no shipped package or qualified SKU for it yet. That reason is rendered as visible text rather than left to a tooltip, because a disabled control cannot be focused to reveal one; and because an unavailable runtime is not something the target can build on, selecting Real-time from the Repositories tab does not satisfy the gate either. A domain the selected target OS does not publish is likewise shown-but-locked with an explanation instead of being hidden, and re-enables by itself when the target changes to one that supports it. The pack-level "Domains" checkbox respects those locks: it adds only the domains the target publishes, so it cannot become a way around a domain's own disabled checkbox, and its count is over that same addable set so that "all" stays reachable. It can still clear a locked domain's packages when a target change has left some selected, which would otherwise be unselectable and unremovable both. A domain **or a base runtime** can also declare repositories it needs on top of the pack's own, for a metapackage whose dependencies are published somewhere the pack does not carry: because the standard base carries the NPU profile, selecting that runtime enables the Intel Graphics repository alongside the pack's, and the selector says so before anything is picked — as an expanded domain does for its own prerequisites. Where such a prerequisite is not offered for the selected target, the domain — or the runtime, which locks every domain sitting on it — is shown locked for that stated reason rather than left selectable to fail later; otherwise the choice and the failure would be separated by an entire build. **The two surfaces are one selection, not two.** Selections are keyed by package name, so a package picked on the Edge Pack tab reads as selected when the same package is browsed under its repository and vice versa, it appears exactly once in the right-hand "Selected" rail no matter which surface added it, and picking it enables its repository just as picking a search hit does. Enabling is one-directional: clearing a domain, a package or the base runtime here never switches a repository back off, since it may have been enabled on the Repositories tab for something this tab cannot see. Switching tabs never disturbs what is selected. The grouping is served by a new `GET /edge-pack` endpoint over a new `data/edge-pack.yaml` catalog (overridable at runtime with `serve --edge-pack`, mirroring `--package-repos`), so the domains, their packages and their per-target availability are data rather than code. This is presentation metadata only — no template schema field changes, and an Edge Pack package reaches a build through the same `systemConfig.packages` entry in the generated `extends` delta that a repository-browsed package already does. Version metadata is best-effort: when the pack's repository index cannot be read, packages are still listed and still selectable at latest, losing only the pinnable version chips rather than the tab.
+7. **Other new and updated templates**
 
-- Web UI Advanced tab: an Edge Pack selection now enables DKMS by itself. Edge Pack's metapackages ship vendor DKMS module sources (`edge-gfx-dkms`, `edge-edac-dkms`, `edge-issei-dkms`, pulled in transitively by `intel-edge-base-standard`), and those sources are only compiled against the image's target kernel if the template asks for it — so as soon as the selection contains **any** Edge Pack package, the generated `extends` delta emits `systemConfig.dkms.enabled: true`. An Edge Pack image whose modules were never built is not a configuration anyone would pick deliberately, so there is no UI control for it; whether one should be offered is left for later. A version-pinned pick (`intel-edge-npu_1.2.3-0intel1`) counts the same as an unpinned one — the pin selects a build, not a different package. `dkms.modules` is deliberately left unset, so ICT runs `dkms autoinstall` for every module the installed packages registered rather than asserting a list of module/version identifiers this catalog has no way to know; Secure Boot module signing is likewise not declared, since it needs real key material the Web UI cannot supply. A selection with no Edge Pack package emits **no** `dkms` block at all rather than `enabled: false`: `extends` merging treats the section as a wholesale overwrite whenever a child declares it, so an always-emitted block would silently disable DKMS on a curated parent template that had turned it on. See `image-templates/ubuntu24/ubuntu24-x86_64-edgepack-raw.yml` for the hand-authored equivalent.
+   - Nova Lake BKC (Best Known Configuration) starter:
+     `image-templates/ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml` is an
+     overlay template that layers onto an installed Ubuntu 26.04 RAW image and
+     adds a single package; the full BKC template replaces it under the same
+     name where it is deployed. It backs the Web UI's **Upstream BKC** SKU
+     under **Platform Enablement**, on **NVL (Nova Lake)** with Ubuntu 26.04.
+   - `debian13-x86_64-bb-dracut-raw.yml` now boots a GNOME-on-Xorg desktop
+     with a GDM login, with a dconf setting that works around a Mutter
+     click-position bug. It also ships a sample first-boot systemd oneshot
+     unit (`first-boot-sample.service`): a script that runs once, on the
+     device's first boot only, gated by a marker file, with its message
+     mirrored to the journal, a log file, `dmesg` and the serial console.
 
-- Intel EdgePack template for Ubuntu 26.04: `image-templates/ubuntu26/ubuntu26-x86_64-edgepack-raw.yml`, the resolute counterpart of the existing `ubuntu24-x86_64-edgepack-raw.yml`. It uses the same native building blocks — a `packageRepositories` entry for the signed EdgePack repository, EdgePack metapackages in `systemConfig.packages`, and the typed `systemConfig.dkms` section that builds the vendor DKMS modules against the image's target kernel rather than the chroot's build-host kernel. The EdgePack repository is pinned to the `resolute` suite instead of `noble`, and there is a single repository entry rather than two: NPU, IPU and edge-compute-essentials enablement is carried by `intel-edge-base-standard` itself on both 24.04 and 26.04, so neither template selects a separate `intel-edge-npu` package or its prerequisite repository. Both templates pin their kernel to `linux-image-7.0.0-34-generic`/`linux-headers-7.0.0-34-generic` rather than tracking the floating `linux-image-generic-hwe-24.04`/`-26.04` metapackage; `systemConfig.dkms` rebuilds the vendor modules against that exact kernel. The raw templates stay on this validated `7.0.0-34` pin; `edge-gfx-dkms` 7.0 detects the kernel's `intel_vsec` API form from the installed headers and also builds against `7.0.0-38`, which the EdgePack unattended-ISO templates use. Both templates are built in CI by the `Build EdgePack Images` workflow (`.github/workflows/build-edgepack.yml`); a successful build confirms EdgePack's `edge-edac-dkms`, `edge-gfx-dkms`, `edge-issei-dkms`, and `edge-mei-dkms` modules build and install against the pinned kernel inside the chroot.
+8. **Overlay builds**
 
-- Minimal Ubuntu server + EdgePack templates for 24.04 and 26.04: `image-templates/ubuntu24/ubuntu24-x86_64-edgepack-server-raw.yml` and `image-templates/ubuntu26/ubuntu26-x86_64-edgepack-server-raw.yml`. These are headless counterparts of the two `*-edgepack-raw.yml` templates above — same EdgePack package set (`intel-edge-base-standard`, `intel-edge-media-ffmpeg`, `intel-edge-media-gst`, `intel-edge-manageability`) and the same pinned kernel, but adding `ubuntu-server-minimal` instead of `ubuntu-standard`/`ubuntu-desktop-minimal` on top of the `ubuntu-minimal` raw-image default, with no use-case-specific provisioning. Both are schema-validated; the 24.04 server template has also been built end-to-end and confirmed to produce working DKMS modules.
+   - `overlayPolicy.allowDowngrade` permits baseline package downgrades
+     selected by explicit APT `name_version` requests with
+     `packageOperation: additive-and-upgrade`. It defaults to false and does
+     not bypass dependency integrity, protected boot packages or removal
+     policy. Unpinned packages and dependencies are not selected for
+     downgrade automatically.
+   - Overlay builds print a planned package-change report after dependency
+     resolution and preflight, before the build begins. It lists
+     resolver-selected dependency upgrades along with additions and approved
+     removals; install-time cascade removals may differ from the plan and
+     appear in the final statistics.
+   - Overlay templates support `systemConfig.proxy`, written the same way as
+     in create mode, after the build-time configuration commands. Add
+     site-specific settings in a local or internal template. Build downloads
+     still use the host's proxy environment.
 
-- **Fixed**: both Ubuntu 26.04 EdgePack templates (`ubuntu26-x86_64-edgepack-raw.yml`, `ubuntu26-x86_64-edgepack-server-raw.yml`) failed in pre-processing because they requested `python3.12-venv`, which does not exist on 26.04 (resolute ships Python 3.14). All four EdgePack templates, 24.04 and 26.04, now request the version-agnostic `python3-venv`, which resolves to `python3.12-venv` on noble and `python3.14-venv` on resolute. On 24.04 the interpreter-specific venv implementation remains `python3.12-venv`, though the generic `python3-venv` metapackage is also installed. With that fixed, the 26.04 builds then failed linking `edge-gfx-dkms`'s `xe.ko` with `No space left on device`: the finished 26.04 desktop image already uses about 4.9 GB, which leaves too little of the 6 GiB disk's root partition for the in-image DKMS build objects. Both 26.04 EdgePack templates now use a 12 GiB disk; the 24.04 templates keep 6 GiB. A new `Build EdgePack Images` workflow builds all four templates on pull requests that touch them, the Ubuntu OS config, the Ubuntu provider, DKMS/imageos code, the Debian package resolver, or the chroot code, and uploads the missing-package report when a build fails.
+9. **New build options and template fields**
 
-- **Fixed**: `internal/image/imageos/dkms.go`'s post-build DKMS verification treated the `original_module` pseudo-version directory DKMS creates when it backs up an in-tree driver it displaced (e.g. `igen6_edac`, `xe`, `virtio-gpu`, `mei*` — all upstream in-tree on current Ubuntu kernels) as if it were a real built source, and failed the whole build looking for a nonexistent `dkms.conf` under it. Any DKMS-enabled template whose target kernel already ships an in-tree module of the same name — both EdgePack templates included — could hit this. `original_module` is now skipped when walking the DKMS build tree.
+   - `build --replace-additional-file FINAL=FILE` replaces the host file of
+     the `systemConfig.additionalFiles` entry installed at `FINAL` for one
+     build, so an input that changes per build, such as a vendor tarball,
+     can be supplied on the command line without editing the template. It
+     does not add files: it fails if no entry has that `final` path or if
+     `FILE` is not an existing regular file. It can be repeated.
+   - `systemConfig.bootloader.timeoutSec` sets how long GRUB shows its menu
+     before booting the default entry (`GRUB_TIMEOUT`), so a template no
+     longer needs an `/etc/default/grub.d` drop-in for it. It applies to
+     create-mode builds with the `grub` provider; with `systemd-boot` the
+     template is rejected.
 
-- Unattended ISO provisioning settings. An `imageType: iso` template can now
-  install a fully configured system hands-free, applied identically by raw
-  builds and by the live installer. See the
-  [Unattended ISO Installer Tutorial](./get-started/unattended-iso-provisioning.md)
-  and [ADR: Provisioning Settings for the Unattended ISO Installer](../architecture-decision-record/adr-unattended-iso-provisioning.md).
-  - `systemConfig.users[].sshAuthorizedKeys` / `sshAuthorizedKeysFiles` install
-    SSH public keys with correct ownership and modes.
-  - `systemConfig.proxy` persists `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, and
-    `NO_PROXY` into `/etc/environment`, apt, and the systemd default environment.
-  - `systemConfig.provisioning.scripts[]` runs user scripts from generated
-    systemd units at first boot or every boot, in a configured order. A script
-    can be parameterised from the template with `args` (command-line
-    arguments) and `env` (environment variables), limited with `timeoutSec`,
-    and followed by a reboot with `rebootAfter`.
-    `systemConfig.provisioning.beforeLogin: true` runs the scripts before the
-    login prompt, so console and SSH logins (except root) wait until provisioning has finished.
-  - `systemConfig.cloudInit` installs cloud-init and seeds it through a pinned
-    NoCloud datasource.
-  - `systemConfig.aptPolicy.upgradeAllowedRepos` limits which template
-    repositories may upgrade installed packages. Ubuntu/Debian archives keep
-    upgrading unless the image is immutable, in which case nothing upgrades.
-  - `systemConfig.bootloader.bootEntryPolicy` (`preserve` or `exclusive`): the
-    installer now sets the firmware `BootOrder` explicitly with the installed
-    disk first.
-  - Partition `start`/`end` accept offsets from the end of the disk
-    (`end: "-20GiB"`), so root can fill a disk of any size while fixed-size data
-    or swap partitions follow it.
-  - ISO builds now keep the SPDX SBOM of the installed system and a
-    `<image>-<version>.composition.json` manifest next to the ISO.
-  - `build` flags `--disk-strategy`, `--hostname`,
-    `--http-proxy`, `--https-proxy`, `--ftp-proxy`, `--no-proxy`, and
-    `--ssh-authorized-key USER=FILE` override the matching template fields.
-  - New unattended ISO templates `ubuntu24-x86_64-edgepack-unattended-iso.yml`,
-    `ubuntu24-x86_64-edgepack-server-unattended-iso.yml`,
-    `ubuntu26-x86_64-edgepack-unattended-iso.yml` and
-    `ubuntu26-x86_64-edgepack-server-unattended-iso.yml`. Each installs the
-    package set (plus `acpica-tools`), EdgePack repository and DKMS modules of
-    the matching `*-edgepack[-server]-raw.yml` template, with the kernel pinned
-    to 7.0.0-38, which `edge-gfx-dkms` 7.0 builds against, and a
-    `default-initrd-unattended-x86_64.yml` installer environment for Ubuntu 26.04.
+**Changed**:
 
-- **Changed**: `systemConfig.users[].shell`, `home`, and `passwordMaxAge` are now
-  applied; previously every account got `/bin/bash` and the default home. `home`
-  applies only to accounts the build creates: an account already in the image,
-  such as `root`, keeps its home. A
-  `password` that is a crypt(3) hash is always set as a hash, even without
-  `hash_algo`. `systemConfig.hostname` must be an RFC 1123 host name.
-  A user without a `password` but with SSH keys now has its password locked, so
-  it can log in only with those keys; if it also has sudo access (`sudo: true` or a `sudo`/`wheel` group), it is granted
-  passwordless sudo, since a locked password cannot answer the sudo prompt. Such a user with neither a
-  password nor an SSH key now fails the build instead of being created with an
-  empty password. Four shipped templates define such a user:
+*Build, templates and validation*
+
+- Building ICT now requires Go 1.26 or newer.
+- Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. CI
+  runs the host-sensitive unit tests and builds minimal raw images on an
+  Ubuntu 26.04 host for every pull request and merge.
+- Every user in a template needs a credential. `systemConfig.users[]` with
+  neither a `password` nor an SSH key now fails the build, and
+  `image-composer-tool validate --merged` reports it, instead of being created
+  with an empty password. The only exception is a user with a
+  `startupScript`. A key file that holds only comments does not count as a
+  key. Four shipped templates define such a user:
   `ubuntu24-x86_64-minimal-unattended-iso.yml`,
   `generic-handheld-os-template.yml`,
   `generic-companion-os-server-template.yml` and
-  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The
-  four new `*-edgepack[-server]-unattended-iso.yml` templates need one as well,
-  because their `admin.pub` holds only comments. For any of them, set `password`, or build
-  with `--ssh-authorized-key USER=FILE`.
+  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`, as do the EdgePack
+  unattended-ISO templates. For any of them, set `password`, or build with
+  `--ssh-authorized-key USER=FILE`.
+- `systemConfig.users[].shell`, `home` and `passwordMaxAge` are now applied;
+  previously every account got `/bin/bash` and the default home. `home`
+  applies only to accounts the build creates: an account already in the
+  image, such as `root`, keeps its home. A `password` that is a crypt(3) hash
+  is always set as a hash, even without `hash_algo`. A user with SSH keys but
+  no `password` has its password locked, so it can log in only with those
+  keys; if it also has sudo access (`sudo: true` or a `sudo` or `wheel`
+  group), it gets passwordless sudo, since a locked password cannot answer
+  the sudo prompt. `systemConfig.hostname` must be an RFC 1123 host name.
+- When a template that `extends` another, or a user template merged with the
+  OS defaults, lists a package the other already lists, only one entry now
+  survives the merge. An entry that pins a version (`curl_8.5.0-2`) replaces
+  the inherited entry for that package, pinned or not; a bare entry (`curl`)
+  leaves the inherited one in place. Before, both entries survived, and the
+  build installed one of them or failed at the package-install step. No
+  shipped template is affected.
+- Disk partition offsets are validated before a build starts or an
+  installation disk is wiped. Positive offsets are measured from the start of
+  the disk; negative ones, such as `-20GiB`, from the end of the selected
+  disk. Only the final partition may use `end: "0"`; overlapping, reversed,
+  zero-start and end-relative offsets beyond the selected disk are rejected.
+  Overlaps between positive and negative offsets are checked once the disk
+  is selected and its size is known, but before it is wiped. Policy-based
+  disk selection counts the largest absolute and end-relative offsets plus a
+  1 MiB margin in its minimum-size check. Raw builds and the ISO live
+  installer use the same checks; an explicit disk path bypasses the
+  selection policy but not the layout check.
+- A template's `metadata` block (`description`, `use_cases`, `keywords`) is
+  kept in its resolved output, so it reaches `resolve --full`, the Web UI and
+  `template-dump.yaml`. It is still not inherited: a child without
+  `metadata` resolves to none, and a child with its own replaces the
+  parent's whole block. Resolved templates list their top-level keys in the
+  order the shipped templates use (`metadata`, `image`, `target`, …,
+  `systemConfig`).
+- `template-dump.yaml`, the resolved template an installer ISO carries and
+  the copy left in the image build directory, no longer includes the
+  per-package SBOM metadata, which made it thousands of lines long. The
+  metadata is written to a `sbom-metadata.yaml` file beside it, in the build
+  directory and in the ISO, so the live installer still produces a full
+  SPDX document. A template that already carries a `sbomPackageMetadata`
+  block, such as a dump from an earlier release, has it moved to that file.
+  An ISO built by an earlier release is unaffected: the installer falls back
+  to the inline block when `sbom-metadata.yaml` is missing.
+- The apt pin ICT writes into an image for a repository that sets
+  `allowPackages` now covers only the listed packages (and the names the
+  build-time filter accepts for them, which includes names that start with a
+  listed entry); the repository's other packages stay at apt's default
+  priority. Before, the pin covered every package the repository publishes.
+  This affects templates such as those using the Intel overlay and Debian
+  backports. Images that cannot upgrade from a repository (immutable images
+  and `aptPolicy`) keep the whole-repository pin. Repositories whose pin file
+  names would collide (same suite and host, no IDs) now each keep their own
+  file.
+- Immutable Ubuntu and Debian images include apt pins that stop package
+  upgrades.
+- Build commands get the host's `http_proxy`, `https_proxy`, `ftp_proxy` and
+  `no_proxy` in both lowercase and uppercase when the host sets only one
+  spelling, so tools such as `wget` in `systemConfig.configurations`, which
+  read only the lowercase form, use the proxy. The build log names the proxy
+  variables that are forwarded, never their values.
+- The output of a configuration command is logged at DEBUG when it succeeds,
+  and logged and appended to the error when it fails.
+- The CLI's **Generated Artifacts** summary lists only the images and SBOMs,
+  not every file in the image build directory.
+- ISO builds pass `-iso-level 3` to xorriso, so additional files larger than
+  4 GiB fit on the ISO. Additional files are stored on the ISO in a directory
+  per in-image destination, under their source file name, so two files with
+  the same name no longer overwrite each other, and a destination that is an
+  existing directory (such as `/etc`) receives `/etc/<file name>` as in a
+  raw build. ISO prerequisite checks now also cover the ISO template's own
+  `additionalFiles`, resolving relative paths as the build does.
+- The live installer removes only firmware boot entries labelled exactly
+  `ICT` (previously any label containing `ICT`), resolves `/dev/disk/by-*`
+  target paths to the kernel device, and uses the architecture's removable
+  EFI loader path (`BOOTAA64.EFI` on aarch64).
+- The ICT container image (item 2) replaces the builder image
+  (`build/builder/Dockerfile`), which could not complete a build. The
+  `+builder-image`, `+builder-image-push` and `+builder-image-preflight`
+  Earthly targets are removed.
 
-- **Fixed**: `packageRepositories` are now turned into apt sources and
-  preferences for `debian` targets, as they already were for Ubuntu and eLxr.
-  Previously the Debian provider requested this but the target check skipped
-  it, so `aptPolicy` and immutable pinning never applied to Debian images.
+*Overlay*
 
-- **Fixed**: generated `/etc/fstab` lists partitions in template order and skips
-  non-swap partitions without a mount point. Previously such a partition
-  produced a malformed fstab line.
+- The overlay installer's dependency audit compares failures before and
+  after every non-empty install or removal transaction, including
+  upgrade-only transactions, ignoring failures that were already there. A
+  failure that an upgrade-only transaction introduces fails the build without
+  cascade removal, even with `allowPackageRemoval: true`. Explicitly
+  authorized removal cascades keep their bounds and protected-package guards.
+- Platform-enablement templates that need private repositories are kept in
+  the internal template repository, not the public template catalog.
 
-- **Changed**: the live installer removes only firmware boot entries labelled
-  exactly `ICT` (previously any label containing `ICT`), resolves
-  `/dev/disk/by-*` target paths to the kernel device, and uses the
-  architecture's removable EFI loader path (`BOOTAA64.EFI` on aarch64).
+*Templates*
 
-- **Changed**: immutable Ubuntu and Debian images now include APT pins that stop
-  package upgrades. Build commands inherit the host's `no_proxy` and `ftp_proxy`
-  in addition to `http_proxy` and `https_proxy`.
+- Firefox now comes from Mozilla's repository (`packages.mozilla.org`,
+  suite `mozilla`) instead of the Mozilla Team PPA in
+  `generic-handheld-os-template.yml`,
+  `generic-companion-os-server-template.yml` and
+  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The PPA's
+  `InRelease` is signed with an rsa1024 key, which Ubuntu 26.04's apt
+  rejects and which Ubuntu 24.04's apt already marks as below its next
+  minimum key size, so `apt-get update` would fail on images that keep it.
+  The repository is pinned at priority 1001 for the `firefox` package only;
+  the companion server template, which installs no Firefox, no longer pins
+  the whole repository either.
+- `generic-handheld-os-template.yml` and
+  `generic-companion-os-server-template.yml` are vendored from
+  [`edge-node-infrastructure-blueprint`](https://github.com/open-edge-platform/edge-node-infrastructure-blueprint/tree/release-2026.2.0/infrastructure/host-os/ict)
+  `release-2026.2.0`. `generic-handheld-os-template.yml` was updated in
+  place to that revision: its swap partition grows from 3073MiB to 5121MiB,
+  and it installs the 6.18 Intel kernel and media stack from a pinned
+  snapshot of the Intel edge overlay (`download.01.org/edge-linux-overlay`)
+  instead of the rolling `intel-linux-overlay` suite, so images built from it
+  differ from earlier releases. Their `user` account has an empty password:
+  set a password, or build with `--ssh-authorized-key user=FILE`.
+- The `Edge Node Infrastructure Blueprint BKC` template,
+  `ubuntu24-x86_64-minimal-ptl-pv-raw.yml`, is not offered in the Web UI; it
+  can still be built from the CLI.
 
-- **Changed**: ISO builds pass `-iso-level 3` to xorriso, so additional files
-  larger than 4 GiB can be carried on the ISO. Additional files are stored on
-  the ISO in a directory per in-image destination, under their source
-  basename, so two files with the same basename no longer overwrite each other
-  and a destination that is an existing directory (such as `/etc`) still
-  receives `/etc/<basename>` as in a raw build. ISO prerequisite validation now also checks the
-  ISO template's own `additionalFiles`, resolving relative paths exactly as the
-  build does.
+*Security*
 
-- Fed Aero host-OS blueprints in the Web UI Basic tab. The two generic host-OS templates from [`edge-node-infrastructure-blueprint`](https://github.com/open-edge-platform/edge-node-infrastructure-blueprint/tree/release-2026.2.0/infrastructure/host-os/ict) `release-2026.2.0` are now vendored into `image-templates/ubuntu24/` and selectable from the Basic tab: `generic-handheld-os-template.yml` (handheld/desktop) and `generic-companion-os-server-template.yml` (companion OS server). Both target Panther Lake on Ubuntu 24.04 and build a `raw` image. Both are wired into the shipped Basic-tab manifest (`internal/api/service/data/manifest.yaml`) under the Fed Aero vertical, so they are available out of the box with no extra configuration. **The `Edge Node Infrastructure Blueprint BKC` SKU has been removed from the Fed Aero vertical**, so Fed Aero now offers exactly these two blueprints on Ubuntu 24.04 (the grayed-out `Drone Image - From BKC Team` placeholder on Ubuntu 26.04 Server is unchanged). Its template, `ubuntu24-x86_64-minimal-ptl-pv-raw.yml`, remains in `image-templates/` and can still be built directly from the CLI — only the Basic-tab entry is gone. Note that `generic-handheld-os-template.yml` was **updated in place** to the `release-2026.2.0` revision — its swap partition grows from 3073MiB to 5121MiB, and it now installs the 6.18 Intel kernel and media stack from a pinned snapshot of the Intel edge overlay (`download.01.org/edge-linux-overlay`) instead of the rolling `intel-linux-overlay` suite, so images built from it differ from earlier releases. Upstream ships `<USERNAME>`/`<PASSWORD>` placeholders in both templates' `users:` block; these are filled with this repo's convention (`user`, empty password, set at deploy time) so the templates validate and build as shipped — set real credentials before deploying. The Advanced tab's repository picker gains the two repositories these blueprints introduce: the pinned Intel edge overlay snapshot and the Ubuntu MozillaTeam PPA.
+- RPM signatures are checked against the keys of the repository each RPM
+  came from, including RPMs from local `path` repositories, which were
+  skipped before; such a repository now needs `pkey`, or `[trusted=yes]` to
+  opt out. `[trusted=yes]` covers only RPMs that repository served in the
+  current build, so a cached RPM it would serve is downloaded again. Debian
+  `Release` metadata is verified before it is cached, and again before
+  cached metadata is used after a refresh fails partway. A refresh is retried
+  up to 3 times, each on a fresh connection, when a mirror briefly serves a
+  mismatched `Release` and `Release.gpg`.
 
-- **Changed**: when package installation or DKMS module builds fail in a DKMS-enabled image, ICT preserves available `make.log` files before cleaning up the chroot. Logs are saved under `imagebuild/<systemConfigName>/dkms-logs/`, retaining their DKMS subdirectory paths.
+**Fixed**:
 
-- **Fixed**: a package whose `Filename` in the repository index contains a literal `%` could not be downloaded. aptly, for example, lists `edge-gfx-dkms_7.0-260928T031409Z%2B1_all.deb` for a `+` in a version, and stores the file under exactly that name. ICT requested the name unchanged, so the server decoded `%2B` to `+` and answered 404, and the build failed after dependency resolution. ICT now percent-encodes the `%` the way `apt` does before requesting the file. Names with a plain `+`, and every other URL, are unchanged.
+*Security*
 
-- **Fixed**: changing a repository's `allowPackages` list had no effect until the build cache was deleted. The parsed package-metadata cache was keyed only by the repository index checksum, yet it stores the list already filtered by `allowPackages`, so a cache written under one allow list was reused under another for as long as the repository was unchanged. An allow list added after an unfiltered build was silently ignored. The cache now records the filter it was parsed with and is reused only when it matches; caches written by earlier versions are discarded and re-parsed once.
+- RPM file names from repositories are validated and quoted before they
+  reach `rpm`, and `inspect` ignores SBOM files with unsafe names or paths,
+  so a crafted file name can no longer inject commands.
+- A `packageRepositories` `pkey` URL that returned a truncated file or an
+  HTML error page was cached and installed in every later image, which then
+  failed `apt-get update` with `NO_PUBKEY` on the device. Key data is now
+  checked to be an OpenPGP public key before it is used or cached, and a bad
+  cached key is downloaded again. Keyserver `pks/lookup` URLs are cached per
+  key ID.
 
-- **Fixed**: the Web UI's artifact column could serve the raw, unmerged per-build override delta instead of the full, self-contained template — while a build was still composing, when a cancel request didn't complete within the 5-minute hard deadline, and when the server process received a shutdown signal (e.g. `docker stop`, a Kubernetes pod eviction) while a build was still in flight. All three now always produce the fully-resolved, merged template: the merged template is archived before the build even starts running rather than only once it concludes, a stalled cancel re-archives it immediately without deleting the still-possibly-open delta file on disk, and `serve` now cancels an in-flight build on shutdown and waits (bounded, up to 20s) for it to reach a terminal state instead of exiting with it mid-merge. The archive is published by an atomic rename, so a download that lands while a build is re-archiving is never served a truncated file. **Cancelling on shutdown also stops a build being killed mid-chroot**: the build child runs in its own process group and does not observe the server's shutdown, so without a signal it would keep working until the orchestrator's `SIGKILL` took it down, leaving mounted filesystems and attached loop devices behind on the host. Shutdown also stops admitting new builds (a compose submitted from that point on gets `503 SERVER_SHUTTING_DOWN` instead of being started on a process that could not tear it down), and records what it knows about each cancelled build — including any reason the cancel signal failed — to disk before exiting, so it survives into the next instance's compose history. See `web/README.md` for the grace-period details.
+*Build and package resolution*
 
-- **Fixed**: a Debian-family build that reused a package cache could install an older version of a package than a build with an empty cache, for example `ca-certificates ...04.1` instead of `...04.2`, so two builds of the same template differed in their SBOMs. After dependency resolution, the cache check compared package names only, so a cached `.deb` for an older version counted as up to date and the resolved version was never downloaded. The check now matches the exact `.deb` file name, which includes the version, and the build uses only the files it resolved. For raw images, the packages installed while bootstrapping the image and the image's local APT repository are now also built from only those resolved files, so a different version of the same package left in the shared cache can no longer be installed.
-- **Changed**: when a template that `extends` another, or a user template merged with the OS defaults, lists a package the other already lists, only one entry now survives the merge. An entry pinning a version (`curl_8.5.0-2`) replaces the inherited entry for that package, pinned or not; a bare entry (`curl`) leaves the inherited one in place. Before, both entries survived, and the build silently installed one of them or failed at the package-install step, so pinning a version for a package the Web UI's matched template already lists did not reliably take effect. The compose response's `pinConflicts` field and the Review step's warning about it are removed, since such a pin now takes effect. A shipped template is not affected: none lists a package its parent or OS defaults list in another form.
-- The Web UI Advanced tab's Packages step now lists every repository the matched template installs from, through its whole `extends` chain, including ones the Web UI's repository catalog does not carry, such as a vendor snapshot or a PPA only that template uses. These show under **Already included** in the **Repository** dropdown, labelled by host and path, and can be browsed and searched, so **Show only selected** counts the template's packages from them and **Update to latest version** compares a template's pinned versions against what they publish. Before, the step showed only catalogued repositories, so a template's packages from any other repository were missing from both. `POST /templates/compose` returns these repositories in a new `templateOnlyRepos` field, and the package search endpoints accept their ids.
-- **Fixed**: in the Web UI Advanced tab's **Repositories** tab, **Show only selected** showed only the picked version of a package added from the browsed repository, with no chips for its other versions, so a package pinned by **Update to latest version** could no longer be moved to an older one there. It now offers every version that repository publishes, as the package list does. **Show frequently used**, offered only for repositories with a curated list, is no longer shown, to keep the controls row short; the package list always shows a repository's full catalog. And a template package's own pinned version stayed disabled even after it was overridden, for example by **Update to latest version**, leaving the **Selected** panel as the only way back. Choosing it now drops the override.
-- **Fixed**: in the Web UI Advanced tab's Packages step, the version an **Unpinned** pick or an unpinned template package "currently resolves to" was the newest one any checked repository offers. A build doesn't choose that way: like apt, it takes the repository with the highest priority first, and the newest version within it. Where a higher-priority repository carries an older version, such as a vendor snapshot at priority 1001 over Ubuntu's archive at 500, the step named a version the build would not install. It now follows the build's rule, in a row's *Resolved to* version, the dashed "unpinned" badge, the **Selected** panel's **Resolve**, and an unpinned template package's version.
-- **Changed**: in the Web UI Advanced tab's Packages step, the **Latest** version chip is removed. A package added without choosing a version is unpinned; choosing a version chip pins it, and choosing the pinned chip again unpins it, keeping the package added (the checkbox removes it). This also keeps it from being confused with **Update to latest version**, which pins packages. On a template package, choosing the chip of your override again drops the override, so the template's own entry applies again.
-- **Changed**: in the Web UI Advanced tab's package list, a selected package, or one the matched template includes, is now tagged **Pinned** or **Unpinned** beside its name, followed by the version a build would install in bold, and the browsed repository's version chips sit on their own line below. The version a build would install is marked among the browsed repository's version chips: solid for a pin, dashed for the version **Unpinned** currently resolves to, as the build picks it (repository priority first, then newest). When that version comes from another repository, *via* that repository follows it, as a link that browses it. A package that isn't selected still shows just its version, and *via* never names the repository being browsed. A pinned chip stays visible even when it's an older version past the first few chips. The version chip the template itself pins now shows selected like any other pick instead of greyed out; it still can't be clicked, as choosing it changes nothing. A template package no longer has a line saying it's in the template, since its greyed checkbox says so; once you change its version it's tagged **Modified**, and hovering the tag shows what the template has and what you chose.
+- Raw image builds failed when a package's post-install script built for
+  `uname -r`, as the Edge Pack 2026.3 `edge-*-dkms` packages do. Inside the
+  build chroot `uname -r` reports the build host's kernel, so those scripts
+  built for the wrong kernel and aborted the install. While Debian packages
+  are installed, ICT now replaces the image's `/usr/bin/uname` (with
+  `dpkg-divert`) with a temporary wrapper whose `uname -r` reports the newest
+  installed kernel (under `/boot`, or `/lib/modules` when `/boot` is still
+  empty), and restores the real `uname` when installation finishes. Every
+  other `uname` call is unchanged, and before a kernel is installed
+  `uname -r` still reports the host's.
+- Package downloads timed out behind a TLS-inspecting proxy, which holds a
+  response's headers until it has fetched and scanned the file. Package
+  downloads now wait up to 5 minutes for the response headers; other HTTP
+  requests keep the 30 s limit. A server that accepts a package request and
+  never answers now takes up to 15 minutes (3 attempts) to fail; one that
+  cannot be reached still fails on the 30 s connection timeout.
+- A package download that a mirror answered with 429, 502, 503 or 504 failed
+  the build after about 10 s of retries. While the latest failure is one of
+  those statuses, a download now gets up to 6 attempts, waiting 15 s and
+  doubling up to 2 minutes, plus one second per download worker (at most
+  about 6½ minutes of waiting with the default 8 workers). A `Retry-After`
+  header is honored up to 2 minutes; a server that asks for longer fails the
+  download at once. Every other failure keeps the previous 3 attempts.
+- A Debian-family build that reused a package cache could install an older
+  version of a package than a build with an empty cache, so two builds of
+  the same template differed in their SBOMs. The cache check now matches the
+  exact `.deb` file name, which includes the version, and the build uses only
+  the files it resolved, including, for raw images, the packages installed
+  while bootstrapping and the image's local apt repository.
+- Changing a repository's `allowPackages` list had no effect until the build
+  cache was deleted. The parsed package-metadata cache now records the filter
+  it was parsed with and is reused only when it matches; caches written by
+  earlier versions are parsed again once.
+- A package whose `Filename` in the repository index contains a literal `%`
+  (as aptly writes for a `+` in a version) could not be downloaded. ICT now
+  percent-encodes the `%` as `apt` does.
+- apt repositories that publish only a combined `InRelease` file, instead of
+  a detached `Release` and `Release.gpg`, are supported, including EdgePack's
+  public repository. The format is detected and verified either way, and
+  rebuilds keep using the detected format.
+- Dependencies on a versioned virtual `Provides:` (for example Debian's Qt6
+  ABI packages) are resolved against the version the provider declares for
+  that capability, not the provider's own package version. An unversioned
+  `Provides:` no longer satisfies a versioned dependency.
+- `systemConfig.configurations` commands containing multi-line scripts or
+  shell metacharacters (`$()`, backticks, `$var`) reach the chroot unchanged,
+  instead of having their whitespace collapsed or being partly expanded by
+  the outer shell.
+- `packageRepositories` are turned into apt sources and preferences for
+  `debian` targets, as they already were for Ubuntu and eLxr, so `aptPolicy`
+  and immutable pinning now apply to Debian images.
+- Generated `/etc/fstab` lists partitions in template order and skips
+  non-swap partitions without a mount point, which used to produce a
+  malformed line.
+- On build hosts where `qemu-user-static` is only a virtual package, such as
+  Ubuntu 26.04, every Debian-family build failed in pre-processing with *no
+  installation candidate*. ICT now installs `qemu-user-binfmt` there, and the
+  cross-architecture check accepts either binary.
+- A hung `sfdisk` could stall a build indefinitely. Both `sfdisk` calls are
+  now limited to 30 s, and before attaching an image file to a loop device,
+  any loop device still attached to the same file is detached.
+
+*Unattended ISO*
+
+- The live installer aborted on installer environments with a merged
+  `/usr`, such as the Ubuntu 26.04 initramfs, with `command chroot full path
+  recorded in [/usr/sbin/chroot] not exist`. ICT now also finds `chroot` and
+  other system tools under `/usr/bin`, `/sbin` and `/bin`.
+- The unattended installer's "Another unattended installer instance is
+  already running" message misled anyone watching a console other than the
+  one running the install, such as QEMU with `-nographic`. Every console
+  starts the installer and only the first runs it; the others now say so and
+  follow `/tmp/unattended-installer.log` until the installer finishes or
+  fails, so a failure is visible on every console.
+
+*Overlay*
+
+- Debian overlay planning preserves baseline `Depends` and `Pre-Depends`
+  constraints and alternatives. With `packageOperation: additive-and-upgrade`,
+  library upgrades that break previously satisfied requirements of retained
+  native-architecture baseline packages now upgrade those packages too,
+  through the existing `Breaks` repair loop (at most four extra resolves).
+  Preflight blocks retained dependencies that would be newly unsatisfied,
+  including by unavailable or unchanged candidates and blocking pins.
+  Explicit pins are not relaxed, and no blanket upgrades, removals or
+  downgrades are authorized. Upgraded versioned `Provides` and `Multi-Arch`
+  metadata are preserved, and `Architecture: all` is treated as the native
+  architecture, so an `all` replacement cannot hide newly broken
+  foreign-architecture dependencies.
+- Debian overlay dependency audits ignore apt's changing installed-version
+  explanation when comparing a broken dependency across transactions,
+  avoiding false build failures when an unrelated upgrade changes the version
+  named in `apt-get check` output.
+- Ubuntu `linux-main-modules-*` packages are treated as kernel companions,
+  not extra bootable kernel images. Old companions can be removed only under
+  a valid explicit kernel replacement.
+- Overlay kernel replacement treats a Debian `name_version` request as the
+  package name when its name and version match resolved or dependency
+  metadata, avoiding a false extra-kernel-image ambiguity.
+- Under `packageOperation: additive-and-upgrade`, an exact APT
+  `name_version` pin that differs from the baseline now enters the install
+  set even when it is older, and preflight rejects it unless `allowDowngrade`
+  is enabled, instead of ignoring the pin and later reporting unsatisfied
+  dependencies. Matching follows the Debian resolver for omitted epochs and
+  artifact-style requests. Pins that compare equal under Debian version
+  rules (for example `2.12-1` and `0:2.12-1`) remain no-ops.
+- A `systemConfig.proxy` with only `noProxy` now removes a stale
+  ICT-managed apt proxy file from the base image. Other apt files are
+  unchanged.
+
+**Known Issues**:
+
+- Builds need network access to their package repositories; offline builds
+  are not supported.
+- The `uname -r` wrapper used while Debian packages are installed is a
+  stop-gap; packages should not assume `uname -r` is the target kernel.
+- `overlayPolicy.allowDowngrade` is not supported end-to-end for RPM overlay
+  builds, and RPM baseline reverse-dependency repair is not implemented.
+- In the Web UI, the Real-time Edge Pack runtime is not yet available, MBR
+  partition tables cannot be selected in the Disk step, and Edge Packs are
+  not offered for overlay templates.
+- The Web UI has no authentication, and its container is root-equivalent on
+  the host (see item 2 under **New**).
 
 ## Version 2026.2
 
 **Release Date**: September 9, 2026
 
 **New**:
-
-- Web UI Advanced tab: editable Disk Layout step. Step 3 of the Advanced wizard was a placeholder; it is now a working editor for the resolved template's `disk` block — disk name and size, GPT **or** MBR partition table, and add/remove/reorder/resize of partitions, seeded from the template the current selection resolves to. The partition table shows `name`, `fsLabel`, `fsType`, size, `mountPoint`, `start` and `end` as labelled columns, with `id`, `index`, `type`, `typeUUID`, `mountOptions` and `flags` behind a per-row details toggle — every field the schema defines round-trips, whether or not it is prominent. Partitions can be edited two ways, switchable per disk: **size-based** (the default) takes one size per partition and lays them out contiguously, calculating `start`/`end` for you — the schema stores offsets and has no size field, so this keeps them from drifting out of sync; **offset-based** takes the offset strings directly, deriving sizes, for layouts that need a deliberate gap or must match an existing table offset-for-offset. Switching converts the layout in place, and an unedited layout emits identical YAML either way. Gaps and overlaps in offset mode are reported as warnings, not blocked — the builder accepts both. The last partition can take the remainder (`end: "0"`) in either mode. The step also edits `disk.artifacts[]` — the output-format list (`raw`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar`, with optional compression) — which is where ICT produces QCOW2 and the other container formats; `target.imageType` controls how the image is built and is a separate axis. Field values are checked against what the **builder** accepts, not just against the schema — the schema types nearly every Disk and Partition field as an unconstrained string, so the rules live in the implementation. Fields with a closed set are dropdowns (`fsType`, partition `type`, and the artifact format/compression); free-text fields show the expected format as a placeholder and are validated as you type. Values that would fail the build are errors, values that would degrade quietly are warnings — an unrecognised partition `type`, for instance, leaves the partition at a default type rather than failing, and is flagged as such. **Output artifacts now offer only combinations that can actually be produced for the selected image type:** RAW and overlay images get `raw`/`qcow2`/`vhd`/`vhdx`/`vmdk`/`vdi` with optional `gz`/`xz`/`zstd`; WSL2 requires exactly one `tar` + `gz` artifact; ISO and IMG do not run the artifact pipeline at all and say so instead of offering a dead control. Note this is narrower than the schema's own enums, which include `tar`, `gzip` and `bz2` — none of which the builder implements on the disk path. Constraints the template loader enforces outside the JSON schema are reported inline too (`extendLastPartitionToFillDisk` is rejected for `imageType: iso`, and for `raw` unless the last partition is the rootfs). **The edited layout is what gets built.** Once you change anything on the step, the disk block is sent as `disk` on `POST /templates/compose` and `POST /builds`, and the backend emits it into the same generated `extends` delta the image-name and package overrides already use — so the Review step's "Your changes" and "Resolved" views, and the image the build produces, all come from one file. An untouched layout is not sent: it round-trips to the template's own disk block, so sending it would generate a delta that changes nothing. Because `extends` merging replaces `disk` wholesale rather than merging it field by field, the override is always the complete block, never a diff. See [ADR: Advanced mode Disk step](../architecture-decision-record/adr-web-ui-disk-step.md).
 
 - Kernel wildcard now installs a single kernel: a `systemConfig.kernel.packages` entry that uses a glob (for example `linux-image-generic*`) previously matched every `linux-image-generic*` metapackage in the Ubuntu 24 repositories and silently installed several kernels (6.8 GA plus 6.11/6.14/6.17/7.0 HWE tracks) in the same image. The build now installs only the **newest** matched kernel and logs a warning listing every match, so a template using a broad glob still boots with a single, up-to-date kernel; pin an exact metapackage in `systemConfig.kernel.packages` to install a different one. Explicitly listing multiple exact kernel packages is unchanged — the selection only applies to a single glob pattern that resolves to multiple kernels. The behavior applies to the Debian-family providers (Ubuntu, eLxr, Debian 13).
 
@@ -405,12 +815,6 @@
    flexibility in early boot configuration. The images can also boot into a
    graphical desktop environment with GDM over X11.
 
-   `debian13-x86_64-bb-dracut-raw.yml` also ships a sample first-boot
-   systemd oneshot unit (`first-boot-sample.service`): a script that runs
-   once, on the device's first boot only, gated by a marker file, with its
-   message mirrored to the journal, a log file, `dmesg`, and the serial
-   console.
-
 6. **Full Disk Encryption (FDE) for RAW images**
 
    This release supports selectively encrypting disk partitions in RAW images
@@ -420,14 +824,6 @@
 7. **Image composition for WSL environments**
 
    The tool can now compose Ubuntu images compatible with WSL environments.
-
-8. **Intel EdgePack platform-enablement template**
-
-   Adds `ubuntu24-x86_64-edgepack-raw.yml`, demonstrating native support for
-   Intel's EdgePack platform-enablement packages (Panther Lake / Wildcat Lake)
-   via `packageRepositories`, `systemConfig.packages`, and the new typed
-   `systemConfig.dkms` section, which builds and verifies DKMS modules against
-   the installed target kernel rather than the chroot's build-host kernel.
 
 **Validated hardware**:
 
@@ -443,14 +839,6 @@
   | Debian 13 custom initrd with overlay | `debian13-x86_64-bb-graphics-raw.yml` and `debian13-x86_64-bb-overlay-initrd-raw.yml` in `image-templates/debian13/` |
   | Debian 13 monolithic robotics | `debian13-x86_64-bb-dracut-raw.yml` in `image-templates/debian13/` |
   | Ubuntu 24 robotics templates | `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`, `ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`, and `ubuntu24-x86_64-robotics-jazzy-iso.yml` in `image-templates/ubuntu24/` |
-  | Intel EdgePack platform enablement | `ubuntu24-x86_64-edgepack-raw.yml` in `image-templates/ubuntu24/` |
-
-**Fixed**:
-
-- `fix(imagedisc)`: bound sfdisk calls and detach stale loop devices before reattach: `createPartitionTable`'s `sfdisk` calls had no execution timeout, so a wedged `sfdisk` (e.g. blocked behind a stale loop-device handle from a hard-killed prior build) could hang a build indefinitely. Both `sfdisk` invocations are now bounded to a 30s context so a hang fails fast into the existing retry-with-force path instead of blocking forever. Loop-device attach is also now idempotent: before `losetup`, any existing loop device already bound to the same backing file (including one whose backing file was since deleted) is detached first, removing the actual trigger that could wedge the kernel's partition-table re-read on a freshly attached device.
-- `fix(debutils)`: support APT repositories that publish only a combined `InRelease` file instead of a detached `Release`/`Release.gpg` pair. Builds against such repositories (including EdgePack's public repository) previously failed to fetch metadata; the format is now auto-detected and verified either way, and rebuilds keep using the previously detected format instead of reverting to the missing classic files.
-- `fix(debutils)`: correctly resolve dependencies on a versioned virtual `Provides:` (e.g. Debian's Qt6 ABI-pinning packages) by comparing against the version the provider actually declares for that capability, not the provider's own unrelated package version. An unversioned `Provides:` no longer incorrectly satisfies a versioned dependency either.
-- `fix(shell)`: `configurations` commands containing multi-line scripts or shell metacharacters (`$()`, backticks, `$var`) now reach the chroot unmodified instead of having their whitespace collapsed or being partially expanded by the outer shell before execution.
 
 **Known Issues**:
 
@@ -464,29 +852,6 @@
   If the base image does not contain an embedded Software Bill of Materials (SBOM),
   the resulting image generates an SBOM only for the additionally installed
   packages. Packages from the base image are not included in the SBOM output.
-
-- Web UI Advanced tab: cross-repository package search and browsing: The Choose Packages to Compose step now lists real packages instead of just the repository catalog. A search box queries every repository the target offers at once (gated to 2+ characters, matching the backend's own minimum, since an empty query means "browse the whole catalog"), and picking a result auto-enables its source repository. A two-pane browser lets a single repository be explored directly, paginated 25 rows at a time via `GET /packages/search`. Each row shows the package's real version and a `Latest` / pinned-version chip, and a running "Selected" rail groups everything added so far by repository, with per-item and clear-all removal; disabling a repository drops whatever was added from it. Selections are scoped to the current target OS — changing it (not just the SKU or platform) resets both the enabled repositories and the selected packages. See the entry below for how those selections reach the template.
-
-- Web UI Advanced tab: "Show frequently used" curation and "Select all" for the repository browser: The two-pane browser's page size is raised from 25 to 100, and a new "Show frequently used" checkbox narrows the list to each repository's hand-picked curated packages — a new optional `curatedPackages` field in `package-repos.yaml`, with `GET /packages/search` gaining a matching `curated` query parameter. Curated picks are defined for every repository whose index is reachable: the three base-OS repos (`build-essential`, `ca-certificates`, `curl`, `network-manager`, `openssh-server`, `python3`, `sudo`, `systemd`, `vim`), the ROS 2 Jazzy and Lyrical repos (`ros-*-desktop`, `ros-*-ros-base`, `ros-*-rviz2`, `ros-dev-tools` and friends, cutting ~8400 message and driver packages down to the metapackages an image actually starts from), Gazebo, Docker CE, Mozilla, Intel Graphics, Intel Linux Overlay and RealSense. The curated names themselves stay server-side — the browser sends `curated=true` and the server filters — but `GET /package-repos` now reports a `hasCuratedPackages` flag per repository, and the browser **hides** the "Show frequently used" checkbox where a repository has no curated picks (the six Intel repositories whose indexes are not currently reachable) instead of offering a toggle that could only empty the list. A "Select all" checkbox above the list adds every currently-shown package to the selection (skipping any already selected, so a manually pinned version is left alone) and removes them again when unchecked.
-
-- Package search no longer re-downloads indexes it already holds: The picker's index cache was capped at 24 indexes, but a catalog repository expands to one index per (suite, component, architecture) — `ubuntu-noble-base` alone needed 24, and a target's full repository set around 50. Every cross-repository search therefore evicted the indexes the next browse would ask for. Measured against the real binary, browsing a repository straight after a search re-downloaded 39 MB and took 90 seconds; it now answers from cache in 0.01s. The cap is raised to 128 indexes, with the 600,000-package budget still bounding memory. Alongside it, only the target's own architecture is fetched: a catalog entry commonly lists one architecture per publishing host (Ubuntu serves x86_64 from `archive.ubuntu.com` and aarch64 from `ports.ubuntu.com`), and the aarch64 index — 18 MB that an x86_64 target can never install from — was being downloaded on every cold search. Together these take a cold cross-repository search from 30 seconds to 5.7, with the first results shown at 0.4s, and a repeat search to 0.02s.
-
-- Package search offers every available version of a package, not just one: A Debian-style repository publishes its release, `-updates` and `-security` suites as separate indexes, so a package routinely exists at several versions — `curl` on Ubuntu 24.04 is available as both `8.5.0-2ubuntu10` and `8.5.0-2ubuntu10.13`. Search and browse previously reported these as unrelated rows and the picker showed whichever one happened to load first. Each package is now listed once, with every version it was found at offered as a chip (newest first, the rest behind "+N more"), and `GET /packages/search` gained a `versions` array on each result carrying the version and the repository providing it. Choosing a version pins that exact string and also selects the repository it comes from, so a package available from two repositories at different versions resolves unambiguously; `Latest` instead follows whatever the repository publishes next. Ordering uses the target's own version rules rather than string comparison, so `8.5.0-2ubuntu10.13` correctly outranks `8.5.0-2ubuntu10.9` and an epoch outranks a higher upstream version. `limit` and `total` now count packages rather than versions.
-
-- Package search returns results as they arrive, instead of waiting for the slowest repository: A cross-repository search fans out over every repository a target offers, so its latency was set by whichever mirror was slowest to answer — an unreachable one took its full TCP dial timeout while packages already found elsewhere sat unsent, leaving the search box showing "Searching…" for around 30 seconds. A new `GET /packages/search/stream` endpoint emits each repository's matches as Server-Sent Events the moment that repository responds, and the search box fills in progressively: first results now appear in about 2-4 seconds. The stream closes after a fixed budget rather than tracking the slowest repository, and the dropdown states plainly when a search could not cover everything ("Searched 14 repositories — 6 of 14 repositories unreachable"), so a partial result is never passed off as the whole answer. Repository fetch failures are now also briefly cached (2 minutes, against 6 hours for a success), so one dead mirror is not redialled on every keystroke — a repeat search over a warm cache completes in well under a second. `GET /packages/search` is unchanged and remains the endpoint for paging through one known repository; the stream is not paginated.
-
-- Optional repository catalog rebalanced across targets: `intel-oneapi` and `mozilla-apt` are distribution-neutral and are now offered to every target (previously ubuntu24 only), and debian13 and ubuntu26-server each gained the Debian/Ubuntu-26.04 equivalents of repositories already offered for ubuntu24 (`docker-ce-ubuntu-resolute`, `gazebo-resolute`, `ros2-lyrical`). Also fixes `docker-ce`'s Debian index, which pointed at `bookworm` (Debian 12) for a debian13 target; it now points at `trixie`, Debian 13's own suite.
-
-- Web UI Advanced tab: selected packages now reach the template and the build: What the Choose Packages to Compose step selects is no longer UI-only state. `POST /templates/compose` and `POST /builds` accept `packages` and `repos`, and the Advanced tab's generated `extends` delta gains a `systemConfig.packages` entry per selected package — using the `name_version` form the package resolvers match for a pinned version (`curl_8.5.0-2ubuntu10.13`), or the bare name to float to whatever the repository publishes — plus a `packageRepositories` entry per enabled repository, so a package picked from a repository the curated template does not already configure still resolves. Base repositories are not re-declared; they already come from the per-OS `providerconfigs/`. Each catalog repository now carries the same signing-key URL (`pkey`) the authored templates use for it, so an Advanced-mode build verifies the repository exactly as a hand-written one would, and `GET /package-repos` reports a `hasSigningKey` flag per repository. The Review step's package count and YAML update as packages are added, and the build installs them.
-  The Review step now presents the template in three views — **Your changes** (the generated delta alone), **Base template** (the pre-authored template it extends) and **Resolved** (the two merged, which is what the build runs) — served by new `deltaYaml` and `baseYaml` fields on the compose response; a selection with no changes shows only the resolved template as before. Because template inheritance **combines** package lists rather than replacing them, pinning a version for a package the pre-authored template already lists unpinned leaves both entries in the resolved template; the compose response reports these on `pinConflicts` and the Review step names them, rather than presenting an ambiguous package list as settled.
-
-**Fixed**
-
-- Web UI package search no longer accepts a `Release` signed by an unrecognised key: the picker's GPG verification (independent of the CLI build path's own `debutils`/`rpmutils` verification) treated a signature made by a key absent from the configured keyring as a pass, logging a warning but returning no error — silently accepting a forged `Release` for the two repositories that carry a local keyring and are otherwise fetched over plaintext `http://` (`ubuntu-noble-base`, `ubuntu-resolute-base`). The keyring is now the sole trust anchor: a signature from any key it does not list is rejected, for both the armored (`InRelease`) and binary (`Release.gpg`) detached-signature forms.
-
-- Web UI Advanced tab: base repositories no longer show a false "No signing key is configured" warning: `hasSigningKey` checked only for a `pkey` URL, which the Ubuntu base repos never carry — enabling one never emits a `packageRepositories` entry in the first place, since base repositories already come from the per-OS `providerconfigs/`. It now also reports true when the repository carries a local `gpgKeyPath`, which is what the picker's own search already verifies the repository's `Release` against, so `ubuntu-noble-base` and `ubuntu-resolute-base` no longer warn about a verification gap they don't have.
-
-- Web UI Advanced tab: the repository browser's rail now lists base (always-enabled) repositories first, ahead of the optional ones, instead of interleaving them by priority.
 
 ## Version 2026.1
 

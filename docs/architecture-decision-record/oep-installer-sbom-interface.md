@@ -271,8 +271,9 @@ run on a reference host (abridged, illustrative):
 ICT imports the output file on the build host before it resolves packages:
 
 1. **Download.** ICT downloads the output file named in the template
-   (`sbomUrl`) and the CLI (`url`), and verifies each against its SHA-256
-   (`sbomSha256`, `sha256`). It downloads the raw files
+   (`sbomUrl`) and the CLI (`url`, or the header's `cli-url` when the template
+   names none), and verifies each against its SHA-256 when one is given
+   (`sbomSha256`; `sha256`, or the header's `cli-sha256`). It downloads the raw files
    (`raw.githubusercontent.com`), not the GitHub web pages, pinned to a
    specific commit or tag. Downloading from the private sandbox repository
    needs a GitHub token, which ICT sends only to GitHub hosts. This is no
@@ -323,8 +324,8 @@ ICT imports the output file on the build host before it resolves packages:
 
 ## Part B: First-boot execution
 
-ICT copies the pinned CLI (`url`, `sha256`) into the image, so first boot
-does not need to download the installer. It should be the CLI that generated
+ICT copies the CLI (`url` and `sha256`, or the output's `cli-url`) into the
+image, so first boot does not need to download the installer. It should be the CLI that generated
 the output file (`cli-url` in A.5).
 
 ICT runs the installer from a first-boot provisioning unit, after the network
@@ -350,6 +351,9 @@ install samples on top of the blueprint with `openedge-cli install
   is stopped for a reboot. The grant file is in `/run`, which a fixed
   `/etc/sudoers.d/` entry includes, so a power loss or crash cannot leave it in
   place after a reboot, including on an immutable image whose `/etc` persists.
+  A `tmpfiles.d` entry creates the empty grant directory at every boot,
+  because sudo-rs (the `sudo` of Ubuntu 26.04) stops working for every user
+  when an included directory is missing.
 - **Proxy.** The unit inherits the image's proxy settings (`http_proxy`,
   `https_proxy`, `no_proxy`).
 - **Retries and reboots.** When `openedge-cli` reboots the system itself (the

@@ -77,8 +77,10 @@ systemConfig:
     - cryptsetup-bin
 ```
 
-See [`image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml`](../../../image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml)
-for a complete working example.
+See [`image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml)
+for a complete working example. It reads its passphrase from
+`sample-fde-passphrase.txt` next to the template; replace that sample before
+building a real image.
 
 ## Example: FDE with Immutability (dm-verity)
 

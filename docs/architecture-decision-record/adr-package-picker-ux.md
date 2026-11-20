@@ -17,6 +17,16 @@ versions in the Advanced tab's Packages step, as implemented in the
 with a more detailed design, and gives the guidance on component behavior,
 state shape, and layout ordering.
 
+> **Implementation note (2026.3).** The shipped picker has no `Latest` chip
+> (#1130). A package added without choosing a version is **Unpinned** and
+> stored as `name`; choosing a version chip pins it (`name_version`), and
+> choosing the pinned chip again unpins it. A selected or template package is
+> tagged **Pinned** or **Unpinned** beside its name, followed by the version a
+> build would install as bold text rather than a badge (#1151). The
+> **Selected** rail lists only the packages added or changed in the Advanced
+> tab, under **You are adding**, grouped by repository; the template's own
+> packages show ticked in the **Repositories** tab instead.
+
 ---
 
 ## Context

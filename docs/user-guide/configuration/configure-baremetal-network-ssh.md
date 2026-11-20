@@ -197,9 +197,6 @@ On the booted device:
 | `sshd` fails to start | Missing host keys (`ssh-keygen -A`) or `/run/sshd`; both are handled by the script. |
 | Can reach host but cannot log in | No login user — add one via `systemConfig.users`. |
 
-An offline diagnostic, `scripts/inspect-image-login.sh`, mounts a built image
-read-only via `qemu-nbd` and reports the account + sshd state without booting.
-
 ## Related documentation
 
 - [Configure Users](configure-image-user.md) — add the login account this feature needs.

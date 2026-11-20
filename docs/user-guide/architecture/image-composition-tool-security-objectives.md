@@ -141,3 +141,32 @@ review preflight downgrade actions and the resulting SBOM before deploying older
 vendor packages. This policy does not authorize package removal or bypass
 dependency integrity checks, bootloader protection, or the explicit
 kernel-replacement policy. RPM overlay builds are not supported end-to-end.
+
+## 9. Package and Repository Verification
+
+Packages are verified before they are installed into an image:
+
+* Every RPM is checked against the GPG keys of the repository it was downloaded
+  from, including RPMs from local (`path`) repositories, which were previously
+  skipped. A repository's `[trusted=yes]` opt-out applies only to RPMs that
+  repository served in the current build: a cached RPM it would serve is
+  downloaded again rather than trusted.
+* A Debian-family repository's `Release` file is verified against its signature
+  (`Release.gpg`, or the signature inside `InRelease`) before it is cached,
+  unless the repository is `[trusted=yes]`. When a refresh fails and the build falls back to cached
+  metadata, that metadata is verified again first, and the build stops if it no
+  longer verifies.
+* On Ubuntu and Debian images, the GPG public key a `packageRepositories` entry
+  downloads from its `pkey` URL is checked to be an OpenPGP public key (with
+  `gpg --show-keys`, when `gpg` is installed) before it is installed in the
+  image or cached under `gpg-keys/` in the cache directory. A truncated download or an HTML error page is rejected instead of
+  shipping an image whose `apt` cannot verify the repository, and a cached key
+  that fails the check is downloaded again.
+* File names taken from repositories are not trusted as shell input. RPM file
+  names are restricted to the characters RPM package names use, and are quoted
+  before they reach `rpm`; `inspect` skips SBOM files whose names or paths
+  contain other characters.
+* Commands run in the chroot or through `sudo` log the names of the proxy
+  variables they pass on, never their values, which can carry credentials. The
+  output of a configuration command (`systemConfig.configurations`) is logged
+  at DEBUG level when it succeeds, and is shown only when it fails.

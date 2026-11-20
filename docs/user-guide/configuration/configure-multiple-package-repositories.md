@@ -212,7 +212,7 @@ systemConfig:
 The build process follows this sequence when multiple repositories are configured:
 
 1. **Repository Configuration**: All repositories in `packageRepositories` are added to the package manager
-2. **GPG Key Import**: Public keys are downloaded and imported for repository authentication (skipped for `[trusted=yes]` repositories)
+2. **GPG Key Import**: Public keys are downloaded and imported for repository authentication (skipped for `[trusted=yes]` repositories). A key downloaded from a `pkey` URL must parse as an OpenPGP public key before it is installed in the image or cached, so a truncated download or an HTML error page fails the build instead of producing an image whose `apt` cannot verify the repository
 3. **Repository Refresh**: Package lists are updated from all configured repositories
 4. **Package Installation**: Packages from all repositories become available for installation
 

@@ -6,9 +6,10 @@ SPDX-License-Identifier: Apache-2.0
 # ICT Web UI
 
 React 19 + TypeScript + Vite frontend for the Image Composer Tool (ICT) web UI.
-It lets you compose validated Linux images from the browser — pick a vertical,
-review the configuration, compose, and download the image + SBOM — with no CLI
-or YAML editing.
+It lets you compose validated Linux images from the browser — pick a use case,
+review the configuration, optionally add packages or change the disk layout in
+the Advanced tab, compose, and download the image + SBOM — with no CLI or YAML
+editing. The **?** (Help) button in the top bar opens an in-app User Guide.
 
 The UI is served as a **single Go binary**: the built frontend is embedded into
 the `image-composer-tool` binary via `//go:embed`, and the `serve` subcommand
@@ -145,8 +146,9 @@ explicit proxy configuration must be preserved as-is.
 > &`) or, better, a systemd unit — not as a foreground job in the SSH session you
 > also use to run `kill`/cancel commands.
 
-> **The artifact column always serves the complete, merged template — from the
-> moment a build starts, through every outcome.** The server archives the
+> **The template download in a build's Compose details always serves the
+> complete, merged template — from the moment a build starts, through every
+> outcome.** The server archives the
 > fully-resolved template (the Advanced-mode selections merged into their
 > curated parent) before the build even begins running, so the download never
 > serves the raw per-build override delta — not while composing, and not for
@@ -262,7 +264,7 @@ should recover on its own. You should not need to clear `tmp/builds/*` by hand.
 > shared metadata directory above.
 
 See [Repository Metadata Caching](../docs/user-guide/architecture/image-composer-tool-caching.md#repository-metadata-caching)
-for the validation rules and the offline fallback.
+for the validation rules.
 
 ---
 

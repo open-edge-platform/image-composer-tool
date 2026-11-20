@@ -80,7 +80,8 @@ const welcome: GuideTopic = {
             compose.
           </Card>
           <Card title="Compose Image">
-            Watch your image being built, read the log, and download the finished image.
+            Watch your image being built, read the log, download the finished image, and look back
+            at earlier builds.
           </Card>
         </div>
       </Section>
@@ -96,8 +97,8 @@ const welcome: GuideTopic = {
           </li>
           <li>Set a password for the image's user, then click <Ui>Compose Image</Ui> again.</li>
           <li>
-            Wait on the <Ui>Compose Image</Ui> tab until it says the compose completed, then
-            download your image.
+            Wait on the <Ui>Compose Image</Ui> tab until it says the compose completed, then click
+            your image's name in the <Ui>Artifacts</Ui> table to download it.
           </li>
         </Steps>
         <Tip>
@@ -145,7 +146,11 @@ const basic: GuideTopic = {
         </Steps>
         <Tip>
           The <Ui>Compose Image</Ui> button stays greyed out until all four lists are filled in.
-          The message next to it tells you what is missing.
+          It is also greyed out while another image is being built, because ICT builds one image at
+          a time. The message next to it tells you which.
+        </Tip>
+        <Tip>
+          A choice marked <Ui>(coming soon)</Ui> is planned but cannot be built yet.
         </Tip>
         <Tip>
           Write the password down. You need it to log in to the image, and ICT does not show it
@@ -180,14 +185,17 @@ const advanced: GuideTopic = {
       <P>
         The <Ui>Advanced</Ui> tab walks you through four steps, shown as numbered circles at the
         top. Use <Ui>Next</Ui> and <Ui>Back</Ui> to move between them, or click a circle to jump
-        to that step.
+        to that step. A finished step turns green with a tick, and a step with a problem to fix
+        turns red with a <Ui>!</Ui>.
       </P>
 
       <Section title="Step 1: Target">
         <P>
           Choose the <Ui>Use Case</Ui>, <Ui>SKU</Ui>, <Ui>Platform</Ui> and{' '}
           <Ui>Operating System</Ui>, the same way as on the Basic tab. If you came from{' '}
-          <Ui>Edit in Advanced</Ui>, these are already filled in.
+          <Ui>Edit in Advanced</Ui>, these are already filled in. You can also change the{' '}
+          <Ui>Image Name</Ui>. <Ui>Next</Ui> stays greyed out until every required field is
+          filled in, and the message beside it says which are missing.
         </P>
       </Section>
 
@@ -198,13 +206,18 @@ const advanced: GuideTopic = {
           </li>
           <li>
             Or browse: the <Ui>Edge Packs</Ui> tab lists ready-made Intel software bundles, and the{' '}
-            <Ui>Repositories</Ui> tab lists every package source.
+            <Ui>Repositories</Ui> tab shows the packages of the repository you pick from{' '}
+            <Ui>Choose repository</Ui>. Repositories the template already uses are listed first.
           </li>
-          <li>Tick a package, or pick a version, to add it.</li>
+          <li>
+            Tick a package, or pick a version, to add it. A repository you add a package from is
+            used by the build for as long as one of your packages comes from it.
+          </li>
           <li>
             Everything you added or changed shows in the <Ui>Selected</Ui> panel on the right, under{' '}
             <Ui>You are adding</Ui>. Packages the image already has show ticked in the{' '}
-            <Ui>Repositories</Ui> tab.
+            <Ui>Repositories</Ui> tab. Tick <Ui>Show only selected</Ui> there to list just the
+            packages selected from the repository you are browsing.
           </li>
         </Steps>
         <Tip>
@@ -226,7 +239,14 @@ const advanced: GuideTopic = {
 
       <Section title="Step 4: Review">
         <Steps>
-          <li>Read the summary of what you changed.</li>
+          <li>
+            Read the summary, and the <Ui>Advanced customization</Ui> card, which lists what you
+            changed.
+          </li>
+          <li>
+            Optionally, click <Ui>Export YAML</Ui> to save your changes as a template file that
+            extends the original one.
+          </li>
           <li>
             Click <Ui>Compose Image</Ui>, set a password for each user (the same window as on the
             Basic tab), and click <Ui>Compose Image</Ui> again.
@@ -237,7 +257,53 @@ const advanced: GuideTopic = {
   ),
 }
 
-export const guideTopics: GuideTopic[] = [welcome, basic, advanced]
+const compose: GuideTopic = {
+  id: 'compose',
+  title: 'Follow and download a compose',
+  summary: 'Watch the build, get the finished image, and find earlier builds.',
+  body: (
+    <>
+      <Section title="While it builds">
+        <P>
+          The <Ui>Compose Image</Ui> tab shows the build's progress and its log as it runs. Use the
+          buttons at the top right of the log to copy it, or to download it once the build ends.
+          To stop the build, click <Ui>Cancel compose</Ui>.
+        </P>
+        <P>
+          ICT builds one image at a time. Until this build ends, the <Ui>Compose Image</Ui>{' '}
+          buttons on the other tabs are greyed out.
+        </P>
+      </Section>
+
+      <Section title="When it finishes">
+        <Steps>
+          <li>
+            The <Ui>Artifacts</Ui> table lists the image and its bill of materials. Click a name to
+            download it. Hover over a name to see where the file is on the server.
+          </li>
+          <li>
+            Open <Ui>Compose details</Ui> to see what was built, and to download the{' '}
+            <Ui>Template</Ui> the build used.
+          </li>
+        </Steps>
+        <Tip>
+          If a build fails or you cancel it, click <Ui>Retry compose</Ui> to run it again with the
+          same choices and logins.
+        </Tip>
+      </Section>
+
+      <Section title="Earlier builds">
+        <P>
+          The <Ui>History</Ui> list on the left shows every build, newest first. Click one to see
+          its log and download its files. Use <Ui>Older</Ui> and <Ui>Newer</Ui> to page through
+          the list.
+        </P>
+      </Section>
+    </>
+  ),
+}
+
+export const guideTopics: GuideTopic[] = [welcome, basic, advanced, compose]
 
 // The guide lives at its own address (#guide/<topic>), so every way into it is
 // an ordinary link: it can be bookmarked, opened in a new tab, and left with

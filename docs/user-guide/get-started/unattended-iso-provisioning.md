@@ -3,8 +3,8 @@
 This guide builds an ISO that installs a fully configured Ubuntu system with no
 operator input: the installer picks the target disk, partitions it, installs
 the OS from packages carried on the ISO, configures users, SSH keys, proxy,
-cloud-init, and boot-time provisioning, makes the installed disk the first boot
-device, and reboots.
+cloud-init, boot-time provisioning, and optionally OEP Installer profiles,
+makes the installed disk the first boot device, and reboots.
 
 The worked examples are the Intel EdgePack unattended ISO templates. Each one
 installs the package set of the matching EdgePack raw template plus
@@ -139,7 +139,18 @@ system.
 
 Each script runs from its own systemd unit
 (`ict-provision-<NNN>-<name>.service`) after the network is online, in `order`.
-A first-boot script that fails is retried on the next boot.
+A first-boot script that fails is retried on the next boot, and the scripts
+after it wait. Until it succeeds, the console login prompt and the message of
+the day show `Provisioning script "<name>" failed` with the `journalctl`
+command that shows its log.
+
+For a script that must not run again unattended after a failure, for example
+one that leaves a half-finished installation, set `stopOnFailure: true`
+(first-boot scripts only). An administrator then fixes the problem and runs
+`sudo /usr/libexec/ict-provision-report retry <name>`. Add a `recoveryHint`
+sentence that says how to finish the work by hand; the notice then also offers
+`sudo /usr/libexec/ict-provision-report done <name>`, which records the script
+as complete.
 
 `args` and `env` are written into that unit file, which any local user can
 read, so do not use them for secrets.
@@ -180,6 +191,25 @@ packages. The Ubuntu archives, including security updates, are only blocked
 when `systemConfig.immutability.enabled` is `true`, in which case nothing
 upgrades.
 
+### OEP Installer profiles
+
+```yaml
+  oepInstaller:
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/<output>.yaml
+    sbomSha256: <sha256 of the output file>
+    user: admin
+```
+
+ICT installs the Debian packages and apt repositories that the published
+`openedge-cli list --sbom` output lists, so they are on the ISO, and
+`openedge-cli install` runs as `user` on first boot to install the rest, which
+needs network access. If it fails, it is not run again at boot: the login
+notice tells an administrator to run
+`sudo /usr/libexec/ict-provision-report retry oep-installer` after fixing the
+problem. The output pins a kernel, which the template must install. Fields,
+GitHub tokens for private repositories, and recovery are described in
+[`systemConfig.oepInstaller`](../architecture/image-composer-tool-templates.md#systemconfigoepinstaller).
+
 ### Boot entry
 
 ```yaml
@@ -204,10 +234,15 @@ sudo -E ./build/image-composer-tool build \
   image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 ```
 
-The shipped `additionalfiles/base-platform/admin.pub` contains only comments and
-the template sets no password, so the `--ssh-authorized-key` flag (or a real key
-in that file) is what lets you log in to the installed system. Create a key
-first with `ssh-keygen -t ed25519` if you do not have one.
+The shipped templates create a sudo `admin` user with no password, and the
+shipped `additionalfiles/base-platform/admin.pub` contains only comments, so a
+build needs a credential: the `--ssh-authorized-key` flag, a real key in that
+file, or a `password` in the template. Without one, the build stops before it
+creates the ISO instead of producing an installer that cannot finish. `validate
+--merged` applies the same check and has no `--ssh-authorized-key` flag, so it
+reports `user admin has no password or SSH authorized key` until the template
+or the key file provides one. Create a key first with `ssh-keygen -t ed25519`
+if you do not have one.
 
 The build output directory
 (`<work_dir>/ubuntu-ubuntu24-x86_64/imagebuild/<system-config-name>/`)
@@ -219,14 +254,9 @@ contains:
 | `spdx_manifest_deb_*.json` | SPDX SBOM of the system the ISO installs |
 | `edgepack-os-image-ubuntu-unattended-24.04.composition.json` | Composition manifest: base OS, base and template repositories, packages with versions and checksums, kernel, provisioning inputs, and every additional file with its SHA-256 |
 | `template-dump.yaml` | The merged template the installer uses |
+| `sbom-metadata.yaml` | Per-package SBOM data (supplier, checksum, license) the installer uses to write the installed system's SBOM |
 
 The installed system also carries its own SBOM in `/usr/share/sbom/`.
-
-The shipped templates create a sudo `admin` user with no password, so a build
-needs a credential: set `password` in the template, or pass a public key with
-`--ssh-authorized-key admin=$HOME/.ssh/id_ed25519.pub` on the `build` command.
-Without one, the build stops before creating the ISO instead of producing an
-installer that cannot finish.
 
 ## 3. Verify in QEMU
 
@@ -260,8 +290,16 @@ apt-cache policy; apt-get -s upgrade              # upgrade policy
 
 - The installer log is `/tmp/unattended-installer.log` in the installer
   environment. On failure the installer drops to a shell instead of rebooting.
+- `Another unattended installer instance is already running` is expected: the
+  installer environment logs root in on every console (for example the VGA
+  console and the serial console), and only the first login runs the install.
+  The other consoles follow the installer log until the install finishes or
+  fails, so a failure such as a disk too small for the layout shows on every
+  console.
 - A failed first-boot script: `journalctl -u ict-provision-<NNN>-<name>`. Fix
-  the cause and reboot, or remove the stamp in
-  `/var/lib/image-composer-tool/provisioned/` to run it again.
+  the cause and reboot to run it again, or, for a script with `stopOnFailure`,
+  run `sudo /usr/libexec/ict-provision-report retry <name>`. To run a script
+  that succeeded again, remove its stamp in
+  `/var/lib/image-composer-tool/provisioned/` and reboot.
 - cloud-init did not run: check `/var/lib/cloud/seed/nocloud/` and
   `/etc/cloud/cloud.cfg.d/90_ict_datasource.cfg` on the installed system.

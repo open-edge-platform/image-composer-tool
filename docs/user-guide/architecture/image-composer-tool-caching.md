@@ -101,6 +101,15 @@ flowchart TD
 6. **Store in Cache**: Save verified package for future use
 7. **Generate Dependency Graph**: Update `chrootpkgs.dot` with dependency information
 
+For Debian-family builds, a package counts as cached only when the exact `.deb`
+file the resolver selected, version included, is in the cache, and the image is
+installed from only those files. Other versions of the same package left in
+the cache by earlier builds are neither reused nor installed, so a build with a
+warm cache installs the same versions as one with an empty cache. For RPM-based
+builds, a cached package that will be served by a `[trusted=yes]` repository is
+always downloaded again, so the signature-check opt-out never covers a file
+that an earlier build put in the cache.
+
 ### Repository Metadata Caching
 
 Separate from the downloaded packages, the tool caches each repository's **package
@@ -114,8 +123,10 @@ This cache is **validated, not simply reused**. On every build with network acce
 1. The repository's `Release` file is re-downloaded. It is small (tens of KB), so
    this costs little, and it is the only way to detect that the repository has
    moved on.
-2. `Release` records the SHA256 of the current `Packages` index. That checksum is
-   the cache key.
+2. `Release` records the SHA256 of the current `Packages` index. That checksum,
+   together with the repository's `allowPackages` list, is the cache key: the
+   parsed form holds only the packages `allowPackages` admits, so changing the
+   list also invalidates it.
 3. If the cached entry's key matches, it is used with no further downloads. If it
    does not, the index is re-downloaded and re-parsed, and the cache is rewritten.
 
@@ -127,12 +138,18 @@ superseded it. Validating the cache against `Release` means such a build picks u
 the current version instead of failing. Note that `--no-cache` does **not** help
 here: it isolates the package and workspace directories, not this metadata cache.
 
+The refreshed `Release` is staged in a temporary directory, and its signature is
+verified there before it replaces the cached copy, so metadata that fails
+verification is never cached. A refresh whose signature does not match is
+made up to three times in all, each on a fresh connection, because a CDN-backed mirror can briefly serve a
+`Release` and a signature that are out of step.
+
 **A failed refresh falls back to the cached metadata.** If the `Release` refresh
-fails, the previously downloaded metadata is used as-is and a warning is logged;
-if that metadata has passed its `Valid-Until` date, the warning says so, since
-versions it names are likely to have been superseded. The refresh is staged in a
-temporary directory and moved into place only once every file has arrived, so a
-failed or interrupted refresh cannot leave a partial `Release` behind. Builds
+fails, the previously downloaded metadata is verified again (unless the
+repository is `[trusted=yes]`) and then used, and a warning is logged; if that metadata has passed its `Valid-Until` date, the
+warning says so, since versions it names are likely to have been superseded. If
+the cached metadata no longer verifies, the build fails. A failed or
+interrupted refresh cannot leave a partial `Release` behind. Builds
 still require network access to the package repositories; offline builds are not
 supported.
 
