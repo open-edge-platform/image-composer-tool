@@ -27,8 +27,9 @@ prerequisites.
 
 ## Prerequisites
 
-- **OS**: Ubuntu 24.04 (recommended; other standard Linux distributions may
-  work but are not validated)
+- **OS**: Ubuntu 24.04 or Ubuntu 26.04. Both are supported build hosts and
+  are tested in CI on every pull request and merge. Other standard Linux
+  distributions may work but are not validated.
 - **Go**: Version 1.24.0 or later — see
   [Go installation instructions](https://go.dev/doc/manage-install)
 
