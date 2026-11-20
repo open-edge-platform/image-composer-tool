@@ -1224,7 +1224,9 @@ components:
             A template the user opened in Author mode, used in place of the
             matched template's own file: the response describes it, and any
             overrides apply on top of it. Requires the authoring capability, and
-            the template must not use `extends`. Not accepted by POST /builds yet.
+            the template must not use `extends`. In a POST /builds request it is
+            the template that gets built (Author mode), with any logins applied
+            on top of it.
         imageName:
           type: string
           description: |

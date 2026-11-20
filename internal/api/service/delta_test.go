@@ -206,7 +206,7 @@ func TestResolveBuildTemplateWithImageNameOverride(t *testing.T) {
 	s := newTestService(t)
 	wd := t.TempDir()
 
-	path, name, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	path, name, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 		ImageName: "my-custom-name",
 	}}, wd)
@@ -237,7 +237,7 @@ func TestResolveBuildTemplateInvalidImageNameOverride(t *testing.T) {
 	s := newTestService(t)
 	wd := t.TempDir()
 
-	_, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	_, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 		ImageName: "-leading-dash",
 	}}, wd)
@@ -256,7 +256,7 @@ func TestResolveBuildTemplateKeepsDeltaUntilBuildFinishes(t *testing.T) {
 		ImageName: "custom-robotics-image",
 	}}
 
-	deltaPath, _, _, err := s.resolveBuildTemplate(request, wd)
+	deltaPath, _, _, _, err := s.resolveBuildTemplate(request, wd)
 	if err != nil {
 		t.Fatalf("resolveBuildTemplate: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestRunBuildFailedStartCleansDelta(t *testing.T) {
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 		ImageName: "custom-robotics-image",
 	}}
-	deltaPath, _, _, err := s.resolveBuildTemplate(request, wd)
+	deltaPath, _, _, _, err := s.resolveBuildTemplate(request, wd)
 	if err != nil {
 		t.Fatalf("resolveBuildTemplate: %v", err)
 	}
@@ -519,5 +519,74 @@ func TestComposeOpenedTemplate(t *testing.T) {
 	sel.TemplateYAML = "extends: robotics.yml\n"
 	if _, err := s.Compose(sel); err == nil || !strings.Contains(err.Error(), "extends") {
 		t.Errorf("Compose of a template with extends: err = %v, want it refused", err)
+	}
+}
+
+func TestResolveBuildTemplateOpenedTemplate(t *testing.T) {
+	s := newTestService(t)
+	opened := strings.Replace(minimalTemplate, "name: test-image", "name: opened-image", 1)
+	sel := Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso", TemplateYAML: opened}
+
+	if _, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, t.TempDir()); err == nil ||
+		!strings.Contains(err.Error(), "authoring") {
+		t.Fatalf("build of an opened template without the authoring capability: err = %v, want it refused", err)
+	}
+	s.cfg.Authoring = true
+
+	// Built directly: the opened file is the template, kept until the build
+	// is over and then removed.
+	path, name, retry, openedPath, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveBuildTemplate: %v", err)
+	}
+	if path != openedPath || name != "robotics.yml" {
+		t.Errorf("path = %q, name = %q; want the opened file %q under the matched name", path, name, openedPath)
+	}
+	if data, _ := os.ReadFile(path); string(data) != opened {
+		t.Errorf("built template = %q, want the opened text", data)
+	}
+	if retry == nil || retry.Compose == nil || retry.Compose.TemplateYAML != opened {
+		t.Errorf("retry does not carry the opened template: %+v", retry)
+	}
+	b := &build{RootDir: t.TempDir(), DeltaPath: path, OpenedPath: openedPath}
+	b.archiveAndCleanupDelta()
+	if _, err := os.Stat(openedPath); !os.IsNotExist(err) {
+		t.Errorf("opened template still exists after the build: %v", err)
+	}
+
+	// With a login supplied, a delta extends the opened file; both go when
+	// the build is over.
+	withLogin := sel
+	withLogin.NewUsers = []NewUserInput{{User: "dev", Password: "s3cret-Passw0rd", Sudo: true}}
+	path, _, _, openedPath, err = s.resolveBuildTemplate(&BuildRequest{Compose: &withLogin}, t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveBuildTemplate with a login: %v", err)
+	}
+	if path == openedPath {
+		t.Fatal("a build with a login should run a delta, not the opened file directly")
+	}
+	merged, err := config.LoadAndMergeTemplate(path)
+	if err != nil {
+		t.Fatalf("resolving the build's delta: %v", err)
+	}
+	if merged.Image.Name != "opened-image" {
+		t.Errorf("delta's image name = %q, want it inherited from the opened template", merged.Image.Name)
+	}
+	b = &build{RootDir: t.TempDir(), DeltaPath: path, OpenedPath: openedPath}
+	b.archiveAndCleanupDelta()
+	for _, p := range []string{path, openedPath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still exists after the build: %v", p, err)
+		}
+	}
+
+	// A refused build leaves nothing behind.
+	bad := sel
+	bad.Packages = []string{"not a valid package name!"}
+	if _, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &bad}, t.TempDir()); err == nil {
+		t.Fatal("expected an invalid package to be refused")
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(s.cfg.TemplatesDir, ".ict-*")); len(leftovers) > 0 {
+		t.Errorf("files left behind: %v", leftovers)
 	}
 }
