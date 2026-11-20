@@ -205,7 +205,10 @@
    - `scripts/install-ict.sh` installs the package and the host tools a build
      uses on Ubuntu and Debian. `--tag TAG` downloads the package and
      `SHA256SUMS` from that tag's release and verifies the checksum before
-     installing; `--deb FILE` installs a package you already have.
+     installing; `--deb FILE` installs a package you already have. `--tag`
+     also accepts a package named `image-composer-tool_<version>_amd64.deb`,
+     and `ICT_GITHUB_REPOSITORY=OWNER/REPO` downloads from another
+     repository's release, such as a fork.
    - `scripts/build-deb.sh --version V` builds the same package locally.
 
 4. **Unattended ISO provisioning**
@@ -403,6 +406,9 @@
 *Build, templates and validation*
 
 - Building ICT now requires Go 1.26 or newer.
+- Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. CI
+  runs the host-sensitive unit tests and builds minimal raw images on an
+  Ubuntu 26.04 host for every pull request and merge.
 - Every user in a template needs a credential. `systemConfig.users[]` with
   neither a `password` nor an SSH key now fails the build, and
   `image-composer-tool validate --merged` reports it, instead of being created
@@ -675,7 +681,6 @@
 
 - Builds need network access to their package repositories; offline builds
   are not supported.
-- Ubuntu 24.04 is the recommended build host.
 - The `uname -r` wrapper used while Debian packages are installed is a
   stop-gap; packages should not assume `uname -r` is the target kernel.
 - `overlayPolicy.allowDowngrade` is not supported end-to-end for RPM overlay
