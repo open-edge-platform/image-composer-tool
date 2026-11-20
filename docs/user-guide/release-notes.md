@@ -15,8 +15,9 @@
 - The Web UI's Basic tab offers two Best Known Configuration (BKC) use cases:
   **Platform Enablement - Upstream BKC** and **Platform Enablement - Ubuntu LTS
   BKC**. They ask for the platform first, then a **Mainline Kernel Version**
-  or an **HWE Kernel Version** in place of a SKU. Upstream BKC 7.0.14 builds the Nova Lake Ubuntu 26.04
-  overlay image, which was the Upstream BKC SKU under Platform Enablement. The
+  or an **HWE Kernel Version** in place of a SKU. Upstream BKC 7.3 builds the
+  Nova Lake Ubuntu 26.04 overlay image with the Intel 7.3 kernel, which was the
+  Upstream BKC SKU under Platform Enablement. The
   other kernel versions, and the Ubuntu LTS BKC use case, are listed but grayed
   out until their templates exist. Two new optional manifest fields on a use
   case drive this: `skuLabel` names its SKU dropdown, and `platformFirst` asks

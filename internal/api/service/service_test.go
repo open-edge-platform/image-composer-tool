@@ -148,11 +148,11 @@ func TestEmbeddedManifestBKCKernelVersions(t *testing.T) {
 			t.Errorf("vertical %q skuLabel = %q, want %q", id, got, want)
 		}
 	}
-	if got := m.findTemplate("upstream-bkc", "mainline-7.0.14", "nvl", "ubuntu26", "raw"); got != "ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml" {
-		t.Errorf("mainline 7.0.14 template = %q, want the NVL overlay", got)
+	if got := m.findTemplate("upstream-bkc", "mainline-7.3", "nvl", "ubuntu26", "raw"); got != "ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml" {
+		t.Errorf("mainline 7.3 template = %q, want the NVL overlay", got)
 	}
-	if got := m.findTemplate("upstream-bkc", "mainline-7.1.13", "nvl", "ubuntu26", "raw"); got != "" {
-		t.Errorf("planned mainline 7.1.13 resolved to %q, want empty", got)
+	if got := m.findTemplate("upstream-bkc", "mainline-7.0.14", "nvl", "ubuntu26", "raw"); got != "" {
+		t.Errorf("planned mainline 7.0.14 resolved to %q, want empty", got)
 	}
 }
 

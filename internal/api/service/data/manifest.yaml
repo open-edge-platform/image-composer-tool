@@ -167,7 +167,7 @@ combinations:
     platform: nvl
     os: ubuntu26
     imageType: raw
-    template: ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml
+    template: ""
 
   - vertical: upstream-bkc
     sku: mainline-7.1.13
@@ -183,12 +183,14 @@ combinations:
     imageType: raw
     template: ""
 
+  # The NVL cBKC template installs the Intel 7.3 kernel
+  # (linux-image-7.3-intel, build 261014t080608z-resolute1).
   - vertical: upstream-bkc
-    sku: mainline-7.3-rc7
+    sku: mainline-7.3
     platform: nvl
     os: ubuntu26
     imageType: raw
-    template: ""
+    template: ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml
 
   # Ubuntu LTS BKC (HWE kernels): planned, no templates yet.
   - vertical: ubuntu-lts-bkc
@@ -251,8 +253,8 @@ skus:
     displayName: "7.1.13"
   - id: mainline-7.2.11
     displayName: "7.2.11"
-  - id: mainline-7.3-rc7
-    displayName: "7.3-rc7"
+  - id: mainline-7.3
+    displayName: "7.3"
   - id: hwe-7.0
     displayName: HWE-7.0
   - id: hwe-7.1
