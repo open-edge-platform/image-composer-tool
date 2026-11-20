@@ -580,22 +580,23 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             Open Template…
           </button>
           {openedActive && opened ? (
-            <>
-              <span className="text-slate-700">
-                Editing <span className="font-semibold">{opened.name}</span>
-              </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white py-0.5 pl-3 pr-1 text-slate-700">
+              Editing <span className="font-semibold">{opened.name}</span>
+              {/* Closing goes back to the use case's own template. */}
               <button
                 type="button"
+                aria-label={`Close ${opened.name}`}
+                title="Close this template and start from the use case's template"
                 onClick={() => {
                   setOpened(null)
                   setOpenMessage(null)
                   if (opts?.matched) selectCombination(opts.matched)
                 }}
-                className="text-xs font-medium text-[#0071c5] hover:underline"
+                className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-red-600"
               >
-                Start from the use case's template instead
+                ×
               </button>
-            </>
+            </span>
           ) : (
             <span className="text-slate-500">Open a template you saved, or start from a use case below.</span>
           )}

@@ -112,12 +112,12 @@ describe('Open Template', () => {
     await waitFor(() => expect(written).toEqual([SAVED]))
   })
 
-  it('goes back to the use case template on request', async () => {
+  it('goes back to the use case template when the opened one is closed', async () => {
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open Template…' }))
     await screen.findByText('my-bkc.yml')
 
-    fireEvent.click(screen.getByRole('button', { name: "Start from the use case's template instead" }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close my-bkc.yml' }))
     await waitFor(() => expect(mockApi.compose).toHaveBeenLastCalledWith(expect.not.objectContaining({ templateYaml: SAVED })))
     expect(screen.queryByText('my-bkc.yml')).toBeNull()
   })
