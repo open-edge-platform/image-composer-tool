@@ -6,6 +6,7 @@
 
 **New**:
 
+- **Added**: Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. The `Ubuntu 26.04 Host` workflow runs on every pull request and merge, plus weekly, on a 26.04 runner: it runs the host-sensitive unit tests and builds the minimal raw image of Ubuntu 26.04, Ubuntu 24.04, Debian 13 and eLxr 12. It was previously experimental and did not run on pull requests. `scripts/install-ict.sh` and the Debian package install test already cover 26.04.
 - **Added**: `scripts/install-ict.sh` installs the ICT Debian package and the host tools a build uses on Ubuntu and Debian. `--tag TAG` downloads the package and `SHA256SUMS` from the GitHub release of the tag and verifies the checksum before installing; `--deb FILE` installs a package you already have.
 - **Added**: `build --replace-additional-file FINAL=FILE` replaces the host file of the `systemConfig.additionalFiles` entry installed at `FINAL` for one build, so an input that changes per build (for example a vendor tarball) can be supplied on the command line without editing the template. It does not add files: it fails if no entry has that `final` path or `FILE` is not an existing regular file. Repeatable.
 - **Added**: `overlayPolicy.allowDowngrade` permits baseline package downgrades
