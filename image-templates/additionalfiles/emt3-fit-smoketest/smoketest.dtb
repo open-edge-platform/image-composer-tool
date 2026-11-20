@@ -1,0 +1,3 @@
+This is a placeholder device tree blob for the FIT smoke-test template: it
+only needs to be a file ending in .dtb under /boot for fitmaker to embed it
+as a FIT configuration. x86_64 has no real device trees to ship.

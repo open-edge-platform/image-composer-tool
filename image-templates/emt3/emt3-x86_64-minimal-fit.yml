@@ -1,0 +1,39 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: "Edge Microvisor Toolkit 3 minimal FIT (U-Boot Flattened Image Tree) image for externally-booted embedded targets"
+  use_cases:
+    - "network boot"
+    - "externally-booted embedded target"
+    - "U-Boot FIT image"
+    - "no local bootloader"
+  keywords:
+    - fit
+    - uboot
+    - u-boot
+    - itb
+    - mkimage
+    - emt3
+    - microvisor
+    - minimal
+
+image:
+  name: emt3-x86_64-minimal-fit
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit # Target OS name
+  dist: emt3 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: fit # Image type, valid value: [raw, img, fit, iso, wsl2].
+
+systemConfig:
+  name: Minimal_Fit
+  description: >
+    Minimal FIT image smoke test. x86_64 EMT3 kernels don't ship real device
+    trees, so this template adds a placeholder .dtb under /boot via
+    additionalFiles purely so the build has something to embed as a FIT
+    configuration -- a real aarch64 target's kernel package already ships
+    its device tree(s) under /boot and needs no such placeholder.
+  additionalFiles:
+    - local: ../additionalfiles/emt3-fit-smoketest/smoketest.dtb
+      final: /boot/smoketest.dtb

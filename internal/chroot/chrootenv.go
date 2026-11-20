@@ -699,8 +699,8 @@ func (chrootEnv *ChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) err
 	}
 	template.EssentialPkgList = essentialPkgList
 
-	// WSL2 and other rootfs-only image types do not need bootloader packages.
-	if template.Target.ImageType == "wsl2" {
+	// WSL2, FIT and other rootfs-only image types do not need bootloader packages.
+	if template.Target.ImageType == "wsl2" || template.Target.ImageType == "fit" {
 		template.BootloaderPkgList = []string{}
 	} else {
 		// Update bootloader packages by bootloader type

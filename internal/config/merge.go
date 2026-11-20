@@ -37,6 +37,8 @@ func (d *DefaultConfigLoader) LoadDefaultConfig(imageType string) (*ImageTemplat
 		defaultConfigFile = fmt.Sprintf("default-raw-%s.yml", d.targetArch)
 	case "img":
 		defaultConfigFile = fmt.Sprintf("default-initrd-%s.yml", d.targetArch)
+	case "fit":
+		defaultConfigFile = fmt.Sprintf("default-fit-%s.yml", d.targetArch)
 	case "iso":
 		defaultConfigFile = fmt.Sprintf("default-iso-%s.yml", d.targetArch)
 	case "wsl2":

@@ -197,6 +197,7 @@ var commandMap = map[string][]string{
 	"mmdebstrap":         {"/usr/bin/mmdebstrap"},
 	"mkdir":              {"/bin/mkdir"},
 	"mkfs":               {"/usr/sbin/mkfs", "/usr/bin/mkfs"},
+	"mkimage":            {"/usr/bin/mkimage"},
 	"mkswap":             {"/usr/sbin/mkswap", "/usr/bin/mkswap"},
 	"mktemp":             {"/usr/bin/mktemp"},
 	"modinfo":            {"/sbin/modinfo", "/usr/sbin/modinfo"},

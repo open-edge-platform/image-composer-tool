@@ -6,6 +6,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/fitmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
@@ -117,6 +118,8 @@ func (p *eLxr) BuildImage(template *config.ImageTemplate) error {
 		return p.buildRawImage(template)
 	case "img":
 		return p.buildInitrdImage(template)
+	case "fit":
+		return p.buildFitImage(template)
 	case "iso":
 		return p.buildIsoImage(template)
 	case "wsl2":
@@ -193,6 +196,36 @@ func (p *eLxr) buildInitrdImage(template *config.ImageTemplate) error {
 	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
 
 	displayImageArtifacts(imageBuildDir, "IMG")
+
+	return nil
+}
+
+func (p *eLxr) buildFitImage(template *config.ImageTemplate) error {
+	// Create FitMaker with template (dependency injection)
+	fitMaker, err := fitmaker.NewFitMaker(p.chrootEnv, template)
+	if err != nil {
+		return fmt.Errorf("failed to create fit maker: %w", err)
+	}
+
+	// Use the maker
+	if err := fitMaker.Init(); err != nil {
+		return fmt.Errorf("failed to initialize fit image maker: %w", err)
+	}
+	if err := fitMaker.BuildFitImage(); err != nil {
+		return fmt.Errorf("failed to build fit image: %w", err)
+	}
+	if err := fitMaker.CleanFitRootfs(); err != nil {
+		return fmt.Errorf("failed to clean fit rootfs: %w", err)
+	}
+
+	globalWorkDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to get work directory: %w", err)
+	}
+	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+
+	displayImageArtifacts(imageBuildDir, "FIT")
 
 	return nil
 }
