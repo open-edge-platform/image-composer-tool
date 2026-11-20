@@ -21,8 +21,8 @@
   (uncheck them in the repository browser), given another version, or
   unpinned (choose the selected version chip again; choosing the template's
   own pin chip puts the pin back). **Update to latest version** leaves removed
-  packages removed. New packages, the image name and the disk layout go into the template too. The
-  Review step shows the whole edited template, with **Save Template** and
+  packages removed. New packages, the image name and the disk layout go into
+  the template too. The Review step shows the whole edited template, with **Save Template** and
   **Save As…** to keep it on your machine. Only the lines you changed differ
   from the original; comments and formatting stay as written. Chrome and Edge
   save in place; other browsers download a copy. Templates that use `extends`
