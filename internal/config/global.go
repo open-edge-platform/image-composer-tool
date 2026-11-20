@@ -30,6 +30,17 @@ type GlobalConfig struct {
 
 	// AI configuration (optional)
 	AI AIConfig `yaml:"ai,omitempty" json:"ai,omitempty"` // AI-powered template generation settings
+
+	// OEP Installer downloads (optional)
+	OEPInstaller OEPInstallerGlobalConfig `yaml:"oep_installer,omitempty" json:"oep_installer,omitempty"`
+}
+
+// OEPInstallerGlobalConfig holds settings for downloading the OEP Installer
+// files that templates' systemConfig.oepInstaller sections name.
+type OEPInstallerGlobalConfig struct {
+	// TokenFile is the path of a file holding a GitHub token with read access,
+	// for files in private repositories. Keep it owned by root with mode 0600.
+	TokenFile string `yaml:"token_file,omitempty" json:"token_file,omitempty"`
 }
 
 // LoggingConfig controls basic logging behavior
@@ -308,6 +319,12 @@ func (gc *GlobalConfig) renderCommentedYAML() string {
 	if gc.Logging.File != "" {
 		fmt.Fprintf(&b, "  file: %q\n", gc.Logging.File)
 		b.WriteString("  # Tee logs to this file in addition to stdout/stderr (overwritten on each run)\n")
+	}
+	if gc.OEPInstaller.TokenFile != "" {
+		b.WriteString("\n# OEP Installer downloads\n")
+		b.WriteString("oep_installer:\n")
+		fmt.Fprintf(&b, "  token_file: %q\n", gc.OEPInstaller.TokenFile)
+		b.WriteString("  # File holding a GitHub token for OEP Installer files in private repositories (mode 0600)\n")
 	}
 
 	return b.String()

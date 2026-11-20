@@ -236,12 +236,14 @@ packageRepositories:
       - librealsense2-dkms
       - librealsense2-gl
 
-  # ----- Mozilla Team PPA (Firefox .deb, avoids Ubuntu's snap-transitional package) -----
-  - codename: "noble"
-    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+  # ----- Mozilla APT repo (Firefox .deb, avoids Ubuntu's snap-transitional package; the Mozilla Team PPA is signed with rsa1024) -----
+  - codename: "mozilla"
+    url: "https://packages.mozilla.org/apt"
+    pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
     component: "main"
     priority: 1001
+    allowPackages:
+      - firefox
 
   # Intel ECI repository (aligned with eci.intel.com setup instructions)
   # apt equivalent: deb [signed-by=...] https://eci.intel.com/repos/noble isar main

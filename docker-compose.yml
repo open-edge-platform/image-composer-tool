@@ -61,6 +61,13 @@ services:
       - HTTP_PROXY
       - HTTPS_PROXY
       - NO_PROXY
+      # For templates that download the OEP Installer from a private GitHub
+      # repository: uncomment this and the two `secrets` sections below, and
+      # put a GitHub token with read access in ./oep-installer-token (mode 0600,
+      # not committed). Docker mounts it at /run/secrets/, outside `docker inspect`.
+      # - ICT_OEP_INSTALLER_TOKEN_FILE=/run/secrets/oep_installer_token
+    # secrets:
+    #   - oep_installer_token
     volumes:
       # A privileged container gets a copy of /dev taken when it starts. The
       # loop devices a build creates later appear only in the host's /dev, so
@@ -79,3 +86,7 @@ services:
 volumes:
   webui-workspace:
   cache:
+
+# secrets:
+#   oep_installer_token:
+#     file: ./oep-installer-token

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"strings"
 	"time"
 
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
@@ -190,6 +191,9 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 	if r.Yaml != nil {
 		req.YAML = *r.Yaml
 	}
+	if r.OepInstallerToken != nil {
+		req.OEPInstallerToken = strings.TrimSpace(*r.OepInstallerToken)
+	}
 	return req
 }
 
@@ -231,29 +235,34 @@ func fromManifest(m *service.Manifest) httpapi.Manifest {
 func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 	out := httpapi.PackageRepoList{Repos: make([]httpapi.PackageRepo, len(repos))}
 	for i, r := range repos {
-		priority := r.Priority
-		// Only whether the repo has curated packages is published, not which —
-		// the filtering stays server-side behind `curated=true`. Without the
-		// flag a client cannot tell "no curated picks defined" from "curated
-		// search returned nothing", so it would have to offer a toggle that
-		// yields an empty list.
-		hasCurated := len(r.CuratedPackages) > 0
-		// Likewise only whether a signing key is known, not the key URL. A
-		// client needs the flag to say plainly that enabling this repo means
-		// fetching its packages unverified; it has no use for the URL itself.
-		hasKey := r.HasSigningKey()
-		out.Repos[i] = httpapi.PackageRepo{
-			Id:                 r.ID,
-			DisplayName:        r.DisplayName,
-			Url:                r.URL,
-			Description:        optStr(r.Description),
-			EnabledByDefault:   r.EnabledByDefault,
-			Priority:           &priority,
-			HasCuratedPackages: &hasCurated,
-			HasSigningKey:      &hasKey,
-		}
+		out.Repos[i] = fromPackageRepo(r)
 	}
 	return out
+}
+
+// fromPackageRepo maps one catalog repo to the wire type.
+func fromPackageRepo(r service.PackageRepo) httpapi.PackageRepo {
+	priority := r.Priority
+	// Only whether the repo has curated packages is published, not which —
+	// the filtering stays server-side behind `curated=true`. Without the
+	// flag a client cannot tell "no curated picks defined" from "curated
+	// search returned nothing", so it would have to offer a toggle that
+	// yields an empty list.
+	hasCurated := len(r.CuratedPackages) > 0
+	// Likewise only whether a signing key is known, not the key URL. A
+	// client needs the flag to say plainly that enabling this repo means
+	// fetching its packages unverified; it has no use for the URL itself.
+	hasKey := r.HasSigningKey()
+	return httpapi.PackageRepo{
+		Id:                 r.ID,
+		DisplayName:        r.DisplayName,
+		Url:                r.URL,
+		Description:        optStr(r.Description),
+		EnabledByDefault:   r.EnabledByDefault,
+		Priority:           &priority,
+		HasCuratedPackages: &hasCurated,
+		HasSigningKey:      &hasKey,
+	}
 }
 
 // fromEdgePack maps the resolved Edge Pack to the wire type.
@@ -350,12 +359,16 @@ func fromEdgePackPackage(p service.EdgePackPackage) httpapi.EdgePackPackage {
 // fromPackageSearchResults maps a search's hits to the wire type. Repository
 // is the hit's RepoID — the same id the `repos` filter param and
 // /package-repos both use, so a client can round-trip one into the other.
-func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int) httpapi.PackageSearchResults {
-	return httpapi.PackageSearchResults{
+func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int, unavailable []string) httpapi.PackageSearchResults {
+	out := httpapi.PackageSearchResults{
 		Packages: fromPackageSearchHits(hits),
 		Query:    query,
 		Total:    total,
 	}
+	if len(unavailable) > 0 {
+		out.UnavailableRepos = &unavailable
+	}
+	return out
 }
 
 // fromPackageSearchHits maps hits to the wire type. Shared with the SSE search
@@ -443,8 +456,7 @@ func fromAdvancedChanges(a *service.AdvancedChanges) *httpapi.AdvancedChanges {
 }
 
 // fromComposeResult maps the compose outcome onto the contract type. deltaYaml
-// and pinConflicts are omitempty in the spec, so a selection with no overrides
-// sends neither. basePackages and baseYaml are also omitempty, but
+// is omitempty in the spec, so a selection with no overrides doesn't send it. basePackages and baseYaml are also omitempty, but
 // basePackages is populated regardless of overrides (see ComposeResult).
 func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 	out := httpapi.ComposeResponse{
@@ -454,13 +466,17 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		DeltaYaml: optStr(r.DeltaYAML),
 		BaseYaml:  optStr(r.BaseYAML),
 	}
-	if len(r.PinConflicts) > 0 {
-		conflicts := r.PinConflicts
-		out.PinConflicts = &conflicts
-	}
 	if len(r.BasePackages) > 0 {
 		basePackages := r.BasePackages
 		out.BasePackages = &basePackages
+	}
+	out.TemplateRepos = optStrs(r.TemplateRepos)
+	if len(r.TemplateOnlyRepos) > 0 {
+		extra := make([]httpapi.PackageRepo, len(r.TemplateOnlyRepos))
+		for i, tr := range r.TemplateOnlyRepos {
+			extra[i] = fromPackageRepo(tr)
+		}
+		out.TemplateOnlyRepos = &extra
 	}
 	if len(r.Credentials) > 0 {
 		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
@@ -473,6 +489,9 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 			})
 		}
 		out.Credentials = &creds
+	}
+	if r.OEPInstaller.Uses {
+		out.OepInstaller = &httpapi.OEPInstallerInfo{Uses: true, ServerToken: r.OEPInstaller.ServerToken}
 	}
 	return out
 }

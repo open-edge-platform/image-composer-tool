@@ -45,6 +45,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.provisioning`](#systemconfigprovisioning)
       - [`systemConfig.cloudInit`](#systemconfigcloudinit)
       - [`systemConfig.aptPolicy`](#systemconfigaptpolicy)
+      - [`systemConfig.oepInstaller`](#systemconfigoepinstaller)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Template Extends (Inheritance)](#template-extends-inheritance)
     - [Syntax](#syntax)
@@ -360,7 +361,7 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > now setting any of them in an overlay template **fails the build up front** with
 > a message naming every offending section. Configure them in the baseline image
 > (a `create`-mode build) instead. The overlay-supported `systemConfig` inputs are
-> `packages`, `users`, `configurations`, and `additionalFiles`.
+> `packages`, `users`, `proxy`, `configurations`, and `additionalFiles`.
 >
 > **Users in overlay.** `systemConfig.users` is provisioned onto the baseline. A
 > requested user that **already exists in the baseline image fails the build up
@@ -449,7 +450,8 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added, never removed or downgraded. `additive-and-upgrade`: also permits upgrading a package already present in the baseline to a newer version. Downgrades and removals remain blocked in both modes (see note below) |
+| `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added. `additive-and-upgrade`: also permits upgrading baseline packages. Downgrades and removals require separate opt-ins below |
+| `allowDowngrade` | boolean | No | `false` (default), `true` | Permit downgrades selected by explicit APT `name_version` requests. Requires `packageOperation: additive-and-upgrade`. Does not bypass dependency checks, bootloader/kernel protection, or authorize removals |
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
 | `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
@@ -458,13 +460,52 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
-> when the resolved overlay closure requires it. Downgrades are still rejected at
-> preflight. The bootloader binary remains immutable in all cases, and the kernel
+> when the resolved overlay closure requires it. An exact APT `name_version` pin
+> that resolves to a version different from the baseline enters the install set
+> even when older, so the preflight downgrade gate checks it rather
+> than silently ignoring the pin and later reporting unsatisfied dependencies.
+> Pin matching follows the Debian resolver, including omitted epochs (for example,
+> `qemu-system_9.0` resolving to `4:9.0`) and artifact basenames such as
+> `qemu-system_9.0_amd64`.
+> Pins use Debian version comparison rather than literal spelling: equivalent
+> versions such as `2.12-1` and `0:2.12-1` leave the baseline package untouched.
+> Downgrades remain blocked unless `allowDowngrade: true` is explicitly set.
+> The bootloader binary remains immutable in all cases, and the kernel
 > is immutable **unless** you explicitly opt into a swap with `replaceKernel` (see
 > below) — an overlay never upgrades a kernel image in place or reinstalls the
 > bootloader, regardless of `packageOperation`. Choose `additive-only` (the
 > default) to fail the build on any version bump to a baseline package.
-
+>
+> **Downgrades (`allowDowngrade`).** Opt-in and valid only with
+> `packageOperation: additive-and-upgrade`. The planner selects downgrades for
+> explicitly requested APT `name_version` pins; it does not automatically select
+> older unpinned packages or dependencies. RPM overlay builds are not supported
+> end-to-end. Review the preflight downgrade actions and resulting SBOM: older
+> vendor packages can revert distribution security fixes. Debian uses `dpkg -i`.
+> Retained Debian dependency checks, the post-install dependency audit, and
+> bootloader/kernel protections remain enforced. No removal is authorized by
+> this flag; unresolved dependencies still fail the build.
+>
+> **Retained baseline dependencies (Debian).** Baseline `Depends` and
+> `Pre-Depends` retain their version constraints and alternatives. Under
+> `additive-and-upgrade`, if a library upgrade breaks a previously satisfied
+> requirement, the planner automatically adds affected retained native-architecture
+> baseline packages as internal upgrade targets. This reuses the bounded
+> `Breaks`-driven repair loop, with at most four additional resolution passes.
+> Internal targets do not change `Requested`; `CompatibilityUpgrades` records
+> only the resulting forced installs. Preflight blocks newly unsatisfied retained
+> dependencies that remain unresolved, including unavailable or unchanged repair
+> candidates and blocking pins. Explicit pins are not relaxed; this is not a
+> blanket upgrade, removal, or downgrade authorization. RPM baseline
+> reverse-dependency auto-repair is not implemented.
+>
+> Upgraded packages retain versioned `Provides` and `Multi-Arch` metadata for
+> dependency checks. An `Architecture: all` candidate is treated as the baseline's
+> native architecture, not implicitly as `Multi-Arch: foreign`; architecture
+> qualifiers and `Multi-Arch` rules still apply to direct and virtual dependencies.
+> The parsed metadata cache version is bumped so older entries
+> are re-parsed rather than reused without that metadata.
+>
 > **Package removal (`allowPackageRemoval`).** Opt-in, and permitted **only under
 > `packageOperation: additive-and-upgrade`** — removal is more invasive than an
 > in-place upgrade, so pairing it with the default `additive-only` is rejected at
@@ -476,15 +517,22 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > a stock baseline. Bootloader and bootable-kernel packages are still never
 > removed, so the flag cannot break the boot path.
 >
+> **Dependency audit.** The installer compares package-manager dependency failure
+> descriptors before and after any nonempty install or removal transaction,
+> including upgrade-only and downgrade-only transactions. Pre-existing failures are ignored when
+> identifying newly introduced failures. New upgrade-only failures fail closed
+> without cascade removal, even with `allowPackageRemoval: true`.
+>
 > **Cascade removal of orphaned reverse-dependencies.** A conflict-driven removal
 > can leave an unrelated baseline package that only `Depends:` on the removed one
 > with an unmet dependency (for example, the Debian cloud image's
 > `cloud-initramfs-growroot` depends on `initramfs-tools`). When
-> `allowPackageRemoval` is enabled, the post-install dependency audit turns into a
-> bounded cascade: each baseline package that is broken *after* a removal but was
+> `allowPackageRemoval` is enabled and an explicitly authorized removal occurred,
+> the post-install dependency audit permits a bounded cascade: each baseline
+> package that is broken *after* a removal but was
 > whole *before* it is itself removed, transitively, until the package manager's
-> own check (`apt-get check` / `dnf check`) reports the dependency tree is whole
-> again. A dependency that an alternative still satisfies is never treated as broken, so
+> own check (`apt-get check` / `rpm -Va`) reports no newly introduced failures.
+> A dependency that an alternative still satisfies is never treated as broken, so
 > nothing is over-removed. The cascade still fails **closed**: if resolving the
 > breakage would require removing a bootloader/kernel-image package or a package
 > the overlay is installing, the build fails instead. Cascade removals are folded
@@ -527,15 +575,20 @@ plus `allowPackageRemoval: true`) to it.
 >    can write `linux-image-*-oem` instead of pinning an exact version. The pattern must
 >    resolve to **exactly one** bootable kernel image: a value that matches no kernel
 >    (a typo, or a userspace-only package) or several kernels (an over-broad glob)
->    fails preflight, which lists what it matched so you can narrow it;
+>    fails preflight, which lists what it matched so you can narrow it. A Debian
+>    `name_version` request whose name and version match resolved or
+>    dependency-closure metadata is treated as the canonical package name for
+>    kernel-image checks, not as an extra kernel image;
 > 2. any `additionalPackages` (e.g. the matching `linux-headers-*` package) are
 >    resolved and installed alongside `package`, following the same rules as
 >    `package` itself;
 > 3. the baseline kernel **family** — the bootable image plus its meta-package,
 >    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
->    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
->    and removed, so the emitted image ships **only** the new kernel and whatever
->    `additionalPackages` you named;
+>    `linux-image-generic`, `linux-modules-*`, `linux-main-modules-*`,
+>    `linux-headers-*`) — is auto-detected and removed, except for packages in the
+>    replacement dependency-closure keep-set. Ubuntu `linux-main-modules-*` packages
+>    are kernel companions, not additional bootable images; their removal is
+>    authorized only by a valid explicit kernel replacement;
 > 4. the GRUB config is regenerated so the removed kernel's menu entry is dropped
 >    and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` when you do
 >    not set `grubDefault` explicitly).
@@ -778,6 +831,7 @@ user templates (as defaults already provide a complete base).
 | `provisioning` | object | No | Boot-time provisioning scripts |
 | `cloudInit` | object | No | Install and seed cloud-init |
 | `aptPolicy` | object | No | Restrict which repositories may upgrade packages |
+| `oepInstaller` | object | No | Compose OEP Installer profiles or modules into the image |
 
 Package names must match: `^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$`
 and must be unique within the list.
@@ -824,9 +878,18 @@ packageRepositories:
 | `bootType` | string | `efi`, `legacy` | Boot firmware type |
 | `provider` | string | `grub`, `grub2`, `systemd-boot` | Bootloader software |
 | `bootEntryPolicy` | string | `preserve` (default), `exclusive` | Live installer only: `preserve` puts the installed OS first and keeps the existing `BootOrder` after it; `exclusive` lists only the installed OS. Existing boot entries are kept, except entries labelled exactly `ICT` from an earlier install, which are replaced |
+| `timeoutSec` | integer | `0` or greater | Seconds GRUB shows its menu before booting the default entry (`GRUB_TIMEOUT` in `/etc/default/grub`). `0` boots at once. Omit to keep ICT's default of `5`. Applies to create-mode builds with the `grub` provider; a template that sets it with `systemd-boot` is rejected, and overlay mode leaves the baseline's GRUB settings alone |
 
 Typical defaults: raw images use `efi` / `systemd-boot`; ISO images use
 `efi` / `grub`.
+
+```yaml
+systemConfig:
+  bootloader:
+    bootType: efi
+    provider: grub
+    timeoutSec: 1   # show the GRUB menu for 1 second
+```
 
 After an EFI install, the live installer creates a firmware boot entry labelled
 `ICT` for the installed disk and sets `BootOrder` explicitly so the installed
@@ -1147,13 +1210,23 @@ bundled on the ISO, so this section only affects the running system.
 
 A layer that `extends` another replaces an inherited `proxy` section as a whole. An empty `proxy: {}` clears the inherited proxy.
 
+Supported in both create and overlay templates. Overlay uses the same proxy
+writer after `configurations`, preserving unrelated `/etc/environment` entries.
+An absent or empty proxy block leaves the baseline's proxy files untouched;
+it does not clear proxy settings already present in the baseline. Overlay builds
+must run with permission to write the mounted baseline (normally via `sudo -E`).
+For overlay templates, set these values in YAML; proxy CLI overrides remain
+create-mode only. Build-host proxy environment variables are not changed.
+
 The values are written to:
 
 - `/etc/environment` — upper- and lower-case variables for login sessions;
   existing proxy lines are replaced, other lines (such as `PATH`) are kept
 - `/etc/apt/apt.conf.d/95ict-proxy` — `Acquire::{http,https,ftp}::Proxy`;
   plain host names in `noProxy` become `DIRECT` entries for http, https, and
-  (when `ftpProxy` is set) ftp; apt cannot express domain suffixes or CIDRs
+  (when `ftpProxy` is set) ftp; apt cannot express domain suffixes or CIDRs.
+  A `noProxy`-only configuration removes an existing ICT proxy file; other apt
+  configuration files are unchanged and can still configure a proxy.
 - `/etc/systemd/system.conf.d/90-ict-proxy.conf` — `DefaultEnvironment=` for
   every systemd service, including cloud-init and the provisioning units
 
@@ -1187,9 +1260,11 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].stage` | string | No | `first-boot` (default) runs once; `every-boot` runs on each boot |
 | `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
 | `scripts[].args` | list of string | No | Command-line arguments passed to the script. Each is 1-256 characters of letters, digits, and `._@%+:/=,-` (no spaces, quotes, `$`, or `;`, which systemd would interpret) |
-| `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters) |
+| `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters). `SERVICE_RESULT`, `EXIT_CODE` and `EXIT_STATUS` are set by systemd for the failure report and cannot be used |
 | `scripts[].timeoutSec` | int | No | Fail the script's unit if it runs longer than this many seconds (systemd `TimeoutStartSec=`); 0 or unset means no limit, except with `beforeLogin: true`, where it means 3600 s |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
+| `scripts[].stopOnFailure` | bool | No | Do not run a failed script again on later boots (default: retry at the next boot). `first-boot` scripts only, and not with `imageType: img`, whose root file system is recreated at every boot. The unit fails to start on later boots, so the scripts after it stay blocked, until an administrator runs `sudo /usr/libexec/ict-provision-report retry <name>`, which runs it again, or `... done <name>`, which records it as complete. The notice is in `/etc`, so where `/etc` is not persistent it disappears at the next reboot while the script stays blocked |
+| `scripts[].recoveryHint` | string | No | Sentence shown in the failure notice that says how to finish the script's work by hand. Needs `stopOnFailure`. 1-200 printable ASCII characters, no backslash |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
 execution order), started at boot by `ict-provision-start.service`. Units run after
@@ -1199,6 +1274,20 @@ cloud-init applies. Each unit is also after and requires the previous one, so a
 failed script stops the scripts after it. Output goes to the journal and console. A `first-boot` unit records success in
 `/var/lib/image-composer-tool/provisioned/<name>`; a failed script leaves no
 stamp and is retried on the next boot.
+
+When a script fails or times out, the console login prompt and the message of
+the day (so SSH logins as well) show `Provisioning script "<name>" failed` with
+the command to read its log, `sudo journalctl -u ict-provision-<NNN>-<name>.service`.
+The notice stays until the script succeeds on a later boot (on an image whose `/etc` is not
+persistent, such as `imageType: img` or an immutable image with a tmpfs overlay, only until the next
+reboot). A script with `stopOnFailure` is not run again at boot (its unit shows as failed and the
+scripts after it do not start); its notice shows the `retry` command, and the `done` command when it has a `recoveryHint`, instead. A termination by a reboot or shutdown is
+not a failure: a script that reboots the machine to finish a step, as `openedge-cli` does, is not
+reported and runs again after the boot. A unit that fails after its script finished, for example
+when the `rebootAfter` reboot command fails, loses its completion stamp so the script runs again.
+A prompt that is already on screen when the script fails does not change; the message of the day
+shows the notice after login. `/etc/issue.d` and `/etc/motd.d` are created in the image, and
+`additionalFiles` may not make either one a file or write the `ict-provision-*` notice files.
 
 ```yaml
 systemConfig:
@@ -1311,6 +1400,140 @@ systemConfig:
 Check the result on a deployed system with `apt-cache policy <package>` and
 `apt-get -s upgrade`.
 
+#### `systemConfig.oepInstaller`
+
+Composes OEP Installer (`openedge-cli`) profiles or modules into the image
+(`ubuntu` targets). The OEP Installer publishes, next to the CLI, the
+`openedge-cli list --sbom` output for each supported configuration, generated
+on a host running the target OS and kernel. At build time ICT installs the
+Debian packages and apt repositories that output lists; on first boot
+`openedge-cli install` completes the remaining installation. The interface is
+described in the
+[OEP Installer interface specification](../../architecture-decision-record/oep-installer-sbom-interface.md).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `sbomUrl` | string | Yes | `https://` URL of the published `list --sbom` output, pinned to a commit or tag, or on a branch (see below). For a file on GitHub, use its `raw.githubusercontent.com` URL; a `github.com/.../blob/...` or `.../tree/...` page URL is rejected |
+| `sbomSha256` | string | No | Hex SHA-256 digest of the file at `sbomUrl`; the build fails if the download does not match. When omitted, the file is not verified, and the build log records the digest of what was downloaded |
+| `user` | string | Yes | A `systemConfig.users` entry (not `root`) that runs `openedge-cli` on first boot |
+| `url` | string | No | `https://` URL of the rendered `openedge-cli` file, pinned to a commit or tag. The same GitHub rule as for `sbomUrl` applies. When omitted, ICT installs the CLI the output was generated with, named by its `cli-url` header |
+| `sha256` | string | With `url` | Hex SHA-256 digest of the file at `url`; the build fails if the download does not match |
+| `modules` | string[] | No | Profiles or modules to install, as accepted by `openedge-cli install`. When omitted, the output's `module-list`; when set, it must equal it |
+| `args` | string[] | No | Extra arguments (for example `--edgepack`) passed to the first-boot `openedge-cli install` (no spaces, quotes, `$` or `;`). When omitted, the arguments in the output's `install-cmdline`; when set, including `[]` for none, they must equal them, since some profiles choose modules based on them |
+
+At build time ICT downloads the file at `sbomUrl`, checks it against
+`sbomSha256` when set, and then:
+
+- Adds the packages it lists to `systemConfig.packages`. Versions written as
+  `name=version` or `name=version*` (the newest version starting with
+  `version`) are installed at exactly the version selected. Artifacts listed
+  by URL are left to `openedge-cli` on first boot.
+- Adds the apt repositories it lists, writing their sources list, keyring, and
+  preferences files at the paths `openedge-cli` uses. A `packageRepositories`
+  entry with the same URL and suite is replaced by the one from the file.
+- Downloads the CLI: the one at `url`, checked against `sha256`, or, without
+  `url`, the one at the file's `cli-url`, checked against its `cli-sha256`
+  header when present. A `cli-url`, `module-list`, or `install-cmdline` it
+  takes in place of an omitted field must pass the same checks as that field.
+  The build fails when `url` names a different version of the CLI than
+  `cli-url`, or when a digest does not match. ICT then completes
+  the section with the CLI it installed, the digests of both files, and the
+  modules and arguments, so the template the image carries records exactly
+  what was installed.
+- Fails the build when the file's `module-list` differs from `modules`, a
+  listed package conflicts with the template's version of it, a package the
+  file requires not to be installed is in `systemConfig.packages`, or a
+  kernel parameter it lists is missing from `systemConfig.kernel.cmdline`.
+- Fails the build when a kernel package it lists does not match the
+  template's kernel: a kernel image must be one of the template's kernel
+  packages, a meta-package such as `linux-image-generic-7.0` must name the
+  template kernel's series, and headers, modules, or tools must be for the
+  template kernel's release.
+
+On first boot, a generated provisioning script
+(`/usr/local/sbin/ict-oep-installer.sh`, ordered after the template's own
+`provisioning.scripts`) runs as `user`: the CLI's `setup` command, which saves
+it as `~/.local/bin/openedge-cli`, and then `openedge-cli install` with
+`modules` and `args`. The user has passwordless sudo only while the script
+runs; the grant is kept in `/run`, so it is removed when the script exits and is gone after any reboot, even on an immutable image. The sudoers file that includes the grant directory stays in the image, so a `tmpfiles.d` entry (`/etc/tmpfiles.d/ict-oep-installer.conf`) has systemd create the empty directory at every boot; on Ubuntu 26.04, whose `sudo` is sudo-rs, a missing directory would otherwise stop `sudo` for every user. The script runs again at the next boot only when
+`openedge-cli` reboots the system to finish an installation step. If
+`openedge-cli` fails, the script is not run again at boot (it has
+`stopOnFailure`): the login prompt and the message of the day tell an
+administrator to read the journal and, after fixing the problem, run
+`sudo /usr/libexec/ict-provision-report retry oep-installer`. That runs the
+script again as the configured user with the temporary sudo grant, so it also
+recovers a failure before `openedge-cli setup` completed, and it works for a user
+without sudo rights of their own. A user who has sudo can instead run
+`~/.local/bin/openedge-cli resume` and then
+`sudo /usr/libexec/ict-provision-report done oep-installer` to clear the
+notice. An `imageType: img` image keeps no state across boots, so there the
+script has neither `stopOnFailure` nor a hint and runs again at every boot until
+it succeeds. ICT
+copies the CLI to `/usr/local/share/oep-installer/` and adds `sudo` to the
+image's packages. Samples that run on top of a blueprint are not part of the
+image; install them afterwards with `openedge-cli install <sample>`.
+
+To download from a private GitHub repository, provide a GitHub token with
+read access, for example the one the GitHub CLI stores
+(`gh config get -h github.com oauth_token`, or `gh auth token` on newer
+versions). ICT uses the first of these that is set:
+
+1. `build --oep-installer-token-file FILE`: a file holding the token for that
+   build only. The Web UI uses this for a token entered for one build.
+2. `ICT_OEP_INSTALLER_TOKEN`: the token itself, for a build run from a shell.
+3. `ICT_OEP_INSTALLER_TOKEN_FILE`: the path of a file holding the token, such
+   as a mounted Docker or Kubernetes secret.
+4. `oep_installer.token_file` in the global configuration file: the path of a
+   file holding the token. Use this for the Web UI with `serve --sudo`, which
+   does not pass the variables above through `sudo`.
+
+Keep a token file owned by root with mode `0600`; ICT warns when other users
+can read it. ICT sends the token only to GitHub hosts and never logs it.
+Behind a proxy that
+inspects TLS traffic, the build host must trust the proxy's root certificate
+(for example in `/usr/local/share/ca-certificates/`, followed by
+`update-ca-certificates`), or the download fails with a certificate error.
+
+A child template's `oepInstaller` section replaces an inherited one as a
+whole. The section is rejected in overlay mode.
+
+```yaml
+systemConfig:
+  users:
+    - name: edge
+  oepInstaller:
+    url: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/openedge-cli-federal-aerospace
+    sha256: <sha256 of the CLI>
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/<commit>/rendered/sbom-handheld-blueprint-ubuntu-24.04.5.yaml
+    sbomSha256: <sha256 of the output file>
+    modules:
+      - handheld_blueprint
+    user: edge
+    args: ["--edgepack"]
+```
+
+The output file pins the kernel of the host it was generated on (for example
+`linux-headers-7.0.0-38-generic`), so the template must install that exact
+kernel.
+
+**Following a branch.** While the OEP Installer is in development, a template
+can name only the output, on a branch, and the user:
+
+```yaml
+systemConfig:
+  oepInstaller:
+    sbomUrl: https://raw.githubusercontent.com/<org>/oep-installer-cli/release-2026.3.0/rendered/sbom-handheld-blueprint-docker-ubuntu-24.04.5.yaml
+    user: edge
+```
+
+Each build then uses the output at the tip of the branch, with the CLI, modules,
+and arguments it names, so fixes on the branch need no template change. Builds
+of the same template are not reproducible, and the output is not verified; the
+CLI is verified only when the output gives its `cli-sha256`. A change of
+kernel or kernel parameters on the branch still needs the template to change
+with it. For a release, pin `sbomUrl` to a commit or tag and set `sbomSha256`:
+the output then pins the CLI by commit and, with `cli-sha256`, by digest.
+
 ## Package Repositories
 
 Use `packageRepositories` to add extra Debian or RPM repositories to a build.
@@ -1366,7 +1589,7 @@ follow different strategies:
 | `image.name`, `image.version` | User overrides default if non-empty |
 | `target` | User value used entirely |
 | `disk` | User replaces entire default if non-empty |
-| `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated) |
+| `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated). A user entry pinning a version (`curl_8.5.0-2`) replaces the default's entry for the same package; a bare one (`curl`) leaves the default's entry in place |
 | `systemConfig.kernel` | User overrides `version`, `cmdline`, `packages` individually if non-empty |
 | `systemConfig.bootloader` | User overrides individual fields if non-empty |
 | `systemConfig.network` | User overrides `backend` if non-empty; `interfaces` replaced when provided |
@@ -1442,7 +1665,7 @@ full behavior across a chain:
 | `baseline` / `overlayPolicy` | Non-nil child pointer replaces the parent value |
 | `disk` | Wholesale replacement when the child provides a non-empty disk config |
 | `systemConfig.name` / `.description` / `.hostname` / `.initramfs.template` | Non-empty child overrides |
-| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated. Deduplication is by exact string, so a child pinning `pkg_1.2` does **not** replace a parent's unpinned `pkg` — both entries survive (see [What the Packages Step Contributes](#what-the-packages-step-contributes)) |
+| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated, so a child cannot remove a parent's package. Where a child lists a package the parent also lists, one entry survives: a child pinning a version (`pkg_1.2`) replaces the parent's entry, pinned or not, in place, and a child's bare `pkg` leaves the parent's entry to decide. Glob entries (`libva*`) are deduplicated by exact string only |
 | `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
@@ -1612,14 +1835,10 @@ the per-OS `providerconfigs/`, so re-declaring them would duplicate
 configuration the build already has.
 
 > **Pinning a package the curated template already lists.** Per the merge table
-> above, `systemConfig.packages` is an **additive union** — a child layer cannot
-> remove a parent's entry. So pinning a version for a package the curated
-> template already lists unpinned leaves **both** entries in the resolved
-> template (`curl` and `curl_8.5.0-2ubuntu10.13`), and the resolver may install
-> either. `POST /templates/compose` reports these on `pinConflicts` and the
-> Review step names them, rather than presenting the resolved template as
-> unambiguous. To let the curated template's entry decide, choose "Latest" for
-> that package.
+> above, a pinned entry replaces the curated template's entry for the same
+> package, whether that entry is unpinned (`curl`) or pinned to another version,
+> so the resolved template requests the package once, at your version. To let
+> the curated template's entry decide, choose "Latest" for that package.
 
 Because the delta is a template in its own right, the Review step can show it
 directly: `POST /templates/compose` returns `deltaYaml` (the generated delta
@@ -1674,6 +1893,29 @@ repository cannot quietly start producing unverified builds.
 Repositories for target OSes the manifest does not offer are deliberately
 absent; the picker can never query them. They should be added alongside the
 manifest combination that makes them reachable.
+
+#### Repositories Only a Template Declares
+
+A template served from outside this repository, through `serve --manifest` and
+`--templates-dir`, can declare a repository the catalog does not carry, such as
+a vendor snapshot or a PPA only that template uses. `POST /templates/compose`
+reports each one too: its id, prefixed `template-`, is in `templateRepos`, and
+`templateOnlyRepos` carries a catalog-shaped entry for it, built from the
+template's own `url`, `codename`, `component`, `priority` and `pkey` and labelled
+by host and the end of its path (for example
+`ppa.launchpadcontent.net …/lp2168017/ubuntu (resolute)`). The id is derived
+from the target and the repository's URL, suite and components, so it is the
+same on every compose.
+
+The Packages step lists such a repository under **Already included** with the
+template's other repositories, and browses and searches it like a catalogued
+one: `GET /packages/search` and `/packages/search/stream` accept its id once a
+compose has returned it. `GET /package-repos` never lists it, so it is not
+offered as optional for other templates, and an unfiltered search does not
+read it. Only repositories named by templates the server itself serves are ever
+fetched this way; a client can name an id a compose returned, never a URL. The
+server must be able to reach the repository for its packages to show; when it
+cannot, the step reports it as unreadable, as for a catalogued repository.
 
 ### See Also
 

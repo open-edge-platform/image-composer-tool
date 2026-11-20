@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// The Repositories tab's rail gives the base repo "always on, can't uncheck"
-// treatment today; a repo in lockedRepoIds (an Edge Pack repo the matched
+// The Repositories tab's toolbar gives the base repo "always on, can't
+// uncheck" treatment; a repo in lockedRepoIds (an Edge Pack repo the matched
 // template already draws a package from — see templateLockedRepos in
 // lib/edgepack.ts) must get the same treatment, for the same reason: the
 // build already needs it, whether or not the user has touched this tab.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { useStore } from '../store'
@@ -15,7 +15,7 @@ import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
 
-const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn() }))
+const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn(), lookupPackages: vi.fn() }))
 vi.mock('../api/client', () => ({ api: mockApi }))
 
 const noLock: BaseLock = {
@@ -54,10 +54,17 @@ const repos: PackageRepo[] = [
 beforeEach(() => {
   useStore.setState({ addedPackages: [], enabledRepos: [] })
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
+  mockApi.lookupPackages.mockReset()
+  mockApi.lookupPackages.mockResolvedValue({ packages: [], unavailableRepos: [] })
 })
 
+// browse picks a repository from the toolbar dropdown, the same way a user does.
+function browse(repoId: string) {
+  fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: repoId } })
+}
+
 describe('a repo the matched template already draws a package from', () => {
-  it('renders checked and disabled, same as the base repo', () => {
+  it('renders as always on, same as the base repo', () => {
     render(
       <Browser
         repos={repos}
@@ -67,10 +74,8 @@ describe('a repo the matched template already draws a package from', () => {
       />,
     )
 
-    const box = screen.getByRole('checkbox', { name: /Intel ECI/ }) as HTMLInputElement
-    expect(box.checked).toBe(true)
-    expect(box.disabled).toBe(true)
-    expect(screen.getByText('In template — always on')).toBeTruthy()
+    browse('intel-eci')
+    expect(screen.getByText('In template — already included')).toBeTruthy()
   })
 
   it('is not written into enabledRepos — it is checked by lockedRepoIds alone', () => {
@@ -86,7 +91,7 @@ describe('a repo the matched template already draws a package from', () => {
     expect(useStore.getState().enabledRepos).not.toContain('intel-eci')
   })
 
-  it('leaves an ordinary optional repo unchecked and enabled', () => {
+  it('leaves an ordinary optional repo not in use', () => {
     render(
       <Browser
         repos={repos}
@@ -96,9 +101,9 @@ describe('a repo the matched template already draws a package from', () => {
       />,
     )
 
-    const box = screen.getByRole('checkbox', { name: /^Docker$/ }) as HTMLInputElement
-    expect(box.checked).toBe(false)
-    expect(box.disabled).toBe(false)
+    browse('docker')
+    expect(screen.queryByText(/always on$/)).toBeNull()
+    expect(screen.getByRole('option', { name: 'Docker' })).toBeTruthy()
   })
 
   it('sorts locked repos to the top, after the base repo', () => {
@@ -111,21 +116,22 @@ describe('a repo the matched template already draws a package from', () => {
       />,
     )
 
-    const rail = screen.getByRole('group', { name: 'Package repositories' })
-    const order = Array.from(rail.querySelectorAll('input[type="checkbox"]')).map((el) => el.id)
-    expect(order).toEqual(['repo-base', 'repo-intel-eci', 'repo-intel-graphics', 'repo-docker'])
+    const order = screen.getAllByRole('option').map((el) => (el as HTMLOptionElement).value)
+    expect(order).toEqual(['base', 'intel-eci', 'intel-graphics', 'docker'])
+    const always = screen.getByRole('group', { name: 'Currently in template' })
+    expect(Array.from(always.querySelectorAll('option')).map((o) => o.value)).toEqual(['base', 'intel-eci'])
   })
 
   it('defaults to no locked repos when the prop is omitted', () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    const box = screen.getByRole('checkbox', { name: /Intel ECI/ }) as HTMLInputElement
-    expect(box.checked).toBe(false)
-    expect(box.disabled).toBe(false)
+    browse('intel-eci')
+    expect(screen.queryByText(/always on$/)).toBeNull()
+    expect(screen.getByRole('option', { name: 'Intel ECI' })).toBeTruthy()
   })
 })
 
-describe('clicking a repository browses it, independent of its checkbox', () => {
+describe('the dropdown browses a repository, independent of using it for the build', () => {
   it('fetches the base repo by default, without any repo checked', async () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
@@ -136,30 +142,21 @@ describe('clicking a repository browses it, independent of its checkbox', () => 
     )
   })
 
-  it('switches the fetched repo when a different rail row is clicked', async () => {
+  it('shows the base repo as always on', () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+
+    expect(screen.getByText('Base — already included')).toBeTruthy()
+  })
+
+  it('switches the fetched repo when a different repository is picked', async () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
     await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
     mockApi.searchPackages.mockClear()
 
-    fireEvent.click(screen.getByText('Docker'))
+    browse('docker')
 
     await waitFor(() =>
       expect(mockApi.searchPackages).toHaveBeenCalledWith(
-        expect.objectContaining({ repos: ['docker'] }),
-      ),
-    )
-  })
-
-  it('does not change the browsed repo when only the checkbox is clicked', async () => {
-    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
-    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
-    mockApi.searchPackages.mockClear()
-
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }))
-
-    expect(useStore.getState().enabledRepos).toContain('docker')
-    await waitFor(() =>
-      expect(mockApi.searchPackages).not.toHaveBeenCalledWith(
         expect.objectContaining({ repos: ['docker'] }),
       ),
     )
@@ -168,41 +165,19 @@ describe('clicking a repository browses it, independent of its checkbox', () => 
   it('lets browsing an unchecked repo without affecting enabledRepos', () => {
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
-    fireEvent.click(screen.getByText('Docker'))
+    browse('docker')
 
     expect(useStore.getState().enabledRepos).not.toContain('docker')
   })
 
-  // Regression: Space on the rail row itself still browses it (keyboard
-  // parity with the row's own click), but the same Space bubbling up from
-  // the nested checkbox must not be hijacked into browsing instead — that
-  // would leave keyboard users with no way to toggle an optional repo.
-  it('does not browse the repo when Space is pressed on its checkbox', async () => {
+  // The option labels and the count are what show every repo's state at a glance.
+  it('marks optional repos in use in the dropdown and counts them', () => {
+    useStore.setState({ enabledRepos: ['docker'] })
     render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
-    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
-    mockApi.searchPackages.mockClear()
 
-    fireEvent.keyDown(screen.getByRole('checkbox', { name: 'Docker' }), { key: ' ' })
-
-    await waitFor(() =>
-      expect(mockApi.searchPackages).not.toHaveBeenCalledWith(
-        expect.objectContaining({ repos: ['docker'] }),
-      ),
-    )
-  })
-
-  it('browses the repo when Space is pressed on the rail row itself', async () => {
-    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
-    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
-    mockApi.searchPackages.mockClear()
-
-    fireEvent.keyDown(screen.getByRole('button', { name: /Docker/ }), { key: ' ' })
-
-    await waitFor(() =>
-      expect(mockApi.searchPackages).toHaveBeenCalledWith(
-        expect.objectContaining({ repos: ['docker'] }),
-      ),
-    )
+    expect(screen.getByRole('option', { name: '✓ Docker' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Intel ECI' })).toBeTruthy()
+    expect(screen.getByText('2 of 4 repositories in use')).toBeTruthy()
   })
 })
 
@@ -221,9 +196,12 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    expect(screen.getByText(/Pinned to/)).toBeTruthy()
-    expect(screen.getByText('9.1')).toBeTruthy()
-    expect(screen.getByText('Intel ECI')).toBeTruthy()
+    // The header says what's pinned and where from; the note, what a chip
+    // here would do instead.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.getByText('Intel ECI', { selector: 'button' })).toBeTruthy()
+    expect(screen.getByText('Picking a version here pins Ubuntu Base instead of Intel ECI.')).toBeTruthy()
     const chip = screen.getByRole('button', { name: '9.0' })
     expect(chip.className).not.toContain('bg-[#0071c5]')
   })
@@ -238,15 +216,20 @@ describe('a package already selected from a different repository than the one be
     })
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
-    fireEvent.click(screen.getByText('Intel ECI'))
+    browse('intel-eci')
 
     await screen.findByText('vim')
-    expect(screen.queryByText(/Pinned to/)).toBeNull()
+    // The pin is one of this repo's chips, highlighted there, and beside the
+    // tag with no "via", since it's from the repo being browsed.
+    expect(screen.getByText('Pinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByTitle('Pinned version').textContent).toBe('9.1')
+    expect(screen.queryByText(/^via /, { selector: 'span' })).toBeNull()
+    expect(screen.queryByText(/Picking a version here pins/)).toBeNull()
     const chip = screen.getByRole('button', { name: '9.1' })
     expect(chip.className).toContain('bg-[#0071c5]')
   })
 
-  it('shows "Latest" as selected in every repo once picked as the unpinned choice', async () => {
+  it('tags an unpinned pick Unpinned in every repo, with no version chip selected', async () => {
     useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'intel-eci' }] })
     mockApi.searchPackages.mockResolvedValue({
       packages: [{ name: 'vim', version: '9.0', repository: 'base', versions: [{ version: '9.0', repository: 'base' }] }],
@@ -255,8 +238,9 @@ describe('a package already selected from a different repository than the one be
     render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
 
     await screen.findByText('vim')
-    const latest = screen.getByRole('button', { name: 'Latest' })
-    expect(latest.className).toContain('bg-[#0071c5]')
+    expect(screen.getByText('Unpinned', { selector: 'span' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Unpinned' })).toBeNull()
+    expect(screen.getByRole('button', { name: '9.0' }).getAttribute('aria-pressed')).toBe('false')
   })
 })
 
@@ -282,18 +266,137 @@ describe('"Show only selected"', () => {
     await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 })))
   })
 
-  it('includes template-locked packages when browsing the base repo', async () => {
-    const baseLockWithCurl: BaseLock = {
-      info: (name) => (name === 'curl' ? { locked: true, currentVersion: '8.5', currentIsFloating: false } : { locked: false, currentIsFloating: false }),
-      ensureResolved: () => {},
-      concreteNames: ['curl'],
-    }
-    mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
-    render(<Browser repos={repos} os="ubuntu" baseLock={baseLockWithCurl} />)
+  // Template package names are bare, so which repo they belong to is
+  // whichever publishes them: the same rule the normal view uses to show
+  // them checked. Each repo's own entry for the name is looked up by name.
+  const templateLock = (names: string[]): BaseLock => ({
+    info: (name) =>
+      names.includes(name) ? { locked: true, currentIsFloating: true } : { locked: false, currentIsFloating: false },
+    ensureResolved: () => {},
+    concreteNames: names,
+  })
+  // `publishes` maps repo id to the names it carries; the catalog browse is
+  // left empty, so only the by-name lookup can put a template row on screen.
+  const mockRepos = (publishes: Record<string, string[]>) =>
+    mockApi.lookupPackages.mockImplementation(({ repos: ids, names }: { repos: string[]; names: string[] }) => {
+      const repo = ids[0]
+      return Promise.resolve({
+        packages: names
+          .filter((n) => (publishes[repo] ?? []).includes(n))
+          .map((n) => ({ name: n, version: '1.0', repository: repo, versions: [{ version: '1.0', repository: repo }] })),
+        unavailableRepos: [],
+      })
+    })
+  const browse = (label: string) =>
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), {
+      target: { value: repos.find((r) => r.displayName === label)!.id },
+    })
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /^Show only selected/ }))
+  it('includes a template package when browsing the base repo that publishes it', async () => {
+    mockRepos({ base: ['curl'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
 
     await screen.findByText('curl')
+  })
+
+  it('includes a template package under a non-base repo that publishes it', async () => {
+    mockRepos({ base: ['curl'], 'intel-eci': ['librealsense2'] })
+    useStore.setState({ enabledRepos: ['intel-eci'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'librealsense2'])} />)
+    browse('Intel ECI')
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
+
+    await screen.findByText('librealsense2')
+    expect(screen.queryByText('curl')).toBeNull()
+  })
+
+  it('leaves out a template package the browsed repo does not publish, even on the base repo', async () => {
+    mockRepos({ base: ['curl'], 'intel-eci': ['librealsense2'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'librealsense2'])} />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
+
+    await screen.findByText('curl')
+    expect(screen.queryByText('librealsense2')).toBeNull()
+  })
+
+  it('reads "checking…" until the template lookups for the browsed repo land', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    mockApi.lookupPackages.mockImplementation(({ names }: { names: string[] }) =>
+      gate.then(() => ({
+        packages: names.map((n) => ({ name: n, version: '1.0', repository: 'base', versions: [] })),
+        unavailableRepos: [],
+      })),
+    )
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    await screen.findByRole('checkbox', { name: 'Show only selected (checking…)' })
+    await act(async () => release())
+    await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' })
+  })
+
+  it('looks up every template name for the browsed repo in one request, once per repo', async () => {
+    mockRepos({ base: ['curl', 'vim'] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'vim', 'not-there'])} />)
+
+    await screen.findByRole('checkbox', { name: 'Show only selected (2 selected)' })
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith({ os: 'ubuntu', repos: ['base'], names: ['curl', 'vim', 'not-there'] })
+    // No per-name searches: those queued ahead of the catalog fetch.
+    expect(mockApi.searchPackages.mock.calls.every(([args]) => !args.q)).toBe(true)
+
+    // Back to a repo already looked up: answered from the cache.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: 'intel-eci' } })
+    await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Choose repository' }), { target: { value: 'base' } })
+    await screen.findByRole('checkbox', { name: 'Show only selected (2 selected)' })
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(2)
+  })
+
+  it('says a failed lookup could not check, without retrying in a loop, and retries on a revisit', async () => {
+    mockApi.lookupPackages.mockRejectedValue(new Error('offline'))
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    await screen.findByRole('checkbox', {
+      name: "Show only selected (0 selected, couldn't check template packages)",
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+
+    // Not cached as "not published": browsing the repo again asks again.
+    mockRepos({ base: ['curl'] })
+    browse('Intel ECI')
+    await screen.findByRole('checkbox', { name: 'Show only selected (0 selected)' })
+    browse('Ubuntu Base')
+    await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' })
+  })
+
+  it("keeps what a partial answer found but doesn't count the rest as not published", async () => {
+    mockApi.lookupPackages.mockResolvedValue({
+      packages: [{ name: 'curl', version: '1.0', repository: 'base', versions: [] }],
+      unavailableRepos: ['base'],
+    })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl', 'vim'])} />)
+
+    await screen.findByRole('checkbox', {
+      name: "Show only selected (1 selected, couldn't check template packages)",
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockApi.lookupPackages).toHaveBeenCalledTimes(1)
+  })
+
+  it('lists a template package the user also added only once', async () => {
+    mockRepos({ base: ['curl'] })
+    useStore.setState({ addedPackages: [{ name: 'curl', version: '8.5', repo: 'base' }] })
+    render(<Browser repos={repos} os="ubuntu" baseLock={templateLock(['curl'])} />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Show only selected (1 selected)' }))
+
+    expect(await screen.findAllByText('curl')).toHaveLength(1)
   })
 })
 

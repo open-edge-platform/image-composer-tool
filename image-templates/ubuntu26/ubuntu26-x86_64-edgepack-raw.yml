@@ -16,7 +16,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu
-  version: "26.04.1"
+  version: "26.04.3"
 
 target:
   os: ubuntu
@@ -57,6 +57,24 @@ disk:
 # edge-compute-essentials enablement is carried by intel-edge-base-standard
 # itself, so no separate NPU package or prerequisite repository is required.
 packageRepositories:
+  # Firefox as a real .deb. Ubuntu's archive only ships a transitional
+  # "firefox" package that installs the snap on first run, and the snap is
+  # never fetched in an offline/first-boot image, so the browser would be
+  # missing. Take Firefox from Mozilla's official APT repository and pin it
+  # for the firefox package only.
+  #
+  # Not the Mozilla Team PPA: its InRelease is signed with an rsa1024 key
+  # that Ubuntu 26.04's apt rejects, so the PPA left on the image makes every
+  # later `apt-get update` fail (which stopped the OEP Installer at its first
+  # apt step on first boot). Mozilla's key is RSA 2048, which 26.04 accepts.
+  - codename: "mozilla"
+    url: "https://packages.mozilla.org/apt"
+    pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
+
   # EdgePack base/add-on packages, public signed repository.
   - codename: "resolute"
     url: "https://apt.repos.intel.com/edgepack"

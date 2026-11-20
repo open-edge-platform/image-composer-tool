@@ -100,6 +100,39 @@ func TestParseProvisioningSections(t *testing.T) {
 	}
 }
 
+// The ISO build writes the template to template-dump.yaml and the live installer
+// loads it again to generate the target's units, so a script's failure handling
+// must survive that round trip.
+func TestStopOnFailureSurvivesTemplateDump(t *testing.T) {
+	t.Parallel()
+	yamlText := strings.Replace(provisioningTemplateYAML, "        rebootAfter: true\n",
+		"        stopOnFailure: true\n        recoveryHint: \"as edge run ~/.local/bin/openedge-cli resume\"\n", 1)
+	if yamlText == provisioningTemplateYAML {
+		t.Fatal("test input not found in the template")
+	}
+	tmpl, err := parseYAMLTemplate([]byte(yamlText), false)
+	if err != nil {
+		t.Fatalf("parseYAMLTemplate: %v", err)
+	}
+	dump, err := yaml.Marshal(tmpl.SystemConfig.Provisioning)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var again ProvisioningConfig
+	if err := yaml.Unmarshal(dump, &again); err != nil {
+		t.Fatalf("the dump does not load again: %v", err)
+	}
+	var got ProvisioningScript
+	for _, sc := range again.Scripts {
+		if sc.Name == "second" {
+			got = sc
+		}
+	}
+	if !got.StopOnFailure || got.RecoveryHint != "as edge run ~/.local/bin/openedge-cli resume" {
+		t.Errorf("failure handling lost in the template dump: %+v", got)
+	}
+}
+
 func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, find, replace string }{
@@ -236,6 +269,7 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"arg with $", func(s *ProvisioningScript) { s.Args = []string{"$HOME"} }, false, true},
 		{"arg with ;", func(s *ProvisioningScript) { s.Args = []string{"a;b"} }, false, true},
 		{"env name with a dash", func(s *ProvisioningScript) { s.Env = map[string]string{"A-B": "x"} }, false, true},
+		{"env name reserved by systemd", func(s *ProvisioningScript) { s.Env = map[string]string{"SERVICE_RESULT": "success"} }, false, true},
 		{"env name starting with a digit", func(s *ProvisioningScript) { s.Env = map[string]string{"1A": "x"} }, false, true},
 		{"env value with a quote", func(s *ProvisioningScript) { s.Env = map[string]string{"A": `x"y`} }, false, true},
 		{"negative timeoutSec", func(s *ProvisioningScript) { s.TimeoutSec = -1 }, false, true},
@@ -243,6 +277,27 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"rebootAfter on an every-boot script", func(s *ProvisioningScript) {
 			s.Stage = ProvisioningStageEveryBoot
 			s.RebootAfter = true
+		}, false, true},
+		{"stopOnFailure with a hint", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = "as edge run ~/.local/bin/openedge-cli resume"
+		}, false, false},
+		{"stopOnFailure on an every-boot script", func(s *ProvisioningScript) {
+			s.Stage = ProvisioningStageEveryBoot
+			s.StopOnFailure = true
+		}, false, true},
+		{"hint without stopOnFailure", func(s *ProvisioningScript) { s.RecoveryHint = "fix it" }, false, true},
+		{"hint with a backslash", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = `fix \n it`
+		}, false, true},
+		{"hint with a newline", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = "fix\nit"
+		}, false, true},
+		{"hint too long", func(s *ProvisioningScript) {
+			s.StopOnFailure = true
+			s.RecoveryHint = strings.Repeat("x", 201)
 		}, false, true},
 		{"env value too long", func(s *ProvisioningScript) { s.Env = map[string]string{"A": strings.Repeat("x", 257)} }, false, true},
 	}
@@ -346,6 +401,30 @@ func TestValidateProvisioningScriptsNestedFinal(t *testing.T) {
 	}
 }
 
+func TestStopOnFailureRejectedOnInitrdImages(t *testing.T) {
+	t.Parallel()
+	mk := func(imageType string, stop bool) *ImageTemplate {
+		return &ImageTemplate{
+			Target: TargetInfo{ImageType: imageType},
+			SystemConfig: SystemConfig{Provisioning: ProvisioningConfig{Scripts: []ProvisioningScript{
+				{Name: "s", Local: "s.sh", Final: "/usr/local/sbin/s.sh", StopOnFailure: stop},
+			}}},
+		}
+	}
+	if err := mk(ImageTypeInitrd, true).validateMergedProvisioning(); err == nil ||
+		!strings.Contains(err.Error(), "stopOnFailure") {
+		t.Errorf("stopOnFailure on an img image: err = %v, want a rejection", err)
+	}
+	for _, tt := range []struct {
+		imageType string
+		stop      bool
+	}{{ImageTypeInitrd, false}, {"raw", true}, {"iso", true}} {
+		if err := mk(tt.imageType, tt.stop).validateMergedProvisioning(); err != nil {
+			t.Errorf("imageType %q stopOnFailure=%v: unexpected error %v", tt.imageType, tt.stop, err)
+		}
+	}
+}
+
 func TestValidateProvisioningScriptsReservedFinal(t *testing.T) {
 	t.Parallel()
 	for _, final := range []string{
@@ -365,6 +444,16 @@ func TestValidateProvisioningScriptsReservedFinal(t *testing.T) {
 		CloudInitMetaDataScript,
 		"/etc/systemd/system/" + CloudInitMetaDataUnit,
 		"/etc/systemd/system/multi-user.target.wants/" + CloudInitMetaDataUnit,
+		// The report script, the failure markers and the failure notices.
+		ProvisioningReportScript,
+		ProvisioningFailedDir + "/x",
+		"/etc/motd.d/ict-provision-a",
+		"/etc/issue.d/ict-provision-a.issue",
+		// The notice directories themselves, which would stop the notices being written.
+		"/etc/motd.d",
+		"/etc/issue.d",
+		// The state directory that holds the stamps and failure markers.
+		"/var/lib/image-composer-tool",
 	} {
 		err := validateProvisioningScripts([]ProvisioningScript{{Name: "x", Local: "x.sh", Final: final}})
 		if err == nil || !strings.Contains(err.Error(), "generated by image-composer-tool") {
@@ -686,6 +775,128 @@ func TestApplyCompositionOverrides(t *testing.T) {
 	}
 }
 
+func TestApplyCompositionOverridesAdditionalFileReplacement(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newSrc := writeProvisioningTestFile(t, filepath.Join(dir, "vendor-2.tar.gz"), "new")
+
+	newTmpl := func() *ImageTemplate {
+		return &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+			{Local: "/default/vendor.tar.gz", Final: "/opt/vendor/vendor.tar.gz"},
+			{Local: "files/a.conf", Final: "/etc/a.conf"},
+		}}}
+	}
+
+	tmpl := newTmpl()
+	if err := tmpl.ApplyCompositionOverrides(CompositionOverrides{
+		AdditionalFileReplacements: []AdditionalFileReplacement{{Final: "/opt/vendor/vendor.tar.gz", Local: newSrc}},
+	}); err != nil {
+		t.Fatalf("ApplyCompositionOverrides: %v", err)
+	}
+	got := tmpl.SystemConfig.AdditionalFiles
+	if got[0].Local != newSrc || got[0].Final != "/opt/vendor/vendor.tar.gz" {
+		t.Errorf("matching entry must use the new source and keep its destination: %+v", got[0])
+	}
+	if got[1].Local != "files/a.conf" {
+		t.Errorf("other entries must be left alone: %+v", got[1])
+	}
+
+	errCases := map[string][]AdditionalFileReplacement{
+		"unknown final path": {{Final: "/opt/nope", Local: newSrc}},
+		"missing file":       {{Final: "/etc/a.conf", Local: filepath.Join(dir, "missing")}},
+		"directory":          {{Final: "/etc/a.conf", Local: dir}},
+	}
+	for name, o := range errCases {
+		o := o
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := newTmpl().ApplyCompositionOverrides(CompositionOverrides{AdditionalFileReplacements: o}); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+}
+
+func TestAdditionalFileReplacementUserDataHeader(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	plain := writeProvisioningTestFile(t, filepath.Join(dir, "plain.txt"), "no header\n")
+	good := writeProvisioningTestFile(t, filepath.Join(dir, "good.yaml"), "#cloud-config\npackages: [vim]\n")
+	headerless := writeProvisioningTestFile(t, filepath.Join(dir, "user-data"), "packages: [vim]\n")
+	enabled, disabled := true, false
+
+	newTmpl := func(on *bool, final string) *ImageTemplate {
+		return &ImageTemplate{SystemConfig: SystemConfig{
+			CloudInit:       CloudInitConfig{Enabled: on},
+			AdditionalFiles: []AdditionalFileInfo{{Local: "/gen/user-data", Final: final}},
+		}}
+	}
+	apply := func(tmpl *ImageTemplate, final, local string) error {
+		return tmpl.ApplyCompositionOverrides(CompositionOverrides{
+			AdditionalFileReplacements: []AdditionalFileReplacement{{Final: final, Local: local}}})
+	}
+	seed := CloudInitSeedDir + "/user-data"
+
+	if err := apply(newTmpl(&enabled, seed), seed, plain); err == nil {
+		t.Error("user-data without a cloud-init header must be rejected")
+	}
+	if err := apply(newTmpl(&enabled, seed), seed, good); err != nil {
+		t.Errorf("user-data with a #cloud-config header must be accepted: %v", err)
+	}
+	if err := apply(newTmpl(&enabled, CloudInitSeedDir), CloudInitSeedDir, headerless); err == nil {
+		t.Error("a file named user-data replacing the seed directory entry must get the header check too")
+	}
+	if err := apply(newTmpl(&disabled, seed), seed, plain); err != nil {
+		t.Errorf("cloud-init is off, so the header rule does not apply: %v", err)
+	}
+}
+
+func TestGeneratedFileMayNotOverwriteCommandLineReplacement(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := writeProvisioningTestFile(t, filepath.Join(dir, "sources.list"), "deb http://x y z\n")
+	tmpl := &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+		{Local: "/gen/sources.list", Final: aptSourcesListFinal},
+		{Local: "/gen/other", Final: "/etc/other"},
+	}}}
+	if err := tmpl.ApplyCompositionOverrides(CompositionOverrides{
+		AdditionalFileReplacements: []AdditionalFileReplacement{{Final: aptSourcesListFinal, Local: src}}}); err != nil {
+		t.Fatalf("ApplyCompositionOverrides: %v", err)
+	}
+	if err := tmpl.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen", Final: aptSourcesListFinal}); err == nil {
+		t.Error("generating a file the command line replaced must fail, not drop the replacement")
+	}
+	if got := tmpl.SystemConfig.AdditionalFiles[0].Local; got != src {
+		t.Errorf("the replacement must be kept, got %q", got)
+	}
+	// An alias of the generated path, or a directory entry that receives a
+	// replacement named like the generated file, is the same destination.
+	aliased := &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+		{Local: "/gen/a", Final: "/etc/apt/sources.list.d/./package-repositories.list"}}}}
+	if err := aliased.ApplyCompositionOverrides(CompositionOverrides{AdditionalFileReplacements: []AdditionalFileReplacement{
+		{Final: "/etc/apt/sources.list.d/./package-repositories.list", Local: src}}}); err != nil {
+		t.Fatalf("alias replacement: %v", err)
+	}
+	if err := aliased.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen", Final: aptSourcesListFinal}); err == nil {
+		t.Error("an aliased destination is the generated file and must fail")
+	}
+	namedLike := writeProvisioningTestFile(t, filepath.Join(dir, "package-repositories.list"), "deb http://x y z\n")
+	dirEntry := &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+		{Local: "/gen/b", Final: "/etc/apt/sources.list.d"}}}}
+	if err := dirEntry.ApplyCompositionOverrides(CompositionOverrides{AdditionalFileReplacements: []AdditionalFileReplacement{
+		{Final: "/etc/apt/sources.list.d", Local: namedLike}}}); err != nil {
+		t.Fatalf("directory replacement: %v", err)
+	}
+	if err := dirEntry.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen", Final: aptSourcesListFinal}); err == nil {
+		t.Error("a directory destination receiving a file with the generated name must fail")
+	}
+	// Generation of a file nobody replaced, and replacing a template entry no
+	// generation touches, are unaffected.
+	if err := tmpl.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen2", Final: "/etc/apt/preferences.d/x"}); err != nil {
+		t.Errorf("unrelated generated file: %v", err)
+	}
+}
+
 func TestApplyCompositionOverridesDiskStrategyClearsPath(t *testing.T) {
 	t.Parallel()
 	tmpl := &ImageTemplate{Disk: DiskConfig{Path: "/dev/sda"}}
@@ -719,10 +930,21 @@ func TestValidateOverlaySystemConfigRejectsProvisioningSections(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected overlay validation to reject provisioning sections")
 	}
-	for _, section := range []string{"proxy", "provisioning", "cloudInit", "aptPolicy"} {
+	for _, section := range []string{"provisioning", "cloudInit", "aptPolicy"} {
 		if !strings.Contains(err.Error(), "systemConfig."+section) {
 			t.Errorf("error does not name systemConfig.%s: %v", section, err)
 		}
+	}
+}
+
+func TestValidateOverlaySystemConfigAllowsProxy(t *testing.T) {
+	t.Parallel()
+	tmpl := &ImageTemplate{SystemConfig: SystemConfig{
+		Proxy: ProxyConfig{HTTPProxy: "http://proxy.example.com:3128", NoProxy: "localhost"},
+	}}
+
+	if err := tmpl.validateOverlaySystemConfig(); err != nil {
+		t.Fatalf("overlay proxy configuration must be supported: %v", err)
 	}
 }
 
@@ -1036,6 +1258,32 @@ func TestValidateAdditionalFilesNotGenerated(t *testing.T) {
 			AdditionalFileInfo{Local: "/x/f", Final: ProvisioningStampDir + "/s"}, true},
 		{"provisioning unit name", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
 			AdditionalFileInfo{Local: "/x/f", Final: "/etc/systemd/system/ict-provision-000-s.service"}, true},
+		{"report script", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: ProvisioningReportScript}, true},
+		{"failure notice in the message of the day", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d/ict-provision-s"}, true},
+		{"failure notice at the login prompt", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: "/etc/issue.d/ict-provision-s.issue"}, true},
+		{"state directory as a file", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/f", Final: "/var/lib/image-composer-tool"}, true},
+		{"file named like the state directory copied into /var/lib", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/image-composer-tool", Final: "/var/lib/"}, true},
+		{"unrelated file in /var/lib", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/other", Final: "/var/lib/other"}, false},
+		{"notice directory as a file", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d"}, true},
+		{"notice directory as a file with only an oepInstaller section",
+			SystemConfig{OEPInstaller: OEPInstallerConfig{User: "edge"}},
+			AdditionalFileInfo{Local: "/x/f", Final: "/etc/issue.d"}, true},
+		// The copier drops the trailing slash, so with the directory absent this
+		// would create a regular file too.
+		{"notice directory with a trailing slash", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/10-site", Final: "/etc/motd.d/"}, true},
+		{"file named like a notice directory copied into /etc", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/issue.d", Final: "/etc/"}, true},
+		{"file inside the notice directory", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}}, AdditionalFileInfo{Local: "/x/10-site", Final: "/etc/motd.d/10-site"}, false},
+		{"notice directory as a file, no provisioning", SystemConfig{},
+			AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d"}, false},
+		{"other file in the message-of-the-day directory", SystemConfig{Provisioning: ProvisioningConfig{Scripts: scripts}},
+			AdditionalFileInfo{Local: "/x/f", Final: "/etc/motd.d/10-site"}, false},
+		// The OEP Installer's script is added after additionalFiles are validated.
+		{"report script with only an oepInstaller section",
+			SystemConfig{OEPInstaller: OEPInstallerConfig{User: "edge"}},
+			AdditionalFileInfo{Local: "/x/f", Final: ProvisioningReportScript}, true},
 		{"key-only sudoers", SystemConfig{Users: keyOnlyAdmin},
 			AdditionalFileInfo{Local: "/x/f", Final: KeyOnlySudoersFile}, true},
 		{"sudoers with a password set", SystemConfig{Users: []UserConfig{{Name: "a", Sudo: true, Password: "x",

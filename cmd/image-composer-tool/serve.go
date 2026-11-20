@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
@@ -104,6 +105,17 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Builds run as separate processes (under sudo with --sudo), so pass them
+	// the configuration file this server loaded, as an absolute path.
+	configPath := actualConfigFile
+	if configPath != "" {
+		abs, err := filepath.Abs(configPath)
+		if err != nil {
+			return fmt.Errorf("resolving configuration file %s: %w", configPath, err)
+		}
+		configPath = abs
+	}
+
 	srv, err := api.New(api.Config{
 		// net.JoinHostPort brackets IPv6 hosts correctly (e.g. [::1]:8080).
 		Addr:         net.JoinHostPort(serveHost, servePort),
@@ -112,6 +124,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		WorkDir:      serveWorkDir,
 		Sudo:         serveSudo,
 		ManifestPath: serveManifest,
+		ConfigPath:   configPath,
 
 		PackageReposPath: servePackageRepos,
 		EdgePackPath:     serveEdgePack,

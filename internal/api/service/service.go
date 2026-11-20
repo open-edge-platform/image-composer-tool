@@ -39,6 +39,11 @@ type Config struct {
 	WorkDir      string // base directory for per-build work/output directories
 	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
 	ManifestPath string // optional manifest file; empty uses the embedded copy
+	// ConfigPath is the global configuration file the server loaded, passed to
+	// every build with --config so builds use the same settings (such as
+	// oep_installer.token_file) instead of discovering a file of their own,
+	// which under sudo would search root's home directory. Empty passes none.
+	ConfigPath string
 	// PackageReposPath is an optional repository-catalog file; empty uses the
 	// embedded copy.
 	PackageReposPath string
@@ -57,6 +62,10 @@ type Service struct {
 	// repos is the Advanced tab's repository catalog, loaded once at
 	// construction. Read-only after New, so it needs no lock.
 	repos []PackageRepo
+	// templateOnly holds the repositories templates declare that repos doesn't
+	// carry, keyed by id, registered by templateOnlyRepos as composes meet them.
+	templateOnlyMu sync.RWMutex
+	templateOnly   map[string]PackageRepo
 	// edgePack is the Advanced tab's capability catalog, grouping a subset of
 	// `repos`' packages by domain. Loaded once at construction alongside repos
 	// and read-only after New, for the same reason.
@@ -213,6 +222,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
 	}
+	removeStaleOEPTokens(cfg.WorkDir)
 	svc := &Service{
 		cfg:           cfg,
 		manifest:      m,

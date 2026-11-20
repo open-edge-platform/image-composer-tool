@@ -7,6 +7,7 @@ command reference, see the
 ## Table of Contents
 
   - [Binary Location](#binary-location)
+  - [Debian Package CI](#debian-package-ci)
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
@@ -30,6 +31,55 @@ command reference, see the
   - [Related Documentation](#related-documentation)
 
 ---
+
+## Debian Package CI
+
+The [Debian Package workflow](../../../.github/workflows/ci-debian.yml) runs
+on `ict-*` tag pushes, manual dispatch, and pull requests targeting `main`.
+It reuses the existing pre-merge security, Go lint, and unit-test/coverage
+workflows before building natively with Go and `dpkg-deb`. Docker and Earthly
+are not required for package creation. Coverage ratcheting is disabled
+for package runs; existing standalone test workflows retain their behavior.
+Fuzz and OS-image workflows remain separate.
+
+The `ict` amd64 package includes the ICT CLI, live-installer, OS configurations
+under `/etc/image-composer-tool`, and upstream example templates. Configuration
+files are conffiles: removal retains local edits and purge deletes them.
+CI verifies installation, CLI version, configuration, removal, and purge in
+Ubuntu 24.04 and Debian 12 containers. It does not compose an OS image.
+
+Scans include the shared workflow's Gitleaks, Trivy, Zizmor and Bandit checks,
+plus govulncheck and CodeQL's extended Go security queries. CodeQL analysis
+and report generation must succeed before packaging; its SARIF report is
+published as an artifact. The repository's existing default CodeQL setup
+continues to populate GitHub code scanning. Existing scan/coverage reports and the package/SBOM artifact
+are linked individually in the Publish summary. GitHub Actions downloads are
+ZIP archives; no external publishing is configured.
+
+Tags such as `ict-2026.3` produce version `2026.3`; `ict-2026.3-rc1` produces
+`2026.3~rc1` and a GitHub prerelease. The workflow must exist at the tagged
+commit. After all gates pass, a tag run uploads the `.deb`, SPDX SBOM and
+checksums to GitHub Releases. Release notes include package metadata, the
+source commit, an installation command, validation details, and a workflow
+report link. Release filenames replace `~` with `.`, while
+the version inside the package retains `~`. Reruns replace assets on the same
+release, refresh its notes, and do not mark it as latest. PR and branch-based manual runs publish
+Actions artifacts only. Manual dispatch requires the workflow on the default
+branch.
+
+To build locally with Go 1.26.1 or newer and `dpkg-deb`:
+
+```bash
+bash scripts/build-deb.sh --version 2026.3
+sudo apt install ./dist/ict_2026.3_amd64.deb
+```
+
+Without `--version`, the script creates a snapshot version. Use `--output`
+to select an output directory. It produces one amd64 `.deb`, `SHA256SUMS`,
+and `image-composer-tool.version`. Both binaries are built directly from Go
+sources; no UI container or OS image is built. Clean-container install tests
+in CI still use Docker, and the reused coverage workflow still uses Earthly.
+The existing Earthfile targets are unchanged.
 
 ## Binary Location
 
@@ -102,7 +152,9 @@ sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`. Composition overrides: `--disk-strategy`,
 `--hostname`, `--http-proxy`, `--https-proxy`, `--ftp-proxy`,
-`--no-proxy`, `--ssh-authorized-key`.
+`--no-proxy`, `--ssh-authorized-key`. For `systemConfig.oepInstaller` files in a
+private repository, `--oep-installer-token-file FILE` reads the GitHub token
+for that build from `FILE`.
 See the full
 [build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
 for descriptions and additional flags like `--system-packages-only`.
@@ -393,6 +445,26 @@ scripts/install-sudoers.sh
 ./image-composer-tool serve --sudo
 ```
 
+Templates with a `systemConfig.oepInstaller` section whose files are in a
+private GitHub repository need a token at build time. `sudo` does not pass
+`ICT_OEP_INSTALLER_TOKEN` to the builds, so put the token in a file only root
+can read and name it in the configuration file the server runs with:
+
+```bash
+sudo install -d -m 0755 /etc/image-composer-tool
+gh config get -h github.com oauth_token | sudo install -m 0600 /dev/stdin /etc/image-composer-tool/oep-installer-token
+```
+
+```yaml
+# image-composer-tool.yml
+oep_installer:
+  token_file: "/etc/image-composer-tool/oep-installer-token"
+```
+
+Without a server token, each user can instead enter their own token in the
+**Users and credentials** dialog when they compose such a template; it is used
+for that build only.
+
 The server binds to localhost by default and has no authentication of its own.
 Because the API can start privileged builds, exposing it with
 `--host 0.0.0.0` should be a deliberate decision, not a convenience.
@@ -467,6 +539,12 @@ What `docker-compose.yml` sets up:
 - **Your proxy.** If your shell sets `http_proxy`, `https_proxy`, or
   `no_proxy` (or their uppercase forms), Compose passes them to the container
   image build and to the server, which passes them on to every build.
+- **A GitHub token, if you need one.** For templates that download the OEP
+  Installer from a private repository, `docker-compose.yml` has a commented
+  Compose secret: put the token in `./oep-installer-token` (ignored by git),
+  and uncomment the secret lines. The server reads it from
+  `/run/secrets/oep_installer_token` through `ICT_OEP_INSTALLER_TOKEN_FILE`,
+  so it does not appear in `docker inspect`.
 
 The container also has the `image-composer-tool` CLI. Its working directory,
 `/opt/ict`, is laid out like a checkout of this repository, so paths such as
@@ -490,10 +568,10 @@ ICT may run is present in the image.
 
 ```bash
 # Auto-detect shell and install completion
-./image-composer-tool install-completion
+./image-composer-tool completion install
 
 # Or specify a shell: bash, zsh, fish, powershell
-./image-composer-tool install-completion --shell bash
+./image-composer-tool completion install --shell bash
 ```
 
 After installing, reload your shell configuration (e.g., `source ~/.bashrc`).

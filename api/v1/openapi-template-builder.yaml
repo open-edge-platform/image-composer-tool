@@ -226,6 +226,24 @@ paths:
             "frequently used" packages instead of its full catalog. A matched
             repository with none defined then contributes nothing, rather than
             falling back to its full catalog.
+        - name: names
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 1000
+            items:
+              type: string
+          description: >
+            Look up exactly these package names instead of searching or
+            browsing: the result holds one entry per name that a matched
+            repository publishes, each with every version found, and names no
+            repository publishes are left out. This answers "which of these
+            does this repository carry, and at what versions" for a whole list
+            in one request rather than one search per name. `q`, `curated`,
+            `limit` and `offset` are ignored when `names` is set. At most 1000
+            names.
       responses:
         "200":
           description: Matching packages
@@ -1132,6 +1150,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PackageSearchResult"
+        unavailableRepos:
+          type: array
+          items:
+            type: string
+          description: >
+            Repository IDs with at least one package index that could not be
+            loaded (an unreachable mirror, say), so their packages may be
+            missing from `packages`. The search still succeeds; omitted when
+            every index loaded. A caller that must not act on a partial
+            answer, such as pinning the newest version, should check it.
 
     # ── Template composition ──
 
@@ -1172,9 +1200,9 @@ components:
             repository publishes. The pattern matches the template schema's own
             constraint on `systemConfig.packages` items.
 
-            Because the extends merge unions package lists, a pinned entry whose
-            name the matched template already lists unpinned leaves both entries
-            in the resolved template — see `pinConflicts` on the response.
+            A pinned entry for a package the matched template already lists
+            replaces the template's entry; a bare one leaves the template's
+            entry, pinned or not, to decide.
           maxItems: 256
           uniqueItems: true
           items:
@@ -1692,16 +1720,6 @@ components:
             i.e. what `yaml` would have been had nothing been overridden. Lets a
             client show the curated baseline beside the delta that modifies it,
             so the difference is attributable to the user's own choices.
-        pinConflicts:
-          type: array
-          description: |
-            Packages requested at a pinned version whose name the matched
-            template already lists unpinned. The extends merge unions package
-            lists and cannot remove the parent's entry, so both end up in the
-            resolved template and the resolver may install either. Advisory
-            only: the compose still succeeds.
-          items:
-            type: string
         basePackages:
           type: array
           description: |
@@ -1722,8 +1740,52 @@ components:
             be given a password or SSH key.
           items:
             $ref: "#/components/schemas/CredentialRequirement"
+        templateRepos:
+          type: array
+          description: |
+            Ids of the repositories the matched template itself installs
+            from: its `packageRepositories` through the whole `extends` chain
+            and the default config, before this request's overrides. Present
+            even when the request carries no overrides, so a client can show
+            these repositories as already in use rather than as optional ones.
+            A repository GET /package-repos lists has that id; one it doesn't
+            has the id of its `templateOnlyRepos` entry.
+          items:
+            type: string
+        templateOnlyRepos:
+          type: array
+          description: |
+            An entry for each of `templateRepos` that GET /package-repos
+            doesn't list, such as a vendor snapshot or a PPA only this
+            template uses. Its id (prefixed `template-`) is accepted by
+            GET /packages/search and /packages/search/stream like a catalog
+            id, so a client can browse and search it. GET /package-repos
+            never lists it.
+          items:
+            $ref: "#/components/schemas/PackageRepo"
+        oepInstaller:
+          $ref: "#/components/schemas/OEPInstallerInfo"
         summary:
           $ref: "#/components/schemas/ComposeSummary"
+
+    OEPInstallerInfo:
+      type: object
+      required: [uses, serverToken]
+      description: |
+        Whether the resolved template downloads OEP Installer files
+        (`systemConfig.oepInstaller`), and so may need a GitHub token for a
+        private repository, and whether the server already gives builds one.
+        A client can offer an `oepInstallerToken` field on the build when
+        `uses` is true.
+      properties:
+        uses:
+          type: boolean
+        serverToken:
+          type: boolean
+          description: |
+            True when a build would get a token without one entered for it,
+            from the server's `oep_installer.token_file` or, without `--sudo`,
+            its environment.
 
     ValidationResponse:
       type: object
@@ -1761,11 +1823,8 @@ components:
       type: object
       description: |
         Start a build. Carries exactly one of `compose` or `yaml` — never a diff.
-
-        Exactly one of the two properties must be present. That constraint is
-        machine-checkable via minProperties/maxProperties rather than left as
-        prose: a body with neither field, or with both, is invalid and the server
-        rejects it with 400 `NO_MATCH`.
+        A body with neither, or with both, is rejected with 400 `NO_MATCH`.
+        `oepInstallerToken` may accompany either.
 
         A build whose template leaves a privileged account with neither a
         password nor an SSH key is rejected with 400 `CREDENTIALS_REQUIRED`
@@ -1774,21 +1833,30 @@ components:
         accounts the compose response reports as unsatisfied makes the same
         build succeed.
 
-        `oneOf` would express this more idiomatically, but oapi-codegen turns a
-        `oneOf` with sibling properties into a `json.RawMessage` union type with
-        custom (un)marshalling and two empty `interface{}` branch aliases —
-        generated noise around the hot request path, and oapi-codegen does not
-        enforce the constraint at runtime either way. The property-count form
-        validates identically for a two-property schema and keeps the generated
-        struct a plain pair of optional fields.
-      minProperties: 1
-      maxProperties: 1
+        `oneOf` would express the compose/yaml choice more idiomatically, but
+        oapi-codegen turns a `oneOf` with sibling properties into a
+        `json.RawMessage` union type with custom (un)marshalling — generated noise
+        around the hot request path — and enforces neither form at runtime, so
+        the server checks it itself.
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"
         yaml:
           type: string
           description: Complete template YAML (Advanced tab). Self-contained, not a delta.
+        oepInstallerToken:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 1024
+          description: |
+            A GitHub token for this build only, used to download the template's
+            `systemConfig.oepInstaller` files from a private repository. The
+            server passes it to the build as a private file it deletes when the
+            build process exits, and ignores it for a template without
+            `oepInstaller`. It is never stored or logged, so retrying the build
+            does not reuse it. Kept out of `compose` because the compose
+            selection is stored with the build for retry.
 
     BuildAccepted:
       type: object

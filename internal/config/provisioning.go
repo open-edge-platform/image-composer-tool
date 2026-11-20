@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -85,6 +86,14 @@ type ProvisioningScript struct {
 	TimeoutSec int `yaml:"timeoutSec,omitempty"`
 	// RebootAfter reboots the system once the script has succeeded.
 	RebootAfter bool `yaml:"rebootAfter,omitempty"`
+	// StopOnFailure keeps a failed first-boot script from running again on later
+	// boots: its unit stays skipped until an administrator runs it again with
+	// ict-provision-report retry, or clears the failure with ict-provision-report
+	// done. Without it a failed first-boot script is retried at the next boot.
+	StopOnFailure bool `yaml:"stopOnFailure,omitempty"`
+	// RecoveryHint is a short sentence, shown in the failure notice, that says
+	// how to finish the script's work by hand. It needs StopOnFailure.
+	RecoveryHint string `yaml:"recoveryHint,omitempty"`
 }
 
 // ProvisioningConfig holds boot-time provisioning scripts.
@@ -180,7 +189,8 @@ func (t *ImageTemplate) SortedProvisioningScripts() []ProvisioningScript {
 
 func hasProvisioningSections(sc SystemConfig) bool {
 	return sc.Proxy.wasProvided || !sc.Proxy.IsEmpty() || len(sc.Provisioning.Scripts) > 0 ||
-		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty()
+		sc.Provisioning.BeforeLogin != nil || !sc.CloudInit.isEmpty() || !sc.AptPolicy.isEmpty() ||
+		!sc.OEPInstaller.IsEmpty()
 }
 
 // mergeProvisioningSections applies child-wins merging: a section set by the
@@ -203,6 +213,9 @@ func mergeProvisioningSections(merged *SystemConfig, defaultConfig, userConfig S
 	if !userConfig.AptPolicy.isEmpty() {
 		merged.AptPolicy = userConfig.AptPolicy
 	}
+	if !userConfig.OEPInstaller.IsEmpty() {
+		merged.OEPInstaller = userConfig.OEPInstaller
+	}
 }
 
 func mergeProvisioningScripts(inherited, own []ProvisioningScript) []ProvisioningScript {
@@ -220,6 +233,14 @@ func mergeProvisioningScripts(inherited, own []ProvisioningScript) []Provisionin
 
 // ProvisioningStampDir records completed first-boot scripts on the deployed system.
 const ProvisioningStampDir = "/var/lib/image-composer-tool/provisioned"
+
+// ProvisioningFailedDir holds one marker per provisioning script that failed.
+// A marker exists until the script succeeds or the user clears it.
+const ProvisioningFailedDir = "/var/lib/image-composer-tool/provisioning-failed"
+
+// ProvisioningReportScript records a script's outcome on the deployed system
+// and shows the failure notice at the login prompt and after login.
+const ProvisioningReportScript = "/usr/libexec/ict-provision-report"
 
 // CloudInitMetaDataScript and CloudInitMetaDataUnit are the generated first-boot
 // meta-data helper and its systemd unit (both relative to the image root).
@@ -242,7 +263,25 @@ const (
 	unattendedUpgradesPath  = "/etc/apt/apt.conf.d/52ict-unattended-upgrades"
 	provisionUnitPrefix     = "/etc/systemd/system/ict-provision-"
 	provisionUnitWantPrefix = "/etc/systemd/system/multi-user.target.wants/ict-provision-"
+	// provisionNoticePrefixes are the failure notices the report script writes at
+	// runtime, and removes when the script of that name succeeds.
+	provisionIssuePrefix = "/etc/issue.d/ict-provision-"
+	provisionMotdPrefix  = "/etc/motd.d/ict-provision-"
+	provisionIssueDir    = "/etc/issue.d"
+	provisionMotdDir     = "/etc/motd.d"
 )
+
+// ImageTypeInitrd is the imageType whose root file system lives in RAM.
+const ImageTypeInitrd = "img"
+
+// provisioningDirsNotFiles are directories the report script writes into at
+// runtime: the failure notices, and the state directory that holds the stamps
+// and failure markers. None may itself become a file, or those writes would fail;
+// other files inside the notice directories are fine.
+var provisioningDirsNotFiles = []string{provisionIssueDir, provisionMotdDir, provisioningStateDir}
+
+// provisioningStateDir is the parent of the stamp and failure-marker directories.
+const provisioningStateDir = "/var/lib/image-composer-tool"
 
 // Files the provisioning writers generate inside the image. A script's final
 // path may not land on them: the generated content would replace the script
@@ -256,17 +295,21 @@ var (
 		unattendedUpgradesPath,
 		CloudInitConfigDir + "/" + CloudInitDatasourceFile,
 		CloudInitMetaDataScript,
+		ProvisioningReportScript,
 		KeyOnlySudoersFile,
 		"/etc/systemd/system/" + CloudInitMetaDataUnit,
 		"/etc/systemd/system/multi-user.target.wants/" + CloudInitMetaDataUnit,
 	}
 	reservedProvisioningDirs = []string{
 		ProvisioningStampDir,
+		ProvisioningFailedDir,
 		CloudInitSeedDir,
 	}
 	reservedProvisioningPrefixes = []string{
 		provisionUnitPrefix,
 		provisionUnitWantPrefix,
+		provisionIssuePrefix,
+		provisionMotdPrefix,
 	}
 )
 
@@ -298,7 +341,7 @@ func IsReservedProvisioningPath(final string) bool {
 			return true
 		}
 	}
-	return false
+	return slices.Contains(provisioningDirsNotFiles, final)
 }
 
 // generatedProvisioningPaths returns the in-image paths the enabled
@@ -329,11 +372,19 @@ func (t *ImageTemplate) generatedProvisioningPaths() (paths, prefixes []string) 
 	}) {
 		paths = append(paths, KeyOnlySudoersFile)
 	}
-	if len(sc.Provisioning.Scripts) > 0 {
-		paths = append(paths, ProvisioningStampDir)
-		prefixes = append(prefixes, provisionUnitPrefix, provisionUnitWantPrefix)
+	if t.hasProvisioningUnits() {
+		paths = append(paths, ProvisioningStampDir, ProvisioningFailedDir, ProvisioningReportScript)
+		prefixes = append(prefixes, provisionUnitPrefix, provisionUnitWantPrefix,
+			provisionIssuePrefix, provisionMotdPrefix)
 	}
 	return paths, prefixes
+}
+
+// hasProvisioningUnits reports whether provisioning units will be generated.
+// The OEP Installer's first-boot script is added after additionalFiles are
+// validated, so a template that has only an oepInstaller section counts too.
+func (t *ImageTemplate) hasProvisioningUnits() bool {
+	return len(t.SystemConfig.Provisioning.Scripts) > 0 || !t.SystemConfig.OEPInstaller.IsEmpty()
 }
 
 // validateAdditionalFilesNotGenerated rejects an additionalFiles entry whose
@@ -346,6 +397,14 @@ func (t *ImageTemplate) validateAdditionalFilesNotGenerated() error {
 	for _, f := range t.SystemConfig.AdditionalFiles {
 		clean := filepath.Clean("/" + f.Final)
 		for _, dest := range []string{clean, clean + "/" + filepath.Base(f.Local)} {
+			// The copier drops a trailing slash, so when the notice directory is not
+			// in the image yet, a copy to it (or of a file named like it into its
+			// parent) creates a regular file, and the notices could not be written.
+			if t.hasProvisioningUnits() && slices.Contains(provisioningDirsNotFiles, dest) {
+				return fmt.Errorf("systemConfig.additionalFiles %q installs to %q, a directory image-composer-tool "+
+					"writes provisioning state or failure notices into; choose a file path inside it instead",
+					f.Local, dest)
+			}
 			for _, p := range paths {
 				if dest == p || strings.HasPrefix(dest, p+"/") {
 					return fmt.Errorf("systemConfig.additionalFiles %q installs to %q, which image-composer-tool "+
@@ -374,6 +433,14 @@ var provisioningScriptNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,
 
 // provisioningEnvNameRe is a portable environment variable name.
 var provisioningEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// provisioningReservedEnv are set by systemd for the failure hook; a script's
+// Environment= would override them and change how a failure is classified.
+var provisioningReservedEnv = []string{"SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS"}
+
+// provisioningHintRe limits a recovery hint to text that is safe in the failure
+// notice: agetty interprets backslashes in /etc/issue.d files.
+var provisioningHintRe = regexp.MustCompile(`^[ -\[\]-~]{1,200}$`)
 
 // provisioningValueRe keeps an argument or environment value safe to place in
 // a systemd unit: no whitespace, quotes, backslashes, $ (expanded by systemd)
@@ -406,6 +473,22 @@ func (t *ImageTemplate) validateProvisioning() error {
 	default:
 		return fmt.Errorf("invalid systemConfig.bootloader.bootEntryPolicy %q: must be %q or %q",
 			sc.Bootloader.BootEntryPolicy, BootEntryPolicyPreserve, BootEntryPolicyExclusive)
+	}
+	return validateBootloaderTimeout(sc.Bootloader)
+}
+
+// validateBootloaderTimeout rejects a timeoutSec that cannot take effect: it is
+// written to GRUB_TIMEOUT, so it must not be negative, and systemd-boot has no
+// equivalent setting in ICT builds.
+func validateBootloaderTimeout(b Bootloader) error {
+	if b.TimeoutSec == nil {
+		return nil
+	}
+	if *b.TimeoutSec < 0 {
+		return fmt.Errorf("invalid systemConfig.bootloader.timeoutSec %d: must be 0 or greater", *b.TimeoutSec)
+	}
+	if b.Provider == "systemd-boot" {
+		return fmt.Errorf("systemConfig.bootloader.timeoutSec is only supported with the grub provider, not %q", b.Provider)
 	}
 	return nil
 }
@@ -525,6 +608,10 @@ func validateProvisioningScriptParams(s ProvisioningScript) error {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: invalid env name %q: must match %s",
 				s.Name, k, provisioningEnvNameRe.String())
 		}
+		if slices.Contains(provisioningReservedEnv, k) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s is set by systemd for the "+
+				"failure report and cannot be overridden", s.Name, k)
+		}
 		if !provisioningValueRe.MatchString(v) {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s must be at most 256 characters of "+
 				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", s.Name, k)
@@ -532,6 +619,17 @@ func validateProvisioningScriptParams(s ProvisioningScript) error {
 	}
 	if s.TimeoutSec < 0 {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: timeoutSec must be >= 0", s.Name)
+	}
+	if s.StopOnFailure && s.Stage == ProvisioningStageEveryBoot {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: stopOnFailure needs stage %q; "+
+			"an every-boot script is meant to run on every boot", s.Name, ProvisioningStageFirstBoot)
+	}
+	if s.RecoveryHint != "" && !s.StopOnFailure {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: recoveryHint needs stopOnFailure", s.Name)
+	}
+	if s.RecoveryHint != "" && !provisioningHintRe.MatchString(s.RecoveryHint) {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: recoveryHint must be 1-200 printable "+
+			"ASCII characters without a backslash", s.Name)
 	}
 	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+
@@ -654,6 +752,16 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 	if err := checkRebootAfterIsLast(t.SortedProvisioningScripts()); err != nil {
 		return err
 	}
+	if err := t.validateOEPInstaller(); err != nil {
+		return err
+	}
+	// An img image is a RAM root file system: /var is recreated on every boot, so
+	// neither the stamps nor a failure marker would survive a reboot.
+	if t.Target.ImageType == ImageTypeInitrd &&
+		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool { return s.StopOnFailure }) {
+		return fmt.Errorf("systemConfig.provisioning.scripts: stopOnFailure needs state that survives a reboot, "+
+			"which an imageType %q image (a RAM root file system) does not keep", ImageTypeInitrd)
+	}
 	if t.SystemConfig.Provisioning.RunsBeforeLogin() &&
 		slices.ContainsFunc(t.SystemConfig.Provisioning.Scripts, func(s ProvisioningScript) bool {
 			return s.Stage == ProvisioningStageEveryBoot
@@ -767,6 +875,33 @@ func (t *ImageTemplate) lowerProvisioningInputs() error {
 		}
 	}
 	return t.lowerCloudInit()
+}
+
+// AddGeneratedProvisioningScript appends a provisioning script that a build
+// step generates after the template was merged, such as the OEP Installer's
+// first-boot script. It is validated together with the template's scripts, and
+// its file is copied into the image like theirs.
+func (t *ImageTemplate) AddGeneratedProvisioningScript(s ProvisioningScript) error {
+	scripts := append(slices.Clone(t.SystemConfig.Provisioning.Scripts), s)
+	if err := validateProvisioningScripts(scripts); err != nil {
+		return err
+	}
+	ordered := slices.Clone(scripts)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Order < ordered[j].Order })
+	if err := checkRebootAfterIsLast(ordered); err != nil {
+		return err
+	}
+	if err := t.addLoweredFile(s.Local, s.Final, "generated provisioning script "+s.Name); err != nil {
+		return err
+	}
+	t.SystemConfig.Provisioning.Scripts = scripts
+	return nil
+}
+
+// AddGeneratedFile copies the host file local (an absolute path) into the
+// image at final. final must not collide with another additional file.
+func (t *ImageTemplate) AddGeneratedFile(local, final string) error {
+	return t.addLoweredFile(local, final, "generated file "+final)
 }
 
 func (t *ImageTemplate) lowerCloudInit() error {
@@ -928,6 +1063,12 @@ type SSHKeyOverride struct {
 	User, File string
 }
 
+// AdditionalFileReplacement replaces the host file (local) of every
+// systemConfig.additionalFiles entry whose destination (final) is Final.
+type AdditionalFileReplacement struct {
+	Final, Local string
+}
+
 // ProxyOverrides are proxy settings supplied on the command line. A nil field
 // was not set and leaves the template value alone; a pointer to an empty
 // string was set explicitly and clears it.
@@ -950,10 +1091,15 @@ type CompositionOverrides struct {
 	Hostname     string
 	Proxy        ProxyOverrides
 	SSHKeys      []SSHKeyOverride
+	// AdditionalFileReplacements point additionalFiles entries at a different host
+	// file, so an input that changes per build (for example a vendor tarball)
+	// can be supplied at build time without editing the template.
+	AdditionalFileReplacements []AdditionalFileReplacement
 }
 
 func (o CompositionOverrides) isEmpty() bool {
-	return o.DiskStrategy == "" && o.Hostname == "" && o.Proxy.isEmpty() && len(o.SSHKeys) == 0
+	return o.DiskStrategy == "" && o.Hostname == "" && o.Proxy.isEmpty() && len(o.SSHKeys) == 0 &&
+		len(o.AdditionalFileReplacements) == 0
 }
 
 // ApplyCompositionOverrides applies CLI overrides to a merged template and
@@ -993,9 +1139,72 @@ func (t *ImageTemplate) ApplyCompositionOverrides(o CompositionOverrides) error 
 			return err
 		}
 	}
+	for _, f := range o.AdditionalFileReplacements {
+		if err := t.applyAdditionalFileReplacement(f); err != nil {
+			return err
+		}
+	}
 	// Overrides can enable a generated file (a proxy, or SSH keys that make a
 	// sudo user key-only) after finalizeProvisioning checked the template.
 	return t.validateAdditionalFilesNotGenerated()
+}
+
+// applyAdditionalFileReplacement points every additionalFiles entry placed
+// at o.Final at the host file o.Local. The file must exist and be a regular
+// file; a destination the template does not list is an error rather than a
+// silent no-op, so a typo cannot leave the template default in use.
+func (t *ImageTemplate) applyAdditionalFileReplacement(o AdditionalFileReplacement) error {
+	abs, err := filepath.Abs(o.Local)
+	if err != nil {
+		return fmt.Errorf("additional file replacement for %q: %w", o.Final, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("additional file replacement for %q: %w", o.Final, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("additional file replacement for %q: %s is not a regular file", o.Final, abs)
+	}
+	if err := t.checkAdditionalFileReplacementAllowed(o.Final, abs); err != nil {
+		return err
+	}
+	matched := false
+	for i := range t.SystemConfig.AdditionalFiles {
+		if t.SystemConfig.AdditionalFiles[i].Final == o.Final {
+			log.Infof("Additional file %s now comes from %s (was %s)", o.Final, abs,
+				t.SystemConfig.AdditionalFiles[i].Local)
+			t.SystemConfig.AdditionalFiles[i].Local = abs
+			t.SystemConfig.AdditionalFiles[i].replacedOnCommandLine = true
+			matched = true
+		}
+	}
+	if !matched {
+		return fmt.Errorf("additional file replacement: no systemConfig.additionalFiles entry has final path %q", o.Final)
+	}
+	return nil
+}
+
+// checkAdditionalFileReplacementAllowed holds replacements to the rules the
+// template's own files meet. The cloud-init user-data seed was validated for its
+// header when the template was lowered, so a replacement must meet the same
+// rule. A final that is a directory receives the file under its source
+// basename, so both spellings of the destination are checked. Files the tool
+// generates later (apt sources, preferences, keys) are caught where they are
+// generated, see addGeneratedAdditionalFile.
+func (t *ImageTemplate) checkAdditionalFileReplacementAllowed(final, local string) error {
+	if !t.SystemConfig.CloudInit.IsEnabled() {
+		return nil
+	}
+	clean := filepath.Clean("/" + final)
+	for _, dest := range []string{clean, clean + "/" + filepath.Base(local)} {
+		if dest == CloudInitSeedDir+"/user-data" {
+			if err := checkUserDataHeader(local); err != nil {
+				return fmt.Errorf("additional file replacement for %q: %w", final, err)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // applyDiskStrategyOverride sets the disk selection strategy. It clears any

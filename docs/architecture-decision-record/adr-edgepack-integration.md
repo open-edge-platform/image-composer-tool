@@ -196,8 +196,25 @@ workaround before relying on this flow:
   `kernelver` to hook scripts. The package hook must receive the target kernel
   explicitly, or the composer must perform equivalent configuration checks
   against `/lib/modules/<target-kernel>/build` before invoking DKMS. ICT must
-  not fake `uname`, bind the host's `/lib/modules`, or copy host-built modules
-  into the image.
+  not bind the host's `/lib/modules` or copy host-built modules into the image.
+  ICT does not otherwise fake `uname`; the single, temporary exception is
+  described below.
+
+  **Temporary exception: `uname` during package installation.** Inside the
+  composer chroot `uname -r` reports the host's kernel, so a `postinst` that
+  builds for `uname -r` fails and aborts the package transaction before ICT's
+  explicit build step is reached. Only while Debian packages are being
+  installed, ICT diverts the image's `/usr/bin/uname` with `dpkg-divert` and
+  installs a wrapper that reports the newest kernel present in the image
+  (`/boot/vmlinuz-*` or `/lib/modules/*/vmlinuz`) for `uname -r`; every other
+  `uname` call goes to the real binary. The real `uname` is restored when
+  package installation finishes, so the explicit `dkms build -k
+  <target-kernel>` steps above, and everything after them, see the real
+  `uname`. The wrapper only keeps package configuration from aborting. It is
+  not evidence that any module was built for the right kernel, so the
+  target-kernel resolution, `vermagic` and `modinfo` checks above remain
+  mandatory. Remove the exception once the packages accept an explicit target
+  kernel.
 
 The preferred long-term package contract is that DKMS package configuration
 succeeds without requiring the running kernel to be the target kernel, explicit
@@ -236,7 +253,9 @@ This creates two intentionally different build points:
 - **Exact compatibility tuple**: Treat Ubuntu release, kernel ABI/flavor,
   architecture, EdgePack version, and repository snapshot as one validated unit.
 - **Build for the image, not the host**: Never infer the target kernel from
-  `uname -r` during composition.
+  `uname -r` during composition. The temporary package-install `uname` wrapper
+  described above only keeps package configuration from failing; explicit
+  builds always name the target kernel.
 - **Deterministic initial boot**: Publish images only after all required modules
   are built, signed, installed, and inspected.
 - **APT ownership**: Install EdgePack through Debian packages so upgrades,

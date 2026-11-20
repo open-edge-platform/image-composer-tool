@@ -12,12 +12,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+// aptSourcesListFinal is where the apt sources file generated from
+// packageRepositories is installed in the image.
+const aptSourcesListFinal = "/etc/apt/sources.list.d/package-repositories.list"
 
 // GenerateAptSourcesFromRepositories creates an apt sources file from packageRepositories
 // and adds it to the image's additionalFiles configuration
@@ -44,30 +49,21 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 
 	// Generate apt sources content
 	sourceContent := generateAptSourcesContent(normalizedRepos)
-	if sourceContent == "" {
+	hasOwnFiles := slices.ContainsFunc(normalizedRepos, PackageRepository.hasOwnFiles)
+	if sourceContent == "" && !hasOwnFiles {
 		log.Debug("No valid repositories to generate apt sources")
 		return nil
 	}
 
-	// Create temporary apt sources file
-	tempFile, err := createTempAptSourcesFile(sourceContent)
-	if err != nil {
-		return fmt.Errorf("failed to create temporary apt sources file: %w", err)
+	if sourceContent != "" {
+		if err := t.addAptSourcesFile(sourceContent); err != nil {
+			return err
+		}
 	}
 
-	// Add to additionalFiles so it gets copied to the image
-	aptSourcesFile := AdditionalFileInfo{
-		Local: tempFile,
-		Final: "/etc/apt/sources.list.d/package-repositories.list",
-	}
-
-	// Add to existing additionalFiles (avoiding duplicates by final path)
-	if err := t.addGeneratedAdditionalFile(aptSourcesFile); err != nil {
+	if err := t.addOwnSourcesListFiles(normalizedRepos); err != nil {
 		return err
 	}
-
-	log.Infof("Added apt sources file to additionalFiles: %s -> %s",
-		aptSourcesFile.Local, aptSourcesFile.Final)
 
 	// Download and add GPG keys to the image
 	if err := t.downloadAndAddGPGKeys(normalizedRepos); err != nil {
@@ -79,6 +75,43 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 		return fmt.Errorf("failed to generate apt preferences from repositories: %w", err)
 	}
 
+	return nil
+}
+
+// addAptSourcesFile adds the shared sources list of the template's
+// repositories to additionalFiles.
+func (t *ImageTemplate) addAptSourcesFile(content string) error {
+	tempFile, err := createTempAptSourcesFile(content)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary apt sources file: %w", err)
+	}
+	aptSourcesFile := AdditionalFileInfo{
+		Local: tempFile,
+		Final: aptSourcesListFinal,
+	}
+	if err := t.addGeneratedAdditionalFile(aptSourcesFile); err != nil {
+		return err
+	}
+	logger.Logger().Infof("Added apt sources file to additionalFiles: %s -> %s",
+		aptSourcesFile.Local, aptSourcesFile.Final)
+	return nil
+}
+
+// addOwnSourcesListFiles adds the sources list of each repository that names
+// its own list file.
+func (t *ImageTemplate) addOwnSourcesListFiles(repos []PackageRepository) error {
+	for _, repo := range repos {
+		if !repo.hasOwnFiles() {
+			continue
+		}
+		tempFile, err := createTempAptSourcesFile(strings.Join(repo.SourceLines, "\n") + "\n")
+		if err != nil {
+			return fmt.Errorf("failed to create sources list for %s: %w", getRepositoryName(repo), err)
+		}
+		if err := t.addGeneratedAdditionalFile(AdditionalFileInfo{Local: tempFile, Final: repo.ListFile}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -130,8 +163,8 @@ func generateAptSourcesContent(repos []PackageRepository) string {
 	var sources []string
 
 	for _, repo := range repos {
-		// Skip if essential fields are missing
-		if repo.URL == "" || repo.Codename == "" {
+		// Skip if essential fields are missing, or the repository has its own list file
+		if repo.URL == "" || repo.Codename == "" || repo.hasOwnFiles() {
 			continue
 		}
 
@@ -301,6 +334,22 @@ func (t *ImageTemplate) addGeneratedAdditionalFile(f AdditionalFileInfo) error {
 				"generates; choose another path", s.Name, s.Final, f.Final)
 		}
 	}
+	// A replacement's destination can spell the generated path differently
+	// (an alias like /etc/apt/./x), or be a directory that receives the file
+	// under its source basename (cp semantics), so compare normalised paths and
+	// both spellings, as validateAdditionalFilesNotGenerated does.
+	generated := filepath.Clean("/" + f.Final)
+	for _, e := range t.SystemConfig.AdditionalFiles {
+		if !e.replacedOnCommandLine {
+			continue
+		}
+		dest := filepath.Clean("/" + e.Final)
+		if dest == generated || dest+"/"+filepath.Base(e.Local) == generated {
+			return fmt.Errorf("additional file %q was replaced on the command line, but image-composer-tool "+
+				"generates %q from packageRepositories and would overwrite the replacement; remove the "+
+				"replacement or change the repository settings", e.Final, f.Final)
+		}
+	}
 	t.addUniqueAdditionalFile(f)
 	return nil
 }
@@ -311,7 +360,28 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 
 	log.Infof("Generating apt preferences files for %d repositories", len(t.PackageRepositories))
 
+	// Several repositories can map to one file name (same suite and host, no
+	// IDs), and a suffixed name can equal another repository's own name or ID.
+	// Reserve every name up front, then give a repeat the first free "-N", so no
+	// file replaces another.
+	reservedNames := map[string]bool{}
 	for _, repo := range t.PackageRepositories {
+		if !repo.hasOwnFiles() && extractOriginFromURL(repo.URL) != "" {
+			reservedNames[generatePreferencesFilename(repo)] = true
+		}
+	}
+	takenNames := map[string]bool{}
+	for _, repo := range t.PackageRepositories {
+		if repo.hasOwnFiles() {
+			if !t.repoMayUpgrade(repo) {
+				return fmt.Errorf("repository %s writes its own apt files, so immutability and "+
+					"aptPolicy.upgradeAllowedRepos cannot restrict upgrades from it", getRepositoryName(repo))
+			}
+			if err := t.addOwnPreferencesFile(repo); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Extract origin from URL
 		origin := extractOriginFromURL(repo.URL)
@@ -328,6 +398,19 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 		if !t.repoMayUpgrade(repo) && (repo.Priority >= NoUpgradePinPriority || repo.Priority == 0) {
 			preferencesContent = generateNoUpgradePreferencesContent(origin)
 		}
+		// allowPackages limits the repository at build time, so limit its pin the
+		// same way. Otherwise the pin covers every package the repository
+		// publishes, and a later apt run can replace or downgrade packages from
+		// the Ubuntu archive. Only the listed packages get the repository's
+		// priority; the rest of the repository stays at apt's default. There is
+		// deliberately no "block everything else" stanza: apt pins match the host
+		// only, and an allowlisted repository often shares its host with the OS
+		// archive (a backports suite), so a host-wide block would stop ordinary
+		// updates. When the repository may not upgrade, the no-upgrade pin above
+		// stays as it is: it already keeps the whole repository from upgrading.
+		if len(repo.AllowPackages) > 0 && t.repoMayUpgrade(repo) && repo.Priority >= 0 {
+			preferencesContent = restrictPreferencesToPackages(preferencesContent, repo.AllowPackages)
+		}
 
 		// Create temporary preferences file
 		tempFile, err := createTempAptPreferencesFile(repo, preferencesContent)
@@ -337,6 +420,16 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 
 		// Determine filename for preferences
 		filename := generatePreferencesFilename(repo)
+		if takenNames[filename] {
+			base := filename
+			for n := 2; ; n++ {
+				filename = fmt.Sprintf("%s-%d", base, n)
+				if !takenNames[filename] && !reservedNames[filename] {
+					break
+				}
+			}
+		}
+		takenNames[filename] = true
 
 		// Add to additionalFiles
 		preferencesFile := AdditionalFileInfo{
@@ -353,6 +446,28 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 	}
 
 	return nil
+}
+
+// restrictPreferencesToPackages narrows a "Package: *" preferences stanza to
+// the listed packages.
+func restrictPreferencesToPackages(content string, packages []string) string {
+	return strings.Replace(content, "Package: *\n", "Package: "+strings.Join(allowPackagePinPatterns(packages), " ")+"\n", 1)
+}
+
+// allowPackagePinPatterns turns allowPackages entries into apt pin patterns
+// that match the same packages the build-time filter accepts. That filter
+// takes a literal entry as a name prefix ("curl" also allows "curl-dev"), so a
+// literal becomes "name*"; entries that are already globs are kept as given.
+func allowPackagePinPatterns(packages []string) []string {
+	patterns := make([]string, 0, len(packages))
+	for _, name := range packages {
+		if strings.ContainsAny(name, "*?[]") {
+			patterns = append(patterns, name)
+		} else {
+			patterns = append(patterns, name+"*")
+		}
+	}
+	return patterns
 }
 
 // extractOriginFromURL extracts the host (without port or credentials) that APT
@@ -462,6 +577,19 @@ func sanitizeFilename(name string) string {
 	return name
 }
 
+// addOwnPreferencesFile adds the preferences of a repository that names its
+// own files, when it has any, instead of ICT's generated pin.
+func (t *ImageTemplate) addOwnPreferencesFile(repo PackageRepository) error {
+	if repo.Preferences == "" {
+		return nil
+	}
+	tempFile, err := createTempAptPreferencesFile(repo, repo.Preferences)
+	if err != nil {
+		return fmt.Errorf("failed to create apt preferences file for %s: %w", getRepositoryName(repo), err)
+	}
+	return t.addGeneratedAdditionalFile(AdditionalFileInfo{Local: tempFile, Final: repo.PreferencesFile})
+}
+
 // createTempAptPreferencesFile creates a temporary file with the preferences content
 func createTempAptPreferencesFile(repo PackageRepository, content string) (string, error) {
 	// Ensure temp directory exists
@@ -554,6 +682,9 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 
 		// Determine the final destination path in the image
 		keyFilename := extractGPGKeyFilename(repo.PKey)
+		if repo.KeyFile != "" {
+			keyFilename = repo.KeyFile
+		}
 
 		// Add to additionalFiles
 		gpgKeyFile := AdditionalFileInfo{

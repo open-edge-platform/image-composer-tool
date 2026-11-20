@@ -6,7 +6,7 @@ import type {
   BuildStatus,
   ResidualIssue,
 } from '../api/types'
-import { artifactTypeLabel } from '../api/types'
+import { artifactKindLabel } from '../api/types'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { labelFor, useStore } from '../store'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
@@ -79,9 +79,8 @@ export function BuildView({
     setPhase(isActive ? PHASE_INITIAL : PHASE_DONE)
     setInstall({ done: 0, total: 0 })
 
-    // Fetch the configuration summary for the details panel and the template
-    // name/path for its row in the artifacts table. Best-effort: a failure here
-    // shouldn't disrupt the log stream.
+    // Fetch the configuration summary and the template name for the details
+    // panel. Best-effort: a failure here shouldn't disrupt the log stream.
     api.buildDetails(buildId).then(setDetails).catch(() => {})
 
     // A history build (not active) doesn't stream logs — pull its final status,
@@ -128,10 +127,8 @@ export function BuildView({
       setLogs((prev) => [...prev, ...batch])
     }
 
-    // Re-read the build's details on every terminal outcome. The template row
-    // is already correct from the initial fetch — the server archives the
-    // merged template before StartBuild even returns — but this refresh is
-    // still what makes the log-file link appear once the build concludes.
+    // Re-read the build's details on every terminal outcome: this refresh is
+    // what makes the log-file link appear once the build concludes.
     const refreshDetails = () => {
       api.buildDetails(buildId).then(setDetails).catch(() => {})
     }
@@ -246,7 +243,6 @@ export function BuildView({
   }, [logs])
 
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
-  const copyPath = (path: string) => navigator.clipboard.writeText(path)
 
   // Only the tail of a long log is kept in the DOM. Keys stay absolute to the
   // full log rather than relative to the window, so appending a burst adds and
@@ -254,42 +250,6 @@ export function BuildView({
   // Copy and the log-file download still carry the whole thing.
   const hiddenLogCount = Math.max(0, logs.length - LOG_RENDER_LIMIT)
   const visibleLogs = hiddenLogCount > 0 ? logs.slice(hiddenLogCount) : logs
-
-  // Rows of the artifacts table: the build's own outputs, plus the template it
-  // ran against. The template is not something the build produced, but it is
-  // what the build is reproducible from, so it is offered beside the outputs
-  // rather than tucked into the details panel. It keeps its own download
-  // endpoint because it lives outside the work dir, which is the only tree the
-  // by-name artifact download will resolve a path in.
-  const artifactRows: {
-    key: string
-    name: string
-    type: string
-    size?: string
-    path?: string
-    href: string
-  }[] = artifacts.map((a) => ({
-    key: a.path,
-    name: a.name,
-    type: a.type,
-    size: a.size,
-    path: a.path,
-    href: `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`,
-  }))
-  if (details?.template) {
-    // The server hands the outputs over already ordered, images first and the
-    // SBOM last. The template goes in ahead of the first SBOM rather than at the
-    // end, so the SBOM stays the final row it is everywhere else; with no SBOM
-    // among the outputs the template lands last on its own.
-    const firstSbom = artifactRows.findIndex((r) => r.type === 'sbom')
-    artifactRows.splice(firstSbom === -1 ? artifactRows.length : firstSbom, 0, {
-      key: `template:${details.template}`,
-      name: details.template,
-      type: 'template',
-      path: details.templatePath,
-      href: api.templateUrl(buildId),
-    })
-  }
 
   // Request cancellation. Optimistically flip to the cancelling transient so the
   // button disables immediately; the terminal state (cancelled/failed) normally
@@ -424,14 +384,13 @@ export function BuildView({
         </div>
       )}
 
-      {/* Collapsible panel describing what was composed: the cascade selection
-          and the resolved image configuration. Collapsed by default so it
-          doesn't compete with the log for space. The template this build ran
-          against is listed in the artifacts table below instead.
-          Rendered only when there is a summary to show — a YAML-submitted build
-          has none, and an expandable that opens onto nothing is worse than no
-          expandable. */}
-      {details?.summary && (
+      {/* Collapsible panel describing what was composed: the cascade selection,
+          the resolved image configuration, and the template the build ran
+          against (downloadable). Collapsed by default so it doesn't compete with
+          the log for space. The template is not a build output, so it lives
+          here rather than in the artifacts table below. Every build has one, so
+          the panel is offered even for a YAML-submitted build with no summary. */}
+      {details && (
         <div className="mb-2 rounded-md border border-slate-200 bg-slate-50">
           <button
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-slate-100"
@@ -440,7 +399,7 @@ export function BuildView({
           >
             <span className="text-slate-400">{detailsOpen ? '▼' : '▶'}</span>
             Compose details
-            <span className="font-normal text-slate-400">— basic selection, image configuration</span>
+            <span className="font-normal text-slate-400">— template, paths</span>
           </button>
           {detailsOpen && (
             <div className="space-y-4 border-t border-slate-200 px-3 py-3 text-xs">
@@ -494,11 +453,28 @@ export function BuildView({
                 </div>
               )}
 
+              {/* Template — served by its own endpoint because it lives outside
+                  the work dir, the only tree the by-name artifact download
+                  resolves a path in. */}
+              {details.template && (
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-600">Template</span>
+                  <span className="font-mono text-slate-700">{details.template}</span>
+                  <a
+                    className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                    href={api.templateUrl(buildId)}
+                    download={details.template}
+                    title="Download template"
+                  >
+                    <DownloadIcon className="h-4 w-4" />
+                  </a>
+                </div>
+              )}
+
               {/* Advanced-tab changes: the delta this build layered onto the
                   matched template. Collapsed by default; absent when the build
                   overrode nothing. */}
-              {details.summary.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
-
+              {details.summary?.advanced && <AdvancedChangesCard changes={details.summary.advanced} defaultOpen />}
             </div>
           )}
         </div>
@@ -557,7 +533,7 @@ export function BuildView({
         </div>
       </div>
 
-      {artifactRows.length > 0 && (
+      {artifacts.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-sm font-semibold text-[#00285a]">
             {status === 'failed' || status === 'cancelled' ? 'Partial artifacts' : 'Artifacts'}
@@ -565,50 +541,47 @@ export function BuildView({
           {(status === 'failed' || status === 'cancelled') && (
             <p className="mb-2 text-xs text-slate-500">
               These outputs were left on disk when the compose stopped early — they
-              are incomplete. Their on-disk location is shown below.
+              are incomplete. Click a name to download it, or hover over it to see
+              where it is on disk.
             </p>
           )}
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="bg-[#e6f2fa] text-left">
-                <th className="px-3 py-2">Name</th>
-                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Artifact</th>
+                {/* Indented by the width of each link's download tile plus the
+                    gap after it, so the heading sits over the file names. */}
+                <th className="py-2 pr-3 pl-13">Name</th>
                 <th className="px-3 py-2">Size</th>
-                <th className="px-3 py-2">Path</th>
-                <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {artifactRows.map((a) => (
-                <tr key={a.key} className="border-b border-slate-200">
-                  <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
-                  <td className="px-3 py-2">{artifactTypeLabel(a.type)}</td>
-                  <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
+              {artifacts.map((a) => (
+                <tr key={a.path} className="border-b border-slate-200">
+                  <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-700">{artifactKindLabel(a.type)}</td>
                   <td className="px-3 py-2">
-                    {/* Click path (or hover copy icon) to copy to clipboard */}
-                    {a.path ? (
-                      <button
-                        className="group flex max-w-full items-center gap-1.5 text-left font-mono text-xs text-slate-500 hover:text-slate-800"
-                        title="Click to copy path"
-                        onClick={() => copyPath(a.path as string)}
-                      >
-                        <span className="break-all">{a.path}</span>
-                        <CopyIcon className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-100" />
-                      </button>
-                    ) : (
-                      <span className="font-mono text-xs text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right">
+                    {/* The name is the download link. The tile marks it as one at
+                        a glance, with no underline running under a long file
+                        name; hovering either part fills the tile and underlines
+                        the name. The on-disk path is in the tooltip. */}
                     <a
-                      className="inline-flex rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      title="Download artifact"
-                      href={a.href}
+                      className="group inline-flex max-w-full items-center gap-3 rounded-md font-medium text-[#0071c5] transition-colors outline-none hover:text-[#00285a] focus-visible:ring-2 focus-visible:ring-[#0071c5] focus-visible:ring-offset-2"
+                      title={a.path ? `Download ${a.name}\nOn disk: ${a.path}` : `Download ${a.name}`}
+                      href={`/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`}
                       download={a.name}
                     >
-                      <DownloadIcon className="h-4 w-4" />
+                      <span
+                        aria-hidden="true"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#e6f2fa] text-[#0071c5] transition-colors group-hover:bg-[#0071c5] group-hover:text-white group-active:bg-[#005a9e]"
+                      >
+                        <DownloadIcon className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 decoration-[#00285a]/40 underline-offset-[3px] [overflow-wrap:anywhere] group-hover:underline">
+                        {a.name}
+                      </span>
                     </a>
                   </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                 </tr>
               ))}
             </tbody>

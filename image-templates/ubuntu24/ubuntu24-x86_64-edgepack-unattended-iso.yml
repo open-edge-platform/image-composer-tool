@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "24.04.3"
+  version: "24.04.5"
 
 target:
   os: ubuntu
@@ -75,6 +75,24 @@ disk:
 # EdgePack ships from a per-suite APT repository (suite name follows the host
 # Ubuntu release; noble here).
 packageRepositories:
+  # Firefox as a real .deb. Ubuntu's archive only ships a transitional
+  # "firefox" package that installs the snap on first run, and the snap is
+  # never fetched in an offline/first-boot image, so the browser would be
+  # missing. Take Firefox from Mozilla's official APT repository and pin it
+  # for the firefox package only.
+  #
+  # Not the Mozilla Team PPA: its InRelease is signed with an rsa1024 key.
+  # Ubuntu 26.04's apt already rejects that (minimum is rsa2048) and 24.04's
+  # apt lists rsa2048 as its next minimum, so the PPA left on the image would
+  # break `apt-get update`. Mozilla's key is RSA 2048.
+  - codename: "mozilla"
+    url: "https://packages.mozilla.org/apt"
+    pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
+
   # EdgePack base/add-on packages, public signed repository.
   - codename: "noble"
     url: "https://apt.repos.intel.com/edgepack"

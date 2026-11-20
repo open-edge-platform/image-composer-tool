@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1184,6 +1185,162 @@ func TestGenerateAptPreferencesAppliesAptPolicy(t *testing.T) {
 	}
 }
 
+func TestGenerateAptPreferencesRestrictsToAllowPackages(t *testing.T) {
+	ppa := PackageRepository{ID: "ppa", Codename: "noble", URL: "https://ppa.example.com/ppa/ubuntu",
+		Priority: 1001, AllowPackages: []string{"firefox", "firefox-locale-en"}}
+	tests := []struct {
+		name        string
+		repos       []PackageRepository
+		immutable   bool
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name:  "only listed packages get the repository priority",
+			repos: []PackageRepository{ppa},
+			wantContain: []string{
+				"Package: firefox* firefox-locale-en*\nPin: origin ppa.example.com\nPin-Priority: 1001\n",
+			},
+			// No catch-all for the repository: neither the forced priority nor a block.
+			wantAbsent: []string{"Package: *", "Pin-Priority: -1"},
+		},
+		{
+			// An allowlisted suite on the same host as the OS archive (backports)
+			// must not stop ordinary updates from the rest of that host.
+			name: "allowlisted backports suite does not affect the rest of its host",
+			repos: []PackageRepository{
+				{ID: "backports", Codename: "noble-backports", URL: "http://archive.example.com/ubuntu",
+					Priority: 2000, AllowPackages: []string{"linux-firmware"}},
+				{ID: "archive", Codename: "noble", URL: "http://archive.example.com/ubuntu", Priority: 500},
+			},
+			wantContain: []string{
+				"Package: linux-firmware*\nPin: origin archive.example.com\nPin-Priority: 2000\n",
+				"Package: *\nPin: origin archive.example.com\nPin-Priority: 500\n",
+			},
+			wantAbsent: []string{"Pin-Priority: -1"},
+		},
+		{
+			name:      "immutable image keeps the whole-repository no-upgrade pin",
+			repos:     []PackageRepository{ppa},
+			immutable: true,
+			wantContain: []string{
+				"Package: *\nPin: origin ppa.example.com\nPin-Priority: 50\n",
+			},
+			wantAbsent: []string{"firefox", "Pin-Priority: -1"},
+		},
+		{
+			name: "repository without allowPackages keeps the catch-all pin",
+			repos: []PackageRepository{
+				{ID: "plain", Codename: "noble", URL: "https://plain.example.com/apt", Priority: 990}},
+			wantContain: []string{"Package: *\nPin: origin plain.example.com\nPin-Priority: 990\n"},
+			wantAbsent:  []string{"Pin-Priority: -1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{
+				PackageRepositories: tt.repos,
+				SystemConfig:        SystemConfig{Immutability: ImmutabilityConfig{Enabled: tt.immutable}},
+			}
+			if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+				t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+			}
+			var all strings.Builder
+			for _, f := range tmpl.SystemConfig.AdditionalFiles {
+				data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+				if err != nil {
+					t.Fatalf("reading %s: %v", f.Local, err)
+				}
+				all.Write(data)
+			}
+			for _, want := range tt.wantContain {
+				if !strings.Contains(all.String(), want) {
+					t.Errorf("preferences missing %q\n%s", want, all.String())
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(all.String(), absent) {
+					t.Errorf("preferences unexpectedly contain %q\n%s", absent, all.String())
+				}
+			}
+		})
+	}
+}
+
+// The build-time allowPackages filter takes a literal entry as a name prefix,
+// so the pin must cover the same names or the block would reject packages the
+// build accepted. Globs are kept as given.
+func TestAllowPackagePinPatterns(t *testing.T) {
+	got := allowPackagePinPatterns([]string{"curl", "libfoo-*", "lib?bar", "pkg[12]"})
+	want := []string{"curl*", "libfoo-*", "lib?bar", "pkg[12]"}
+	if !slices.Equal(got, want) {
+		t.Errorf("allowPackagePinPatterns = %v, want %v", got, want)
+	}
+}
+
+// Without IDs, repositories on the same host and suite map to one filename.
+// Each must keep its own pin file, or the second would replace the first and
+// the first one's packages would end up blocked.
+func TestGenerateAptPreferencesKeepsRepositoriesWithSameFilename(t *testing.T) {
+	tmpl := &ImageTemplate{PackageRepositories: []PackageRepository{
+		{Codename: "noble", URL: "https://ppa.example.com/a/ubuntu", Priority: 1001, AllowPackages: []string{"alpha"}},
+		{Codename: "noble", URL: "https://ppa.example.com/b/ubuntu", Priority: 1001, AllowPackages: []string{"beta"}},
+		{Codename: "noble", URL: "https://ppa.example.com/c/ubuntu", Priority: 1001, AllowPackages: []string{"gamma"}},
+	}}
+	if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+		t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+	}
+	if got := len(tmpl.SystemConfig.AdditionalFiles); got != 3 {
+		t.Fatalf("got %d preference files, want 3: %+v", got, tmpl.SystemConfig.AdditionalFiles)
+	}
+	finals := map[string]bool{}
+	var all strings.Builder
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		finals[f.Final] = true
+		data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Local, err)
+		}
+		all.Write(data)
+	}
+	if len(finals) != 3 {
+		t.Errorf("preference files share a destination: %v", finals)
+	}
+	for _, pkg := range []string{"alpha*", "beta*", "gamma*"} {
+		if !strings.Contains(all.String(), "Package: "+pkg+"\n") {
+			t.Errorf("no pin for %s in:\n%s", pkg, all.String())
+		}
+	}
+	// A repository's own file name is unchanged when nothing collides.
+	if !finals["/etc/apt/preferences.d/noble-ppa-example-com"] {
+		t.Errorf("first repository's file name changed: %v", finals)
+	}
+}
+
+// A suffixed name must not land on another repository's own file name or ID.
+func TestGenerateAptPreferencesSuffixAvoidsExistingNames(t *testing.T) {
+	tmpl := &ImageTemplate{PackageRepositories: []PackageRepository{
+		{Codename: "noble", URL: "https://ppa.example.com/a/ubuntu", Priority: 1001, AllowPackages: []string{"alpha"}},
+		{Codename: "noble", URL: "https://ppa.example.com/b/ubuntu", Priority: 1001, AllowPackages: []string{"beta"}},
+		{ID: "noble-ppa-example-com-2", Codename: "noble", URL: "https://ppa.example.com/c/ubuntu",
+			Priority: 1001, AllowPackages: []string{"gamma"}},
+	}}
+	if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+		t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+	}
+	finals := map[string]bool{}
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		finals[f.Final] = true
+	}
+	if len(tmpl.SystemConfig.AdditionalFiles) != 3 || len(finals) != 3 {
+		t.Fatalf("want 3 distinct preference files, got %d files, %d paths: %v",
+			len(tmpl.SystemConfig.AdditionalFiles), len(finals), finals)
+	}
+	if !finals["/etc/apt/preferences.d/noble-ppa-example-com-2"] {
+		t.Errorf("the repository with ID noble-ppa-example-com-2 lost its file name: %v", finals)
+	}
+}
+
 func TestGenerateAptSourcesAppliesAptPolicyForDebian(t *testing.T) {
 	tmpl := &ImageTemplate{
 		Target: TargetInfo{OS: "debian"},
@@ -1215,5 +1372,83 @@ func TestGenerateAptSourcesAppliesAptPolicyForDebian(t *testing.T) {
 	}
 	if !sources || !vendorPin {
 		t.Errorf("Debian must get sources (%v) and a no-upgrade pin for the unlisted repository (%v)", sources, vendorPin)
+	}
+}
+
+// TestGenerateAptSourcesOwnFilesRepository checks that a repository naming
+// its own apt files (as the OEP Installer integration sets them) is written at
+// those paths with the given content, and kept out of the shared sources list
+// and ICT's generated pins.
+func TestGenerateAptSourcesOwnFilesRepository(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "edge.gpg")
+	if err := os.WriteFile(keyPath, []byte("binary-keyring"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ownLine := "deb [signed-by=/etc/apt/keyrings/intel-edge-pack.gpg] https://edge.example.com/edgepack noble unstable"
+	template := &ImageTemplate{
+		Target: TargetInfo{OS: "ubuntu"},
+		PackageRepositories: []PackageRepository{
+			{ID: "plain", Codename: "noble", URL: "https://plain.example.com/repo", Component: "main"},
+			{
+				Codename: "noble", URL: "https://edge.example.com/edgepack", Component: "unstable", PKey: keyPath,
+				ListFile:        "/etc/apt/sources.list.d/intel-edge-pack.list",
+				SourceLines:     []string{ownLine},
+				KeyFile:         "/etc/apt/keyrings/intel-edge-pack.gpg",
+				PreferencesFile: "/etc/apt/preferences.d/intel-edge-pack.pref",
+				Preferences:     "Package: *\nPin: origin edge.example.com\nPin-Priority: 1001\n",
+			},
+		},
+	}
+	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
+		t.Fatalf("GenerateAptSourcesFromRepositories: %v", err)
+	}
+	contents := map[string]string{}
+	for _, f := range template.SystemConfig.AdditionalFiles {
+		data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Final, err)
+		}
+		contents[f.Final] = string(data)
+		t.Cleanup(func() { os.Remove(filepath.Join(TempDir(), filepath.Base(f.Local))) })
+	}
+	if got := contents["/etc/apt/sources.list.d/intel-edge-pack.list"]; got != ownLine+"\n" {
+		t.Errorf("own list file = %q", got)
+	}
+	shared := contents["/etc/apt/sources.list.d/package-repositories.list"]
+	if strings.Contains(shared, "edge.example.com") || !strings.Contains(shared, "plain.example.com") {
+		t.Errorf("shared sources list = %q", shared)
+	}
+	if got := contents["/etc/apt/keyrings/intel-edge-pack.gpg"]; got == "" {
+		t.Error("keyring not written at the repository's key file")
+	}
+	if got := contents["/etc/apt/preferences.d/intel-edge-pack.pref"]; !strings.Contains(got, "Pin-Priority: 1001") {
+		t.Errorf("own preferences file = %q", got)
+	}
+	for final, content := range contents {
+		if strings.HasPrefix(final, "/etc/apt/preferences.d/") && final != "/etc/apt/preferences.d/intel-edge-pack.pref" &&
+			strings.Contains(content, "edge.example.com") {
+			t.Errorf("ICT generated a pin for the repository with its own files: %s", final)
+		}
+	}
+}
+
+// TestGenerateAptPreferencesOwnFilesRespectsUpgradePolicy checks that a
+// repository with its own apt files, whose preferences ICT does not generate,
+// is refused when the template forbids upgrades from it.
+func TestGenerateAptPreferencesOwnFilesRespectsUpgradePolicy(t *testing.T) {
+	own := PackageRepository{
+		Codename: "noble", URL: "https://edge.example.com/edgepack", Component: "unstable",
+		ListFile: "/etc/apt/sources.list.d/intel-edge-pack.list", KeyFile: "/etc/apt/keyrings/intel-edge-pack.gpg",
+		PreferencesFile: "/etc/apt/preferences.d/intel-edge-pack.pref",
+		Preferences:     "Package: *\nPin: origin edge.example.com\nPin-Priority: 1001\n",
+	}
+	template := &ImageTemplate{
+		Target:              TargetInfo{OS: "ubuntu"},
+		PackageRepositories: []PackageRepository{own},
+		SystemConfig:        SystemConfig{Immutability: ImmutabilityConfig{Enabled: true}},
+	}
+	err := template.generateAptPreferencesFromRepositories()
+	if err == nil || !strings.Contains(err.Error(), "cannot restrict upgrades") {
+		t.Fatalf("err = %v, want a refusal to restrict upgrades from a repository with its own files", err)
 	}
 }

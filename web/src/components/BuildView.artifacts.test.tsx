@@ -1,11 +1,12 @@
 // Artifact-table tests for BuildView.
 //
-// The artifact type shown to the user must be whatever the server reported. The
-// UI previously applied an `uppercase` CSS class to a value it never questioned,
-// which hid the real bug — every artifact reaching it was already typed "image"
-// server-side — so these tests pin the contract at the UI boundary: each row
-// shows its own type, and the reloaded-history view agrees with the live
-// completion view.
+// The Artifact column must follow whatever type the server reported: "Image"
+// for an image, "Bill of Materials" for an SBOM, and any other type shown as
+// itself. The UI previously applied an `uppercase` CSS class to a value it never
+// questioned, which hid the real bug — every artifact reaching it was already
+// typed "image" server-side — so these tests pin the contract at the UI
+// boundary: each row shows its own type, and the reloaded-history view agrees
+// with the live completion view.
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Artifact } from '../api/types'
@@ -92,11 +93,11 @@ const DETAILS = {
   hasLogFile: true,
 }
 
-// typeOf returns the rendered Type cell for the row naming `artifactName`.
+// typeOf returns the rendered Artifact cell for the row naming `artifactName`.
 function typeOf(artifactName: string): string {
   const row = screen.getByText(artifactName).closest('tr')
   if (!row) throw new Error(`no row for ${artifactName}`)
-  return within(row).getAllByRole('cell')[1].textContent ?? ''
+  return within(row).getAllByRole('cell')[0].textContent ?? ''
 }
 
 // cellsOf returns every cell's text for the row naming `artifactName`.
@@ -121,7 +122,7 @@ function rowNames(): string[] {
   return screen
     .getAllByRole('row')
     .slice(1) // drop the header
-    .map((r) => within(r).getAllByRole('cell')[0]?.textContent?.trim() ?? '')
+    .map((r) => within(r).getAllByRole('cell')[1]?.textContent?.trim() ?? '')
 }
 
 // Renders the view and lets its mount-time loads settle. The component fires
@@ -158,8 +159,8 @@ describe('BuildView artifact types', () => {
     await renderBuildView(false)
 
     await screen.findByText(IMAGE_ARTIFACT.name)
-    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('IMAGE')
-    expect(typeOf(SBOM_ARTIFACT.name)).toBe('SBOM')
+    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('Image')
+    expect(typeOf(SBOM_ARTIFACT.name)).toBe('Bill of Materials')
   })
 
   it('shows each artifact with the type the server reported (live completion)', async () => {
@@ -174,8 +175,8 @@ describe('BuildView artifact types', () => {
     })
 
     await screen.findByText(IMAGE_ARTIFACT.name)
-    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('IMAGE')
-    expect(typeOf(SBOM_ARTIFACT.name)).toBe('SBOM')
+    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('Image')
+    expect(typeOf(SBOM_ARTIFACT.name)).toBe('Bill of Materials')
   })
 
   it('does not relabel an SBOM as an image when it is the only artifact', async () => {
@@ -183,8 +184,8 @@ describe('BuildView artifact types', () => {
     await renderBuildView(false)
 
     await screen.findByText(SBOM_ARTIFACT.name)
-    expect(typeOf(SBOM_ARTIFACT.name)).toBe('SBOM')
-    expect(screen.queryByText('IMAGE')).toBeNull()
+    expect(typeOf(SBOM_ARTIFACT.name)).toBe('Bill of Materials')
+    expect(screen.queryByText('Image')).toBeNull()
   })
 
   it('surfaces a type it does not recognise instead of defaulting it to IMAGE', async () => {
@@ -206,7 +207,7 @@ describe('BuildView artifact types', () => {
     await screen.findByText(future.name)
     expect(typeOf(future.name)).toBe('ATTESTATION')
     expect(typeOf(unknown.name)).toBe('UNKNOWN')
-    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('IMAGE')
+    expect(typeOf(IMAGE_ARTIFACT.name)).toBe('Image')
   })
 
   it('reports a missing type as UNKNOWN rather than IMAGE', async () => {
@@ -236,14 +237,11 @@ describe('BuildView artifact types', () => {
     const fromLive = arts.map((a) => typeOf(a.name))
 
     expect(fromLive).toEqual(fromHistory)
-    expect(fromLive).toEqual(['IMAGE', 'SBOM'])
+    expect(fromLive).toEqual(['Image', 'Bill of Materials'])
   })
 })
 
-// The template the build ran against is listed in this table rather than in the
-// Compose details panel, which used to carry it alongside the raw command. It is
-// not a build output, so it has no size and is served by its own endpoint.
-describe('BuildView template row', () => {
+describe('BuildView artifacts table layout', () => {
   beforeEach(() => {
     vi.stubGlobal('EventSource', FakeEventSource)
     FakeEventSource.last = null
@@ -252,56 +250,134 @@ describe('BuildView template row', () => {
     logFileText.mockResolvedValue('')
   })
 
-  it('lists the template with its own type, path and download link', async () => {
+  it('is headed Artifacts, with Artifact, Name and Size columns', async () => {
     await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
 
-    await screen.findByText(DETAILS.template)
-    expect(cellsOf(DETAILS.template)).toEqual([
-      'minimal.yml',
-      'TEMPLATE',
-      '—', // not a build output, so the server reports no size
-      DETAILS.templatePath,
-      '',
+    expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy()
+    expect(
+      screen.getAllByRole('columnheader').map((h) => h.textContent?.trim()),
+    ).toEqual(['Artifact', 'Name', 'Size'])
+  })
+
+  it('shows each row as kind, file name, then size', async () => {
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    expect(cellsOf(IMAGE_ARTIFACT.name)).toEqual(['Image', IMAGE_ARTIFACT.name, IMAGE_ARTIFACT.size])
+    expect(cellsOf(SBOM_ARTIFACT.name)).toEqual([
+      'Bill of Materials',
+      SBOM_ARTIFACT.name,
+      SBOM_ARTIFACT.size,
     ])
-    expect(downloadHrefOf(DETAILS.template)).toBe(DETAILS.templateUrl)
+    // The on-disk path is no longer printed in the table.
+    expect(screen.queryByText(IMAGE_ARTIFACT.path)).toBeNull()
   })
 
-  // The SBOM is the table's last row wherever it appears; the template slots in
-  // ahead of it rather than displacing it.
-  it('lists the template after the images and before the SBOM', async () => {
+  it('makes each file name its own download link', async () => {
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    for (const a of [IMAGE_ARTIFACT, SBOM_ARTIFACT]) {
+      const row = screen.getByText(a.name).closest('tr')!
+      const link = within(row).getByRole('link') as HTMLAnchorElement
+      // A screen reader announces the link by the file name alone: the
+      // download tile in front of it is decoration.
+      expect(link.textContent).toBe(a.name)
+      expect(link.querySelector('[aria-hidden="true"] svg')).not.toBeNull()
+      expect(link.getAttribute('href')).toBe(`/api/v1/builds/abc/artifacts/${encodeURIComponent(a.name)}`)
+      expect(link.getAttribute('download')).toBe(a.name)
+      // The path the Location column used to show moved to the tooltip.
+      expect(link.getAttribute('title')).toBe(`Download ${a.name}\nOn disk: ${a.path}`)
+    }
+  })
+
+  it('still links a file whose path was not recorded, without an on-disk line', async () => {
+    buildArtifacts.mockResolvedValue([{ ...IMAGE_ARTIFACT, path: '' }])
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    const link = within(screen.getByText(IMAGE_ARTIFACT.name).closest('tr')!).getByRole('link')
+    expect(link.getAttribute('title')).toBe(`Download ${IMAGE_ARTIFACT.name}`)
+  })
+
+  it('is headed Partial artifacts after a failed build, with the same columns', async () => {
+    buildDetails.mockResolvedValue({ ...DETAILS, status: 'failed', errMsg: 'boom' })
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    expect(screen.getByRole('heading', { name: 'Partial artifacts' })).toBeTruthy()
+    expect(screen.getByText(/Click a name to download it, or hover over it to see where it is on disk\./)).toBeTruthy()
+    expect(
+      screen.getAllByRole('columnheader').map((h) => h.textContent?.trim()),
+    ).toEqual(['Artifact', 'Name', 'Size'])
+  })
+})
+
+// The template the build ran against is shown in the Compose details panel, not
+// in the artifacts table: the table lists what the build produced, and the
+// template is an input. The panel's Template line keeps its own download link,
+// served by the template endpoint rather than the by-name artifact download.
+describe('BuildView template in Compose details', () => {
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    FakeEventSource.last = null
+    buildDetails.mockResolvedValue(DETAILS)
+    buildArtifacts.mockResolvedValue([IMAGE_ARTIFACT, SBOM_ARTIFACT])
+    logFileText.mockResolvedValue('')
+  })
+
+  async function openDetails() {
+    await act(async () => {
+      screen.getByRole('button', { name: /Compose details/ }).click()
+    })
+  }
+
+  it('does not list the template in the artifacts table', async () => {
     await renderBuildView(false)
 
-    await screen.findByText(DETAILS.template)
-    expect(rowNames()).toEqual([IMAGE_ARTIFACT.name, DETAILS.template, SBOM_ARTIFACT.name])
+    await screen.findByText(IMAGE_ARTIFACT.name)
+    expect(rowNames()).toEqual([IMAGE_ARTIFACT.name, SBOM_ARTIFACT.name])
+    expect(screen.queryByText('TEMPLATE')).toBeNull()
+    // Collapsed panel: the template name appears nowhere on the page yet.
+    expect(screen.queryByText(DETAILS.template)).toBeNull()
   })
 
-  it('puts the template last when the build produced no SBOM', async () => {
-    buildArtifacts.mockResolvedValue([IMAGE_ARTIFACT])
-    await renderBuildView(false)
-
-    await screen.findByText(DETAILS.template)
-    expect(rowNames()).toEqual([IMAGE_ARTIFACT.name, DETAILS.template])
-  })
-
-  // A build whose outputs were cleaned up, or one that failed before producing
-  // any, still has a template — the table must appear for it.
-  it('shows the table for a build with no artifacts of its own', async () => {
+  it('shows no artifacts table for a build with no outputs of its own', async () => {
     buildArtifacts.mockResolvedValue([])
     await renderBuildView(false)
 
-    await screen.findByText(DETAILS.template)
-    expect(rowNames()).toEqual([DETAILS.template])
-    expect(typeOf(DETAILS.template)).toBe('TEMPLATE')
+    await screen.findByRole('button', { name: /Compose details/ })
+    expect(screen.queryByRole('table')).toBeNull()
   })
 
-  // templatePath is omitempty in the contract, so an older server sends none.
-  it('renders a dash when the server reports no template path', async () => {
-    buildDetails.mockResolvedValue({ ...DETAILS, templatePath: undefined })
+  it('shows a Template line with a download link in the expanded panel', async () => {
+    buildDetails.mockResolvedValue({ ...DETAILS, summary: SUMMARY })
     await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
 
-    await screen.findByText(DETAILS.template)
-    expect(cellsOf(DETAILS.template)[3]).toBe('—')
-    expect(downloadHrefOf(DETAILS.template)).toBe(DETAILS.templateUrl)
+    expect(screen.getByText(/template, paths/)).toBeTruthy()
+    await openDetails()
+
+    const label = screen.getByText('Template')
+    const line = label.parentElement as HTMLElement
+    expect(within(line).getByText(DETAILS.template)).toBeTruthy()
+    const link = within(line).getByRole('link', { name: /Download template/ }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe(DETAILS.templateUrl)
+    expect(link.getAttribute('download')).toBe(DETAILS.template)
+    // The template appears once — in the panel, not in the table as well.
+    expect(screen.getAllByText(DETAILS.template)).toHaveLength(1)
+  })
+
+  // A YAML-submitted build has no summary but still ran against a template, so
+  // the panel is offered for the Template line alone.
+  it('offers the panel and the template for a build with no summary', async () => {
+    await renderBuildView(false)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+
+    await openDetails()
+    expect(screen.queryByText('Basic Selection')).toBeNull()
+    expect(screen.getByText(DETAILS.template)).toBeTruthy()
   })
 
   it('keeps the download link pointing at the artifact endpoint for real outputs', async () => {
@@ -313,24 +389,15 @@ describe('BuildView template row', () => {
     )
   })
 
-  it('no longer shows the raw command or a Template line in the expanded details panel', async () => {
+  it('does not show the raw command in the expanded details panel', async () => {
     buildDetails.mockResolvedValue({ ...DETAILS, summary: SUMMARY })
     await renderBuildView(false)
-    await screen.findByText(DETAILS.template)
+    await screen.findByText(IMAGE_ARTIFACT.name)
+    expect(screen.getByText(/template, paths/)).toBeTruthy()
 
-    // The panel is collapsed by default, so open it before asserting absence —
-    // otherwise this passes for the wrong reason.
-    await act(async () => {
-      screen.getByRole('button', { name: /Compose details/ }).click()
-    })
-    expect(screen.getByText(/basic selection, image configuration/)).toBeTruthy()
-
+    await openDetails()
     expect(screen.queryByText(DETAILS.command)).toBeNull()
     expect(screen.queryByText('Command')).toBeNull()
-    // "Template" as a standalone label is gone; the name now appears only as the
-    // artifact row's Name cell.
-    expect(screen.queryByText('Template')).toBeNull()
-    expect(screen.getAllByText(DETAILS.template)).toHaveLength(1)
   })
 
   it('lists each Advanced-tab change by name, capping long lists behind Show more', async () => {
@@ -349,10 +416,8 @@ describe('BuildView template row', () => {
       },
     })
     await renderBuildView(false)
-    await screen.findByText(DETAILS.template)
-    await act(async () => {
-      screen.getByRole('button', { name: /Compose details/ }).click()
-    })
+    await screen.findByText(IMAGE_ARTIFACT.name)
+    await openDetails()
     // Open by default: the entries are listed without expanding the card.
     const toggle = screen.getByRole('button', { name: /Advanced customization/ })
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
@@ -370,77 +435,5 @@ describe('BuildView template row', () => {
     })
     expect(screen.getByText('pkg-10')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Show less' })).toBeTruthy()
-  })
-})
-
-// An Advanced-mode build runs against a generated `extends` delta in the
-// templates dir. The server archives that delta into the build root and deletes
-// it when the build concludes — at every terminal outcome, not just success — so
-// the live view has to re-read the details on each of them or the template row
-// keeps offering a path that is gone.
-describe('BuildView template row after a terminal outcome', () => {
-  const DELTA_PATH = '/var/tmp/ict/templates/.generated-abc.yml'
-  const ARCHIVED = { ...DETAILS, templatePath: '/var/tmp/ict/builds/abc/template.yml' }
-
-  beforeEach(() => {
-    vi.stubGlobal('EventSource', FakeEventSource)
-    FakeEventSource.last = null
-    logFileText.mockResolvedValue('')
-    buildArtifacts.mockResolvedValue([])
-    // Mount reads the pre-finish delta path; every later read gets the archive.
-    buildDetails.mockResolvedValueOnce({ ...DETAILS, templatePath: DELTA_PATH })
-    buildDetails.mockResolvedValue(ARCHIVED)
-  })
-
-  // Drives a live build to a terminal outcome over the SSE error channel, which
-  // is how the server reports both failure and cancellation.
-  async function finishWith(payload: Record<string, unknown>) {
-    await renderBuildView(true)
-    await waitFor(() => expect(FakeEventSource.last).not.toBeNull())
-    await act(async () => {
-      FakeEventSource.last!.listeners.get('error')?.({
-        data: JSON.stringify(payload),
-      } as MessageEvent)
-    })
-  }
-
-  it('repoints the template at the archived copy after a failure', async () => {
-    await finishWith({ status: 'failed', message: 'build failed' })
-
-    await waitFor(() => expect(cellsOf(DETAILS.template)[3]).toBe(ARCHIVED.templatePath))
-  })
-
-  it('repoints the template at the archived copy after a cancellation', async () => {
-    await finishWith({ status: 'cancelled' })
-
-    await waitFor(() => expect(cellsOf(DETAILS.template)[3]).toBe(ARCHIVED.templatePath))
-  })
-})
-
-// A build with no configuration summary (a YAML submission) has nothing left to
-// put in the details panel now that the command and template have moved out, so
-// the expandable is not offered at all.
-describe('BuildView details panel', () => {
-  beforeEach(() => {
-    vi.stubGlobal('EventSource', FakeEventSource)
-    FakeEventSource.last = null
-    buildDetails.mockResolvedValue(DETAILS)
-    buildArtifacts.mockResolvedValue([IMAGE_ARTIFACT])
-    logFileText.mockResolvedValue('')
-  })
-
-  it('is not offered when the build has no summary', async () => {
-    await renderBuildView(false)
-
-    await screen.findByText(IMAGE_ARTIFACT.name)
-    expect(screen.queryByRole('button', { name: /Compose details/ })).toBeNull()
-  })
-
-  it('is offered when the build has a summary', async () => {
-    buildDetails.mockResolvedValue({ ...DETAILS, summary: SUMMARY })
-    await renderBuildView(false)
-
-    await screen.findByText(IMAGE_ARTIFACT.name)
-    expect(screen.getByRole('button', { name: /Compose details/ })).toBeTruthy()
   })
 })

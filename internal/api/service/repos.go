@@ -104,6 +104,10 @@ type PackageRepo struct {
 	// enabling it fetches packages unverified. Kept out of the wire type like
 	// the fields above; only the derived hasSigningKey flag is published.
 	PKey string `json:"pkey,omitempty"`
+	// AllowPackages restricts which of the repository's packages a build may
+	// take from it, the template's packageRepositories allowPackages: a search
+	// shows only those. Empty means all. Kept out of the wire type like Index.
+	AllowPackages []string `json:"allowPackages,omitempty"`
 }
 
 // HasSigningKey reports whether this repository's packages are ever fetched
@@ -240,6 +244,115 @@ func (r PackageRepo) templateRepo() (config.PackageRepository, bool) {
 		repo.Priority = r.Priority
 	}
 	return repo, true
+}
+
+// repoRef identifies one repository index: the (url, suite, components) triple
+// a deb build reads, or for rpm the URL alone.
+type repoRef struct {
+	url, codename, component string
+}
+
+// normalizeRepoRef makes a triple comparable. An omitted component becomes
+// "main" because that is what generateAptSourcesContent substitutes
+// (internal/config/apt_sources.go), so an index reading "main" is reading
+// exactly what a build would install from. Components are sorted because they
+// are independent path segments, not an ordered list.
+func normalizeRepoRef(url, codename, component string) repoRef {
+	component = strings.TrimSpace(component)
+	if component == "" {
+		component = "main"
+	}
+	parts := strings.Fields(component)
+	sort.Strings(parts)
+	return repoRef{
+		url:       normalizeRepoURL(url),
+		codename:  strings.TrimSpace(codename),
+		component: strings.Join(parts, " "),
+	}
+}
+
+func normalizeRepoURL(url string) string {
+	return strings.TrimSuffix(strings.TrimSpace(url), "/")
+}
+
+// templateRepoIDs maps a resolved template's packageRepositories to the ids of
+// the catalog repos offered for osID, so the Packages step can show which
+// repositories the template already uses rather than listing them as optional.
+// A deb repository matches on its full index triple, or failing that on URL and
+// suite, which tolerates an entry naming a different component set but never
+// confuses two suites served from one host. An rpm repository has no suite and
+// matches on URL. Entries the catalog does not carry, and the "<URL>"
+// placeholder private repos use, are skipped (see templateOnlyRepos for the
+// former). Sorted for a stable response.
+func (s *Service) templateRepoIDs(osID string, repos []config.PackageRepository) []string {
+	if len(repos) == 0 {
+		return nil
+	}
+	catalog := s.catalogMatcher(osID)
+	seen := make(map[string]bool)
+	var out []string
+	for _, tr := range repos {
+		if !usableTemplateRepo(tr) {
+			continue
+		}
+		if id, ok := catalog.match(tr); ok && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// usableTemplateRepo reports whether a template's repository entry names a
+// real repository, rather than being empty or the "<URL>" placeholder private
+// repos use.
+func usableTemplateRepo(tr config.PackageRepository) bool {
+	return strings.TrimSpace(tr.URL) != "" && !strings.Contains(tr.URL, "<URL>")
+}
+
+// catalogMatcher finds the catalog repo a template's repository entry is.
+type catalogMatcher struct {
+	byRef    map[repoRef]string
+	bySuite  map[repoRef]string // component left empty
+	byRPMURL map[string]string
+}
+
+func (s *Service) catalogMatcher(osID string) catalogMatcher {
+	m := catalogMatcher{
+		byRef:    make(map[repoRef]string),
+		bySuite:  make(map[repoRef]string),
+		byRPMURL: make(map[string]string),
+	}
+	for _, r := range s.PackageRepos(osID) {
+		if r.Type == repoTypeRPM {
+			m.byRPMURL[normalizeRepoURL(r.URL)] = r.ID
+		}
+		for _, idx := range r.Index {
+			url := idx.URL
+			if url == "" {
+				url = r.URL
+			}
+			if r.Type == repoTypeRPM {
+				m.byRPMURL[normalizeRepoURL(url)] = r.ID
+				continue
+			}
+			m.byRef[normalizeRepoRef(url, idx.Codename, idx.Component)] = r.ID
+			m.bySuite[repoRef{url: normalizeRepoURL(url), codename: strings.TrimSpace(idx.Codename)}] = r.ID
+		}
+	}
+	return m
+}
+
+func (m catalogMatcher) match(tr config.PackageRepository) (string, bool) {
+	if id, ok := m.byRef[normalizeRepoRef(tr.URL, tr.Codename, tr.Component)]; ok {
+		return id, true
+	}
+	if id, ok := m.bySuite[repoRef{url: normalizeRepoURL(tr.URL), codename: strings.TrimSpace(tr.Codename)}]; ok {
+		return id, true
+	}
+	id, ok := m.byRPMURL[normalizeRepoURL(tr.URL)]
+	return id, ok
 }
 
 // appliesTo reports whether the repo is offered for a target OS id. A repo with

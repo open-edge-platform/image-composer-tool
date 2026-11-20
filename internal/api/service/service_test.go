@@ -393,6 +393,24 @@ func TestBuildCommand(t *testing.T) {
 	}
 }
 
+// TestBuildCommandConfigPath checks that builds get the server's configuration
+// file, with and without sudo, and no --config when the server has none.
+func TestBuildCommandConfigPath(t *testing.T) {
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
+	if _, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false); slices.Contains(args, "--config") {
+		t.Fatalf("--config without a configuration file: %v", args)
+	}
+	s.cfg.ConfigPath = "/etc/image-composer-tool/config.yml"
+	for _, sudo := range []bool{false, true} {
+		s.cfg.Sudo = sudo
+		_, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
+		i := slices.Index(args, "--config")
+		if i < 0 || i+1 >= len(args) || args[i+1] != s.cfg.ConfigPath {
+			t.Fatalf("sudo=%v: args %v lack --config %s", sudo, args, s.cfg.ConfigPath)
+		}
+	}
+}
+
 // Hosts with no proxy configured must not gain an always-empty NO_PROXY=/
 // no_proxy= on the sudo command line: sudo rejects any NAME=value assignment
 // not covered by its sudoers env_keep rule, so an unconditional empty

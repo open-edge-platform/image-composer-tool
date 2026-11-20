@@ -141,15 +141,25 @@ func (s *Server) GetEdgePack(w http.ResponseWriter, r *http.Request, params http
 // SearchPackages handles GET /packages/search.
 //
 // Omitting `q` browses a repository's catalog instead of searching it — the
-// `limit`/`offset` pair pages through the result either way.
+// `limit`/`offset` pair pages through the result either way. `names` instead
+// looks up exactly those packages, unpaginated.
 func (s *Server) SearchPackages(w http.ResponseWriter, r *http.Request, params httpapi.SearchPackagesParams) {
-	var query string
-	if params.Q != nil {
-		query = *params.Q
-	}
 	var repos []string
 	if params.Repos != nil {
 		repos = *params.Repos
+	}
+	if params.Names != nil {
+		hits, unavailable, err := s.svc.LookupPackages(r.Context(), params.Os, *params.Names, repos)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, fromPackageSearchResults("", hits, len(hits), unavailable))
+		return
+	}
+	var query string
+	if params.Q != nil {
+		query = *params.Q
 	}
 	limit := 0
 	if params.Limit != nil {
@@ -163,12 +173,12 @@ func (s *Server) SearchPackages(w http.ResponseWriter, r *http.Request, params h
 	if params.Curated != nil {
 		curated = *params.Curated
 	}
-	hits, total, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset, curated)
+	hits, total, unavailable, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset, curated)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, fromPackageSearchResults(query, hits, total))
+	writeJSON(w, http.StatusOK, fromPackageSearchResults(query, hits, total, unavailable))
 }
 
 // ValidateTemplate handles POST /templates/validate.

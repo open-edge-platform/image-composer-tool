@@ -179,10 +179,6 @@ export interface ComposeResponse {
   // baseline can be shown beside the delta that modifies it. Absent when there
   // are no overrides, because `yaml` already is the base.
   baseYaml?: string
-  // Packages requested at a pinned version whose name the curated template
-  // already lists unpinned. The extends merge unions package lists and cannot
-  // drop the parent's entry, so both survive into `yaml`. Advisory only.
-  pinConflicts?: string[]
   // The matched template's own package list, before this request's overrides
   // are applied. Present even when the request carries no overrides, so the
   // Packages step can show "already included" packages alongside whatever
@@ -192,6 +188,24 @@ export interface ComposeResponse {
   // login. Any entry with satisfied: false must be covered by a credentials
   // entry on the request before a build will start.
   credentials?: CredentialRequirement[]
+  // Ids of the catalog repositories the matched template itself installs from
+  // (its packageRepositories through extends and the default config), before
+  // this request's overrides. The Packages step shows them as in use.
+  templateRepos?: string[]
+  // Entries for those of templateRepos GET /package-repos doesn't list, such
+  // as a vendor snapshot only this template uses. Their ids work in package
+  // searches like a catalog id.
+  templateOnlyRepos?: PackageRepo[]
+  // Present when the resolved template downloads OEP Installer files, which
+  // may need a GitHub token for a private repository.
+  oepInstaller?: OEPInstallerInfo
+}
+
+// Whether a template downloads OEP Installer files, and whether the server
+// already gives builds a GitHub token for them.
+export interface OEPInstallerInfo {
+  uses: boolean
+  serverToken: boolean
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a
@@ -261,6 +275,10 @@ export interface PackageSearchResults {
   query: string
   total: number
   packages: PackageSearchResult[]
+  // Repos with an index the server couldn't load, so their packages may be
+  // missing from `packages`. Absent when every index loaded (and from an
+  // older backend that doesn't report it).
+  unavailableRepos?: string[]
 }
 
 // The Edge Pack grouping for one target (from GET /edge-pack): the same
@@ -371,6 +389,20 @@ export interface Artifact {
 export function artifactTypeLabel(type: string | undefined): string {
   const t = (type ?? '').trim()
   return t === '' ? 'UNKNOWN' : t.toUpperCase()
+}
+
+// artifactKindLabel names what an artifact is for the Artifact column of the
+// compose view: "Image" or "Bill of Materials". It goes by the server-reported
+// type only, so any other type still shows up as itself, via artifactTypeLabel.
+export function artifactKindLabel(type: string | undefined): string {
+  switch ((type ?? '').trim()) {
+    case 'image':
+      return 'Image'
+    case 'sbom':
+      return 'Bill of Materials'
+    default:
+      return artifactTypeLabel(type)
+  }
 }
 
 // Teardown-residue warning surfaced when a cancelled/failed build may have left

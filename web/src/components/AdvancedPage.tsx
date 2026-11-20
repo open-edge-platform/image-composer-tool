@@ -9,6 +9,8 @@ import type {
   CredentialRequirement,
   EdgePack,
   NewUserInput,
+  OEPInstallerInfo,
+  PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
@@ -20,7 +22,7 @@ import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 import { useBaseLock } from '../lib/baseLock'
-import { strandedPackages } from '../lib/edgepack'
+import { overlayIncompatiblePackages, strandedPackages } from '../lib/edgepack'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -39,6 +41,10 @@ const DISK_DEBOUNCE_MS = 400
 // and key fields are free text, so an undebounced override would write and
 // delete a server-side delta file on every keystroke.
 const CREDENTIALS_DEBOUNCE_MS = 400
+
+// Shown when Compose is pressed with Edge Pack packages on an overlay build.
+const OVERLAY_PACKAGES_ERROR =
+  'Remove the Edge Pack packages on the Packages step before composing: an image built on a baseline image cannot take them.'
 
 // The Advanced tab is a wizard, mirroring the prototype's step flow. Only the
 // first step (Target / "Choose Image Configuration") is built out today; the
@@ -85,17 +91,34 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Accounts the user asked to add on top of the template's own, held for the
   // same reason credentials are: each entry carries a password.
   const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
+  // A GitHub token for this build's OEP Installer downloads, held like the
+  // passwords and never added to a compose request.
+  const [oepInstallerToken, setOEPInstallerToken] = useState('')
+  // The last successful compose's OEP Installer use, held for the same reason
+  // lastRequirements is.
+  const [lastOEPInstaller, setLastOEPInstaller] = useState<OEPInstallerInfo | undefined>(undefined)
   // The matched template's own package list from the last successful compose,
   // null until one lands for this selection. Held for the same reason
   // lastRequirements is: the effect clears `composed` before each refetch, and
   // the Packages check below must keep seeing what the template ships while a
   // recompose is in flight.
   const [lastBasePackages, setLastBasePackages] = useState<string[] | null>(null)
+  // The repositories the matched template itself installs from, from the last
+  // successful compose. Held for the same reason lastBasePackages is: the
+  // Repositories list must not drop them to "optional" while a recompose is in
+  // flight.
+  const [lastTemplateRepos, setLastTemplateRepos] = useState<string[]>([])
+  const [lastTemplateOnlyRepos, setLastTemplateOnlyRepos] = useState<PackageRepo[]>([])
   // The Edge Pack for the selected OS, for the same check. Fetched here rather
   // than taken from the Packages step, which unmounts once the wizard moves on
   // and starts each visit with nothing loaded. Keyed by OS so a stale pack is
   // never read against a different target.
   const [edgePack, setEdgePack] = useState<{ os: string; pack: EdgePack | null } | null>(null)
+  // Whether the matched template is overlay-mode, i.e. builds on an existing
+  // baseline image. The compose summary carries a base image only for those.
+  // Reset with lastRequirements when the selection changes, then set by its
+  // own compose of the bare selection (see the effect below).
+  const [overlay, setOverlay] = useState(false)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -172,6 +195,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setNewUsers([])
     setLastRequirements([])
     setLastBasePackages(null)
+    setLastTemplateRepos([])
+    setLastTemplateOnlyRepos([])
+    setOverlay(false)
+    setOEPInstallerToken('')
+    setLastOEPInstaller(undefined)
   }, [selection])
 
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
@@ -188,8 +216,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // template's own disk block, so sending it would generate a delta that changes
   // nothing while making the Review pane claim an override.
   const diskKey = useMemo(
-    () => (diskEdited && disk ? JSON.stringify(toDiskConfig(disk)) : ''),
-    [diskEdited, disk],
+    () => (diskEdited && disk ? JSON.stringify(toDiskConfig(disk, { overlay })) : ''),
+    [diskEdited, disk, overlay],
   )
   // A layout the Disk step has already flagged is never sent. The server would
   // reject it with the same complaint the step is showing inline, so posting it
@@ -202,8 +230,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // and never sent, so a curated layout the step cannot represent must not
   // block composing that template as-is.
   const diskInvalid = useMemo(
-    () => diskEdited && !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
-    [diskEdited, disk, selection.imageType],
+    () =>
+      diskEdited && !!disk && validateDisk(disk, { imageType: selection.imageType, overlay }).errors.length > 0,
+    [diskEdited, disk, selection.imageType, overlay],
   )
   const [debouncedDiskKey, setDebouncedDiskKey] = useState(diskKey)
   useEffect(() => {
@@ -257,6 +286,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           setLoading(false)
           if (r.credentials) setLastRequirements(r.credentials)
           setLastBasePackages(r.basePackages ?? [])
+          setLastTemplateRepos(r.templateRepos ?? [])
+          setLastTemplateOnlyRepos(r.templateOnlyRepos ?? [])
+          setLastOEPInstaller(r.oepInstaller)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
           // *Edited flags in the store). The disk block is read out of the
@@ -273,6 +305,23 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       cancelled = true
     }
   }, [active, complete, composeReq])
+
+  // Overlay mode is read from a compose of the bare selection, not from the
+  // compose above: that one carries the user's overrides, and the overrides
+  // an overlay cannot take (Edge Pack packages kept from another template on
+  // the same OS) are exactly what make it fail. Learning the mode from it would
+  // leave the safeguards off in the one case they are for.
+  useEffect(() => {
+    if (!active || !complete) return
+    let cancelled = false
+    api
+      .compose(selection)
+      .then((r) => { if (!cancelled) setOverlay(!!r.summary.baseImage) })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [active, complete, selection])
 
   // Fetched once per OS. A failed fetch stores nothing, so it is told apart
   // from an OS with no Edge Pack and retried on the next step change — entering
@@ -298,8 +347,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // base lock, which needs no repos and makes no requests.
   const pack = edgePack?.os === os ? edgePack.pack : null
   const baseLock = useBaseLock(os, null, lastBasePackages ?? [])
+  // Edge Pack packages an overlay build cannot take, however they were added.
+  // The server rejects the compose over them, so the build is held until they
+  // are removed, as it is for a Disk step error.
+  const overlayPackages = overlay && pack ? overlayIncompatiblePackages(pack, addedPackages) : []
   const packagesHaveIssues =
-    !!pack && lastBasePackages !== null && strandedPackages(pack, addedPackages, baseLock).length > 0
+    overlayPackages.length > 0 ||
+    (!!pack && lastBasePackages !== null && strandedPackages(pack, addedPackages, baseLock).length > 0)
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
@@ -328,6 +382,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       setError('Fix the errors on the Disk step before composing.')
       return
     }
+    if (overlayPackages.length > 0) {
+      setError(OVERLAY_PACKAGES_ERROR)
+      return
+    }
     try {
       setBusy(true)
       setError(null)
@@ -342,7 +400,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       const buildReq: ComposeRequest = {
         ...composeReq,
         imageName: imageNameEdited ? imageName : undefined,
-        disk: diskEdited && disk ? toDiskConfig(disk) : undefined,
+        disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
         users: newUsers.length > 0 ? newUsers : undefined,
       }
@@ -351,10 +409,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // build actually runs rather than the debounced preview.
       const fresh = await api.compose(buildReq)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
-      const accepted = await api.startBuild(buildReq)
+      const accepted = await api.startBuild(buildReq, oepInstallerToken.trim() || undefined)
       setCredentialsOpen(false)
       // Kept, they would mark the accounts satisfied and the next build would skip the prompt.
       setCredentials([])
+      setOEPInstallerToken('')
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
@@ -366,6 +425,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const onComposeClick = () => {
     if (diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
+      return
+    }
+    if (overlayPackages.length > 0) {
+      setError(OVERLAY_PACKAGES_ERROR)
       return
     }
     // Always through the dialog: besides any missing logins, it is where
@@ -473,10 +536,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             os={selection.os}
             active={active}
             basePackages={composed?.basePackages ?? []}
+            templateRepos={lastTemplateRepos}
+            templateOnlyRepos={lastTemplateOnlyRepos}
+            overlay={overlay}
           />
         )}
 
-        {step === 2 && <DiskStep />}
+        {step === 2 && <DiskStep overlay={overlay} />}
 
         {step === 3 && (
           <div>
@@ -533,26 +599,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </p>
                 )}
 
-                {/* Pinned a version for a package the curated template already
-                    lists? Both entries survive the merge, so say so rather than
-                    letting the resolved template look like a duplicate bug. */}
-                {composed.pinConflicts && composed.pinConflicts.length > 0 && (
-                  <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    <span className="font-semibold">
-                      {composed.pinConflicts.length === 1
-                        ? 'One pinned package is also provided by the base template'
-                        : `${composed.pinConflicts.length} pinned packages are also provided by the base template`}
-                      :
-                    </span>{' '}
-                    {composed.pinConflicts.join(', ')}. Template inheritance combines
-                    package lists rather than replacing them, so the base
-                    template&apos;s own unpinned entry stays alongside your pinned
-                    one and the build may install either version. Choose
-                    &quot;Latest&quot; for these packages to leave the base
-                    template&apos;s entry to decide.
-                  </div>
-                )}
-
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
@@ -573,7 +619,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </button>
                   {buildInProgress && (
                     <span className="text-sm text-amber-600">
-                      A compose is already in progress. Switch to the Compose Image tab to monitor it.
+                      additional concurrent builds are currently restricted
                     </span>
                   )}
                 </div>
@@ -630,6 +676,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         onChange={setCredentials}
         newUsers={newUsers}
         onNewUsersChange={setNewUsers}
+        oepInstaller={composed?.oepInstaller ?? lastOEPInstaller}
+        oepInstallerToken={oepInstallerToken}
+        onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, confirmRepoRelease } from '../store'
 import { api } from '../api/client'
 import type { EdgePack, PackageRepo, PackageSearchResult, PackageVersion } from '../api/types'
@@ -8,7 +8,8 @@ import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
-import { templateLockedRepos } from '../lib/edgepack'
+import { templateInUseRepos } from '../lib/templateRepos'
+import { overlayIncompatiblePackages } from '../lib/edgepack'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -21,6 +22,16 @@ interface PackagesStepProps {
   // The matched template's own package list (ComposeResponse.basePackages),
   // fetched by AdvancedPage's compose call. Empty until that call resolves.
   basePackages: string[]
+  // Ids of the repositories the matched template itself installs from
+  // (ComposeResponse.templateRepos), through extends and the default config.
+  templateRepos?: string[]
+  // Entries for those of templateRepos the catalog doesn't list
+  // (ComposeResponse.templateOnlyRepos), shown and searched like its own.
+  templateOnlyRepos?: PackageRepo[]
+  // True for an overlay-mode template. Edge Pack packages turn on DKMS module
+  // builds, which an overlay cannot run, so the Edge Packs tab is not offered
+  // and any Edge Pack package added some other way is flagged.
+  overlay?: boolean
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -45,8 +56,27 @@ const EDGE_PACK_RETRY_LIMIT = 24
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
 // running list of added packages.
-export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
-  const [repos, setRepos] = useState<PackageRepo[] | null>(null)
+// noRepos is the default templateOnlyRepos, hoisted so it is one stable array.
+const noRepos: PackageRepo[] = []
+
+export function PackagesStep({
+  os,
+  active,
+  basePackages,
+  templateRepos = [],
+  templateOnlyRepos = noRepos,
+  overlay = false,
+}: PackagesStepProps) {
+  const [catalogRepos, setRepos] = useState<PackageRepo[] | null>(null)
+  // The catalog plus the repositories only the matched template declares,
+  // which GET /package-repos doesn't list. Everything below treats the two
+  // alike; templateInUseRepos below shows the latter as already included.
+  const templateOnlyKey = templateOnlyRepos.map((r) => r.id).join(',')
+  const repos = useMemo(
+    () => catalogRepos && [...catalogRepos, ...templateOnlyRepos.filter((r) => !catalogRepos.some((c) => c.id === r.id))],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- templateOnlyKey stands in for templateOnlyRepos
+    [catalogRepos, templateOnlyKey],
+  )
   const [error, setError] = useState<string | null>(null)
   // undefined while in flight, null once it is known there is no Edge Pack to
   // show. The two are kept apart so the tab can say "loading" rather than
@@ -57,9 +87,18 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   // Tab choice is local state: selections live in the store, so switching tabs
   // cannot disturb them. Edge Pack leads because a capability is the question
   // most users arrive with; provenance is the follow-up.
-  const [tab, setTab] = useState<TabID>('edge-pack')
+  const [tab, setTab] = useState<TabID>(overlay ? 'repos' : 'edge-pack')
   const manifest = useStore((s) => s.manifest)
   const enabledRepos = useStore((s) => s.enabledRepos)
+  const addedPackages = useStore((s) => s.addedPackages)
+
+  // An overlay has nothing to show on the Edge Packs tab, so open on the
+  // Repositories tab instead — including when the selection changes to an
+  // overlay while this step is open.
+  useEffect(() => {
+    if (overlay) setTab('repos')
+  }, [overlay])
+  const incompatible = overlay && edgePack ? overlayIncompatiblePackages(edgePack, addedPackages) : []
 
   useEffect(() => {
     if (!os) {
@@ -112,16 +151,31 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   }, [active, os])
 
   const baseLock = useBaseLock(os, repos, basePackages)
+
+  // The first time the server touches a repository it downloads that
+  // repository's index from the upstream mirror, which through a proxy can
+  // take seconds to tens of seconds, and the Repositories tab's catalog and
+  // "Show only selected" count wait on it. So as soon as the step opens, look
+  // the template's packages up across every repository at once: the server
+  // fetches all the indexes in parallel and keeps them cached (hours), and by
+  // the time a repository is picked in the Repositories tab it is usually
+  // already warm. The answer itself isn't needed here, only the warming.
+  const warmKey = active && repos && baseLock.concreteNames.length > 0 ? `${os}|${repos.map((r) => r.id).join(',')}` : ''
+  useEffect(() => {
+    if (!warmKey || !repos) return
+    api.lookupPackages({ os, repos: repos.map((r) => r.id), names: baseLock.concreteNames }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- warmKey stands in for os/repos; one warm-up per target
+  }, [warmKey])
   const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
-  // Repos the matched template already draws an Edge Pack package from —
-  // these get the same "always on, can't uncheck" treatment the Repositories
+  // Repos the matched template already installs from (see templateInUseRepos).
+  // These get the same "always on, can't uncheck" treatment the Repositories
   // tab already gives the target's base repo. Computed before enabledRepoIds
   // below: a template-locked repo renders checked but deliberately never
-  // joins enabledRepos (see templateLockedRepos), so without this, a
+  // joins enabledRepos (see templateInUseRepos), so without this, a
   // selection resolving only against one (e.g. intel-eci) would have it
   // silently missing from the shared resolver's own checked-repo scope.
-  const lockedRepoIds = new Set(edgePack ? templateLockedRepos(edgePack, baseLock) : [])
+  const lockedRepoIds = templateInUseRepos(templateRepos, edgePack, baseLock)
   // Every repo a build actually resolves against right now — the one set a
   // floating pick's "what does this really resolve to" lookup must be
   // checked against, regardless of which repo it was picked from or whether
@@ -132,7 +186,13 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   const enabledRepoIds = (repos ?? [])
     .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id) || lockedRepoIds.has(r.id))
     .map((r) => r.id)
-  const resolver = useVersionResolver(os, enabledRepoIds)
+  // Each repo's priority, so "resolves to" follows the build's own rule: the
+  // highest-priority repo first, then the newest version in it.
+  const repoPriorities = useMemo(
+    () => Object.fromEntries((repos ?? []).filter((r) => r.priority != null).map((r) => [r.id, r.priority!])),
+    [repos],
+  )
+  const resolver = useVersionResolver(os, enabledRepoIds, repoPriorities)
 
   return (
     <div>
@@ -143,6 +203,14 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
         template and is installed by the build.
       </p>
       {error && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+      {incompatible.length > 0 && (
+        <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">
+          Edge Pack packages cannot be added to an image built on a baseline image, because
+          they need DKMS driver builds the overlay does not run. Remove{' '}
+          <span className="font-mono">{incompatible.join(', ')}</span> to compose.
+        </div>
+      )}
 
       {!error && !os && (
         <p className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-400">
@@ -182,12 +250,19 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
                 <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+              ) : overlay ? (
+                <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
+                  Edge Packs are not available for an image built on a baseline image: they need
+                  DKMS driver builds, which the overlay does not run. Use the Repositories tab
+                  to pick packages.
+                </p>
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}
                   repoLabelFor={repoLabelFor}
                   targetLabel={targetLabel}
                   baseLock={baseLock}
+                  lockedRepoIds={lockedRepoIds}
                 />
               ) : edgePack === undefined ? (
                 <EdgePackLoading />
@@ -199,7 +274,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+            <SelectedPackages repos={repos} os={os} lockedRepoIds={lockedRepoIds} resolver={resolver} />
           </div>
         </div>
       )}
@@ -439,7 +514,11 @@ function PackageSearch({
       // doesn't jump around as later repositories report.
       const byRepo = new Map<string, PackageSearchResult[]>()
       const priorityOf = (repoId: string) => repos.find((r) => r.id === repoId)?.priority ?? 0
-      es = new EventSource(api.searchStreamUrl({ q, os, limit: SEARCH_LIMIT }))
+      // Named rather than left to default to the whole catalog: the server
+      // only searches a repository just the matched template declares when
+      // asked for it by id.
+      const repoIds = repos.map((r) => r.id)
+      es = new EventSource(api.searchStreamUrl({ q, os, repos: repoIds, limit: SEARCH_LIMIT }))
 
       es.addEventListener('hits', (e) => {
         const data = JSON.parse((e as MessageEvent).data) as {
@@ -470,9 +549,10 @@ function PackageSearch({
         }
         // Nothing arrived, so fall back to the non-streaming endpoint. It is
         // slower, but it works against a backend that predates the stream
-        // route or a proxy that buffers text/event-stream.
+        // route or a proxy that buffers text/event-stream. It names the same
+        // repositories, so a template-only one isn't dropped.
         api
-          .searchPackages({ q, os, limit: SEARCH_LIMIT })
+          .searchPackages({ q, os, repos: repoIds, limit: SEARCH_LIMIT })
           .then((r) => {
             if (cancelled) return
             setResults(r.packages)
@@ -503,9 +583,11 @@ function PackageSearch({
   }, [results, baseLock])
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
+  // A repo the template already installs from counts as enabled: it is locked
+  // on, so writing it into enabledRepos would leave an entry nothing can untick.
   const isEnabled = (repoId: string) => {
     const r = repos.find((x) => x.id === repoId)
-    return r?.enabledByDefault || enabledRepos.includes(repoId)
+    return r?.enabledByDefault || enabledRepos.includes(repoId) || lockedRepoIds.has(repoId)
   }
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
   const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)
@@ -670,8 +752,8 @@ function PackageSearch({
         )}
       </div>
       <p className="mb-4 mt-1.5 text-sm text-slate-500">
-        Search across all repositories. Pick &quot;Latest&quot; or a specific
-        version to add it.
+        Search across all repositories. Tick a package to add it unpinned, or
+        pick a version to pin it.
       </p>
     </>
   )
