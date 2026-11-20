@@ -420,13 +420,25 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // The two debounced fields are then re-read live: a discrete action
       // shouldn't wait on a typing pause, so the build gets whatever is
       // currently on screen rather than the value the Review preview settled on.
-      const buildReq: ComposeRequest = {
-        ...composeReq,
-        imageName: imageNameEdited ? imageName : undefined,
-        disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
-        credentials: credentials.length > 0 ? credentials : undefined,
-        users: newUsers.length > 0 ? newUsers : undefined,
-      }
+      //
+      // In Author mode the edited template is what gets built: every change is
+      // already in its text, so only the logins from the dialog ride along.
+      const authored = authoring && authorEdit && 'text' in authorEdit ? authorEdit.text : undefined
+      const buildReq: ComposeRequest =
+        authored !== undefined
+          ? {
+              ...selection,
+              templateYaml: authored,
+              credentials: credentials.length > 0 ? credentials : undefined,
+              users: newUsers.length > 0 ? newUsers : undefined,
+            }
+          : {
+              ...composeReq,
+              imageName: imageNameEdited ? imageName : undefined,
+              disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
+              credentials: credentials.length > 0 ? credentials : undefined,
+              users: newUsers.length > 0 ? newUsers : undefined,
+            }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
       // build actually runs rather than the debounced preview.
@@ -719,9 +731,20 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                     saved={authorSaved?.template === composed.template ? authorSaved : null}
                     onSaved={(s) => setAuthorSaved({ template: composed.template, ...s })}
                   />
-                  <p className="mt-4 text-xs text-slate-500">
-                    Building an edited template from here is coming next. To build now, switch to Customize.
-                  </p>
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={onComposeClick}
+                      disabled={busy || buildInProgress}
+                      title="Build an image from the template above"
+                      className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+                    </button>
+                    {buildInProgress && (
+                      <span className="text-sm text-amber-600">additional concurrent builds are currently restricted</span>
+                    )}
+                  </div>
                 </>
               )
             ) : complete && composed ? (

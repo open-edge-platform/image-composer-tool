@@ -5,7 +5,7 @@
 // use case, the template is composed in place of the use case's own, and Save
 // writes back to the opened file.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdvancedPage } from './AdvancedPage'
 import { useStore } from '../store'
@@ -69,6 +69,7 @@ const written: string[] = []
 
 beforeEach(() => {
   written.length = 0
+  mockApi.startBuild.mockReset().mockResolvedValue({ buildId: 'b1', status: 'not-started', logsUrl: '' })
   mockApi.compose.mockReset().mockImplementation(async (req: ComposeRequest) => composeResponse(req))
   useStore.setState({
     manifest,
@@ -133,5 +134,25 @@ describe('Open Template', () => {
     await screen.findByText(/opened for the current selection/)
     expect(useStore.getState().selection.vertical).toBe('platform-enablement')
     await waitFor(() => expect(mockApi.compose).toHaveBeenLastCalledWith(expect.objectContaining({ templateYaml: plain })))
+  })
+
+  it('builds the edited template itself, with only the logins beside it', async () => {
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Template…' }))
+    await screen.findByText('my-bkc.yml')
+    useStore.getState().setPackageRemoved('vim', true)
+
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Compose Image' }))
+
+    await waitFor(() => expect(mockApi.startBuild).toHaveBeenCalledTimes(1))
+    const req = mockApi.startBuild.mock.calls[0][0] as ComposeRequest
+    expect(req).toMatchObject({ vertical: 'upstream-bkc', platform: 'nvl', os: 'ubuntu26' })
+    expect(req.templateYaml).toBe(SAVED.replace('    - vim\n', ''))
+    expect(req.packages).toBeUndefined()
+    expect(req.disk).toBeUndefined()
   })
 })
