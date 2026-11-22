@@ -28,8 +28,14 @@ export type PlannedEdit =
 
 export interface AIEditPlan {
   apply: PlannedEdit[]
-  // One sentence per edit that was not applied, and why.
-  skipped: string[]
+  skipped: SkippedEdit[]
+}
+
+// An edit that was not applied. missing names a package no repository
+// publishes, for the caller to offer similar names instead.
+export interface SkippedEdit {
+  message: string
+  missing?: string
 }
 
 export interface AIEditContext {
@@ -83,20 +89,23 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
   const added = new Map(ctx.added.map((p) => [p.name, p]))
   const removed = new Set(ctx.removed)
 
-  const notFound = (name: string) =>
-    ctx.lookupComplete
+  const notFound = (name: string): SkippedEdit => ({
+    message: ctx.lookupComplete
       ? `${name}: not found in the repositories for this target.`
-      : `${name}: not found, but some repositories couldn't be read, so it may exist. Try again later.`
+      : `${name}: not found, but some repositories couldn't be read, so it may exist. Try again later.`,
+    missing: name,
+  })
+  const skip = (message: string) => plan.skipped.push({ message })
 
   // The repo and version to pick for name at version ('' for unpinned), or
   // a reason it can't be picked.
-  const pick = (name: string, version: string): { pkg: AddedPackage; enableRepo?: string } | string => {
+  const pick = (name: string, version: string): { pkg: AddedPackage; enableRepo?: string } | SkippedEdit => {
     const hit = ctx.found[name]
     if (!hit) return notFound(name)
     const versions = hit.versions?.length ? hit.versions : [{ version: hit.version, repository: hit.repository }]
     let candidates = version ? versions.filter((v) => v.version === version) : versions
     if (candidates.length === 0) {
-      return `${name} ${version}: no repository publishes that version (newest: ${versions[0].version}).`
+      return { message: `${name} ${version}: no repository publishes that version (newest: ${versions[0].version}).` }
     }
     // Prefer what a build already reads, as the package picker does.
     const checked = candidates.filter((v) => ctx.checkedRepos.has(v.repository))
@@ -113,7 +122,7 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
 
   const setVersion = (name: string, version: string) => {
     const r = pick(name, version)
-    if (typeof r === 'string') {
+    if ('message' in r) {
       plan.skipped.push(r)
       return
     }
@@ -130,7 +139,7 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
         if (e.version) {
           setVersion(name, e.version)
         } else if (inTemplate || added.has(name)) {
-          plan.skipped.push(`${name}: already in the template.`)
+          skip(`${name}: already in the template.`)
         } else if (template.has(name)) {
           // Removed earlier: adding it back is undoing the removal.
           removed.delete(name)
@@ -143,7 +152,7 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
       case 'set_version': {
         const current = added.get(name)?.version ?? (template.has(name) && !removed.has(name) ? template.get(name) : undefined)
         if (current === e.version) {
-          plan.skipped.push(e.version ? `${name}: already at ${e.version}.` : `${name}: already unpinned.`)
+          skip(e.version ? `${name}: already at ${e.version}.` : `${name}: already unpinned.`)
         } else {
           setVersion(name, e.version)
         }
@@ -158,16 +167,16 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
           removed.add(name)
           plan.apply.push({ kind: 'remove-template', name })
         } else {
-          plan.skipped.push(`${name}: not in the template, so there is nothing to remove.`)
+          skip(`${name}: not in the template, so there is nothing to remove.`)
         }
         break
       }
       case 'set_disk_size': {
         const size = normalizeDiskSize(e.value)
         if (ctx.diskSize === null) {
-          plan.skipped.push('Disk size: this template has no disk layout to resize.')
+          skip('Disk size: this template has no disk layout to resize.')
         } else if (!size) {
-          plan.skipped.push(`Disk size: "${e.value}" is not a size such as 32GiB.`)
+          skip(`Disk size: "${e.value}" is not a size such as 32GiB.`)
         } else if (size !== ctx.diskSize) {
           plan.apply.push({ kind: 'disk-size', size })
         }

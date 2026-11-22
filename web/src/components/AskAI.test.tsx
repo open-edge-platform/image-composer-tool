@@ -11,6 +11,7 @@ const mockApi = vi.hoisted(() => ({
   suggestTemplateEdits: vi.fn(),
   listPackageRepos: vi.fn(),
   lookupPackages: vi.fn(),
+  searchPackages: vi.fn(),
 }))
 vi.mock('../api/client', () => ({ api: mockApi }))
 
@@ -65,6 +66,7 @@ beforeEach(() => {
     packages: [{ name: 'docker.io', version: '27.5.1', repository: 'ubuntu' }],
     unavailableRepos: [],
   })
+  mockApi.searchPackages.mockReset().mockResolvedValue({ query: '', total: 0, packages: [] })
   useStore.setState({ addedPackages: [], removedPackages: [], enabledRepos: [], aiPackages: {}, disk, diskEdited: false })
 })
 
@@ -97,6 +99,33 @@ describe('AskAI', () => {
     // docker-ce isn't in any repository, so it was never added.
     expect(screen.getByText('docker-ce: not found in the repositories for this target.')).toBeTruthy()
     expect(screen.getByText('Partitions cannot be added.')).toBeTruthy()
+  })
+
+  it('offers similar names for a package no repository publishes, and adds the one picked', async () => {
+    mockApi.suggestTemplateEdits.mockResolvedValue({
+      note: 'Added Docker.',
+      edits: [{ op: 'add', package: 'docker', version: '', value: '' }],
+      unsupported: [],
+    })
+    mockApi.searchPackages.mockResolvedValue({
+      query: 'docker',
+      total: 2,
+      packages: [
+        { name: 'docker.io', version: '27.5.1', repository: 'ubuntu' },
+        { name: 'docker-buildx', version: '0.19', repository: 'ubuntu' },
+      ],
+    })
+    renderAskAI()
+    ask('add docker')
+
+    await screen.findByText('docker: not found in the repositories for this target.', { exact: false })
+    expect(useStore.getState().addedPackages).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'docker.io' }))
+
+    await screen.findByText('Applied: added docker.io.')
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'docker.io', version: '', repo: 'ubuntu' }])
+    expect(isAIChange(useStore.getState(), 'docker.io')).toBe(true)
+    expect(screen.queryByText(/docker: not found/)).toBeNull()
   })
 
   it('drops the AI tag once the change is undone or edited by hand', async () => {

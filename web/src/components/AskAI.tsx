@@ -9,7 +9,7 @@
 
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api/client'
-import type { PackageRepo } from '../api/types'
+import type { PackageRepo, PackageSearchResult, TemplateEdit } from '../api/types'
 import { editPackageNames, planAIEdits, type PlannedEdit } from '../lib/aiEdits'
 import { packageEntryName } from '../lib/authorTemplate'
 import { useStore, type AddedPackage } from '../store'
@@ -31,17 +31,86 @@ interface AskAIProps {
   overlay: boolean
 }
 
+// A skipped edit, with similar package names to offer when it named one
+// no repository publishes.
+interface Skipped {
+  message: string
+  missing?: string
+  alternatives?: string[]
+}
+
 interface Outcome {
   note: string
   applied: string[]
-  skipped: string[]
+  skipped: Skipped[]
 }
+
+const MAX_ALTERNATIVES = 3
 
 export function AskAI({ os, templateText, basePackages, templateRepos, templateOnlyRepos, overlay }: AskAIProps) {
   const [request, setRequest] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
+
+  // Checks edits and applies those that pass. Names are looked up in every
+  // repository for the target, so a package from a repository not yet
+  // checked can still be picked (and that repository turned on), as picking
+  // a search hit does.
+  const runEdits = async (edits: TemplateEdit[]): Promise<{ applied: string[]; skipped: Skipped[] }> => {
+    const names = editPackageNames(edits)
+    let repos: PackageRepo[] = []
+    let found: Record<string, PackageSearchResult> = {}
+    let lookupComplete = true
+    if (names.length > 0) {
+      const catalog = (await api.listPackageRepos(os)).repos
+      repos = [...catalog, ...templateOnlyRepos.filter((r) => !catalog.some((c) => c.id === r.id))]
+      try {
+        const r = await api.lookupPackages({ os, repos: repos.map((r) => r.id), names })
+        found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
+        lookupComplete = r.unavailableRepos.length === 0
+      } catch {
+        lookupComplete = false
+      }
+    }
+
+    const state = useStore.getState()
+    const checkedRepos = new Set([
+      ...repos.filter((r) => r.enabledByDefault).map((r) => r.id),
+      ...templateRepos,
+      ...state.enabledRepos,
+    ])
+    const priorities = Object.fromEntries(repos.filter((r) => r.priority != null).map((r) => [r.id, r.priority!]))
+    const plan = planAIEdits(edits, {
+      basePackages,
+      added: state.addedPackages,
+      removed: state.removedPackages,
+      checkedRepos,
+      priorities,
+      found,
+      lookupComplete,
+      diskSize: state.disk && (overlay || state.disk.size) ? state.disk.size : null,
+    })
+    const labelOf = (id: string) => repos.find((r) => r.id === id)?.displayName ?? id
+    const applied = applyPlan(plan.apply, labelOf, new Set(basePackages.map((e) => packageEntryName(e))))
+    // The closest names a search finds for a missing one, such as docker.io
+    // for "docker", to offer instead.
+    const skipped = await Promise.all(
+      plan.skipped.map(async (s): Promise<Skipped> => {
+        if (!s.missing || s.missing.length < 2) return s
+        try {
+          const r = await api.searchPackages({ os, repos: repos.map((r) => r.id), q: s.missing, limit: 10 })
+          const alternatives = [...new Set(r.packages.map((p) => p.name))]
+            .filter((n) => n !== s.missing)
+            .slice(0, MAX_ALTERNATIVES)
+          return alternatives.length > 0 ? { ...s, alternatives } : s
+        } catch {
+          return s
+        }
+      }),
+    )
+    return { applied, skipped }
+  }
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -51,50 +120,34 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
     setOutcome(null)
     try {
       const suggestion = await api.suggestTemplateEdits(templateText, request)
-
-      // Look the names up in every repository for the target, so a package
-      // from a repository not yet checked can still be picked (and that
-      // repository turned on), as picking a search hit does.
-      const names = editPackageNames(suggestion.edits)
-      let repos: PackageRepo[] = []
-      let found = {}
-      let lookupComplete = true
-      if (names.length > 0) {
-        const catalog = (await api.listPackageRepos(os)).repos
-        repos = [...catalog, ...templateOnlyRepos.filter((r) => !catalog.some((c) => c.id === r.id))]
-        try {
-          const r = await api.lookupPackages({ os, repos: repos.map((r) => r.id), names })
-          found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
-          lookupComplete = r.unavailableRepos.length === 0
-        } catch {
-          lookupComplete = false
-        }
-      }
-
-      const state = useStore.getState()
-      const checkedRepos = new Set([
-        ...repos.filter((r) => r.enabledByDefault).map((r) => r.id),
-        ...templateRepos,
-        ...state.enabledRepos,
-      ])
-      const priorities = Object.fromEntries(repos.filter((r) => r.priority != null).map((r) => [r.id, r.priority!]))
-      const plan = planAIEdits(suggestion.edits, {
-        basePackages,
-        added: state.addedPackages,
-        removed: state.removedPackages,
-        checkedRepos,
-        priorities,
-        found,
-        lookupComplete,
-        diskSize: state.disk && (overlay || state.disk.size) ? state.disk.size : null,
-      })
-      const labelOf = (id: string) => repos.find((r) => r.id === id)?.displayName ?? id
+      const { applied, skipped } = await runEdits(suggestion.edits)
       setOutcome({
         note: suggestion.note,
-        applied: applyPlan(plan.apply, labelOf, new Set(basePackages.map((e) => packageEntryName(e)))),
-        skipped: [...plan.skipped, ...suggestion.unsupported],
+        applied,
+        skipped: [...skipped, ...suggestion.unsupported.map((message) => ({ message }))],
       })
       setRequest('')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Adds the package the user picked in place of a missing one.
+  const onAlternative = async (item: Skipped, name: string) => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const { applied, skipped } = await runEdits([{ op: 'add', package: name, version: '', value: '' }])
+      setOutcome((o) =>
+        o && {
+          ...o,
+          applied: [...o.applied, ...applied],
+          skipped: [...o.skipped.filter((s) => s !== item), ...skipped],
+        },
+      )
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -144,7 +197,26 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
           {outcome.skipped.length > 0 && (
             <ul className="list-inside list-disc text-amber-800">
               {outcome.skipped.map((s) => (
-                <li key={s}>{s}</li>
+                <li key={s.message}>
+                  {s.message}
+                  {s.alternatives && (
+                    <span className="ml-1">
+                      Did you mean{' '}
+                      {s.alternatives.map((a) => (
+                        <button
+                          key={a}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void onAlternative(s, a)}
+                          className="mx-0.5 rounded border border-amber-300 bg-white px-1.5 font-mono text-[11px] text-amber-900 hover:border-amber-500 disabled:opacity-50"
+                        >
+                          {a}
+                        </button>
+                      ))}
+                      ?
+                    </span>
+                  )}
+                </li>
               ))}
             </ul>
           )}

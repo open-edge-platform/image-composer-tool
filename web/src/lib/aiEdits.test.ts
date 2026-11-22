@@ -62,14 +62,14 @@ describe('planAIEdits', () => {
     )
     expect(plan.apply).toEqual([])
     expect(plan.skipped).toEqual([
-      'docker-compose-v9: not found in the repositories for this target.',
-      'linux-image-7.3-intel 999: no repository publishes that version (newest: 261101t000000z-resolute1).',
+      { message: 'docker-compose-v9: not found in the repositories for this target.', missing: 'docker-compose-v9' },
+      { message: 'linux-image-7.3-intel 999: no repository publishes that version (newest: 261101t000000z-resolute1).' },
     ])
   })
 
   it('says a missing name may exist when a repository could not be read', () => {
     const plan = planAIEdits([edit('add', 'nothing')], ctx({ lookupComplete: false }))
-    expect(plan.skipped[0]).toMatch(/couldn't be read/)
+    expect(plan.skipped[0].message).toMatch(/couldn't be read/)
   })
 
   it('repins and unpins template packages, and skips no-op changes', () => {
@@ -84,7 +84,7 @@ describe('planAIEdits', () => {
     expect(plan.apply).toEqual([
       { kind: 'package', pkg: { name: 'linux-image-7.3-intel', version: '261101t000000z-resolute1', repo: 'nvl-ppa' }, enableRepo: undefined },
     ])
-    expect(plan.skipped).toEqual(['snapd: already unpinned.', 'snapd: already in the template.'])
+    expect(plan.skipped.map((s) => s.message)).toEqual(['snapd: already unpinned.', 'snapd: already in the template.'])
   })
 
   it('removes template and added packages, and puts back a removed one', () => {
@@ -97,7 +97,7 @@ describe('planAIEdits', () => {
       { kind: 'remove-added', name: 'docker.io' },
       { kind: 'restore', name: 'snapd' },
     ])
-    expect(plan.skipped).toEqual(['vim: not in the template, so there is nothing to remove.'])
+    expect(plan.skipped.map((s) => s.message)).toEqual(['vim: not in the template, so there is nothing to remove.'])
   })
 
   it('pinning a removed template package puts it back first', () => {
@@ -115,9 +115,9 @@ describe('planAIEdits', () => {
 
   it("won't resize a template without a disk layout, or to a non-size", () => {
     expect(planAIEdits([edit('set_disk_size', '', '', '32GiB')], ctx({ diskSize: null })).skipped).toEqual([
-      'Disk size: this template has no disk layout to resize.',
+      { message: 'Disk size: this template has no disk layout to resize.' },
     ])
-    expect(planAIEdits([edit('set_disk_size', '', '', 'big')], ctx()).skipped[0]).toMatch(/not a size/)
+    expect(planAIEdits([edit('set_disk_size', '', '', 'big')], ctx()).skipped[0].message).toMatch(/not a size/)
   })
 })
 
