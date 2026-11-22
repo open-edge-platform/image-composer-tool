@@ -23,9 +23,11 @@ export interface Capabilities {
 
 // One edit Ask AI suggests (POST /ai/template-edits). add, remove and
 // set_version use package (and version; empty unpins); set_disk_size and
-// set_image_name use value. Unused fields are empty.
+// set_image_name use value. pin_latest pins package to its newest version
+// or, with package empty, every package from the repository value names in
+// the user's words. Unused fields are empty.
 export interface TemplateEdit {
-  op: 'add' | 'remove' | 'set_version' | 'set_disk_size' | 'set_image_name'
+  op: 'add' | 'remove' | 'set_version' | 'pin_latest' | 'set_disk_size' | 'set_image_name'
   package: string
   version: string
   value: string

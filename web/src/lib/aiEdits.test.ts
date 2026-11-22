@@ -35,6 +35,11 @@ const ctx = (over: Partial<AIEditContext> = {}): AIEditContext => ({
   },
   lookupComplete: true,
   diskSize: '16GiB',
+  repos: [
+    { id: 'ubuntu', displayName: 'Ubuntu 26.04 Base', url: 'http://archive.ubuntu.com/ubuntu' },
+    { id: 'nvl-ppa', displayName: 'ppa.launchpadcontent.net', url: 'https://ppa.launchpadcontent.net/intel/nvl/ubuntu' },
+    { id: 'docker', displayName: 'Docker CE', url: 'https://download.docker.com/linux/ubuntu' },
+  ],
   ...over,
 })
 
@@ -121,6 +126,68 @@ describe('planAIEdits', () => {
   })
 })
 
+describe('planAIEdits pin_latest', () => {
+  // The NVL PPA at priority 600, over Ubuntu (500) and under oneAPI (900).
+  const ppaCtx = () =>
+    ctx({
+      basePackages: [
+        'linux-image-7.3-intel_261014t080608z-resolute1',
+        'libnss-libvirt',
+        'snapd',
+        'mesa_1.0',
+        'gone',
+        'vpl',
+      ],
+      added: [{ name: 'htop-ppa', version: '', repo: 'nvl-ppa' }],
+      removed: ['gone'],
+      checkedRepos: new Set(['ubuntu', 'nvl-ppa', 'oneapi']),
+      priorities: { 'nvl-ppa': 600, oneapi: 900 },
+      found: {
+        'linux-image-7.3-intel': hit('linux-image-7.3-intel', ['261101t000000z-resolute1', 'nvl-ppa'], ['261014t080608z-resolute1', 'nvl-ppa']),
+        'libnss-libvirt': hit('libnss-libvirt', ['5.8', 'ubuntu'], ['5.7~ppa', 'nvl-ppa']),
+        snapd: hit('snapd', ['2.66', 'ubuntu']),
+        mesa: hit('mesa', ['2.0', 'nvl-ppa']),
+        gone: hit('gone', ['1.0', 'nvl-ppa']),
+        vpl: hit('vpl', ['2.0', 'oneapi'], ['1.0', 'nvl-ppa']),
+        'htop-ppa': hit('htop-ppa', ['3.0', 'nvl-ppa']),
+      },
+    })
+
+  it('pins what comes from the named repository, by the Update to latest version rules', () => {
+    const plan = planAIEdits([edit('pin_latest', '', '', 'ppa')], ppaCtx())
+    expect(plan.apply.map((e) => e.kind === 'package' && `${e.pkg.name} ${e.pkg.version} ${e.pkg.repo}`)).toEqual([
+      'htop-ppa 3.0 nvl-ppa',
+      'linux-image-7.3-intel 261101t000000z-resolute1 nvl-ppa',
+      // Unpinned, and the PPA outranks Ubuntu, so a build installs the PPA's.
+      'libnss-libvirt 5.7~ppa nvl-ppa',
+    ])
+    expect(plan.skipped.map((s) => s.message)).toEqual([
+      "Kept 1 template pin(s) as they are (mesa): ppa.launchpadcontent.net doesn't publish the pinned version.",
+      'Kept 1 unpinned (vpl): a build installs them from another repository.',
+    ])
+  })
+
+  it('asks which repository when the words match several, or none', () => {
+    const c = ctx({ checkedRepos: new Set() })
+    expect(planAIEdits([edit('pin_latest', '', '', 'ubuntu')], c).skipped[0].message).toMatch(/matches 3 repositories/)
+    expect(planAIEdits([edit('pin_latest', '', '', 'gentoo')], c).skipped[0].message).toBe('No repository matches "gentoo".')
+  })
+
+  it('pins nothing when a repository could not be read', () => {
+    const plan = planAIEdits([edit('pin_latest', '', '', 'ppa')], { ...ppaCtx(), lookupComplete: false })
+    expect(plan.apply).toEqual([])
+    expect(plan.skipped[0].message).toMatch(/Couldn't read every repository/)
+  })
+
+  it('pins one package to the newest version where a build gets it', () => {
+    const plan = planAIEdits([edit('pin_latest', 'libnss-libvirt'), edit('pin_latest', 'snapd')], ppaCtx())
+    expect(plan.apply).toEqual([
+      { kind: 'package', pkg: { name: 'libnss-libvirt', version: '5.7~ppa', repo: 'nvl-ppa' }, enableRepo: undefined },
+      { kind: 'package', pkg: { name: 'snapd', version: '2.66', repo: 'ubuntu' }, enableRepo: undefined },
+    ])
+  })
+})
+
 describe('helpers', () => {
   it('normalizeDiskSize', () => {
     expect(normalizeDiskSize('32G')).toBe('32GiB')
@@ -131,6 +198,7 @@ describe('helpers', () => {
   })
 
   it('editPackageNames lists each package once', () => {
-    expect(editPackageNames([edit('add', 'a'), edit('remove', 'a'), edit('set_disk_size', '', '', '1G')])).toEqual(['a'])
+    expect(editPackageNames([edit('add', 'a'), edit('remove', 'a'), edit('set_disk_size', '', '', '1G')], () => ['x'])).toEqual(['a'])
+    expect(editPackageNames([edit('pin_latest', '', '', 'ppa')], () => ['x', 'y'])).toEqual(['x', 'y'])
   })
 })

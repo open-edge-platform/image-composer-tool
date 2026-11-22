@@ -46,6 +46,8 @@ interface Outcome {
 }
 
 const MAX_ALTERNATIVES = 3
+// A whole repository's pins can be dozens of lines; the rail lists them all.
+const MAX_APPLIED_LISTED = 6
 
 export function AskAI({ os, templateText, basePackages, templateRepos, templateOnlyRepos, overlay }: AskAIProps) {
   const [request, setRequest] = useState('')
@@ -58,7 +60,13 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
   // checked can still be picked (and that repository turned on), as picking
   // a search hit does.
   const runEdits = async (edits: TemplateEdit[]): Promise<{ applied: string[]; skipped: Skipped[] }> => {
-    const names = editPackageNames(edits)
+    const names = editPackageNames(edits, () => {
+      const state = useStore.getState()
+      return [
+        ...basePackages.map((e) => packageEntryName(e)).filter((n): n is string => !!n),
+        ...state.addedPackages.map((p) => p.name),
+      ]
+    })
     let repos: PackageRepo[] = []
     let found: Record<string, PackageSearchResult> = {}
     let lookupComplete = true
@@ -90,6 +98,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
       found,
       lookupComplete,
       diskSize: state.disk && (overlay || state.disk.size) ? state.disk.size : null,
+      repos,
     })
     const labelOf = (id: string) => repos.find((r) => r.id === id)?.displayName ?? id
     const applied = applyPlan(plan.apply, labelOf, new Set(basePackages.map((e) => packageEntryName(e))))
@@ -198,7 +207,12 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
         <div className="mt-2 space-y-1 text-xs" aria-live="polite">
           {outcome.note && <p className="text-slate-700">AI: {outcome.note}</p>}
           {outcome.applied.length > 0 ? (
-            <p className="text-emerald-800">Applied: {outcome.applied.join('; ')}.</p>
+            <p className="text-emerald-800">
+              Applied:{' '}
+              {outcome.applied.length > MAX_APPLIED_LISTED
+                ? `${outcome.applied.slice(0, MAX_APPLIED_LISTED).join('; ')}; and ${outcome.applied.length - MAX_APPLIED_LISTED} more (see the Changes rail).`
+                : `${outcome.applied.join('; ')}.`}
+            </p>
           ) : (
             <p className="text-slate-600">No changes were applied.</p>
           )}

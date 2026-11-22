@@ -26,9 +26,13 @@ type TemplateEditor interface {
 // Template edit operations. The browser checks and applies each one the way
 // it applies the same edit made by hand.
 const (
-	EditAdd          = "add"            // add Package, at Version if set
-	EditRemove       = "remove"         // remove Package
-	EditSetVersion   = "set_version"    // pin Package to Version; empty unpins
+	EditAdd        = "add"         // add Package, at Version if set
+	EditRemove     = "remove"      // remove Package
+	EditSetVersion = "set_version" // pin Package to Version; empty unpins
+	// EditPinLatest pins Package to its newest version or, with Package
+	// empty, every package from the repository Value names, as the Packages
+	// step's "Update to latest version" does for the repository it browses.
+	EditPinLatest    = "pin_latest"
 	EditSetDiskSize  = "set_disk_size"  // disk size Value, such as 32GiB
 	EditSetImageName = "set_image_name" // image name Value
 )
@@ -78,7 +82,7 @@ var templateEditSchema = map[string]any{
 				"properties": map[string]any{
 					"op": map[string]any{
 						"type": "string",
-						"enum": []string{EditAdd, EditRemove, EditSetVersion, EditSetDiskSize, EditSetImageName},
+						"enum": []string{EditAdd, EditRemove, EditSetVersion, EditPinLatest, EditSetDiskSize, EditSetImageName},
 					},
 					"package": map[string]any{"type": "string"},
 					"version": map[string]any{"type": "string"},
@@ -95,6 +99,7 @@ The user describes changes to the template they are editing. Answer only with th
 - add: add the package named in "package". Leave "version" empty unless the user gave one.
 - remove: remove the package named in "package".
 - set_version: pin "package" to "version"; an empty "version" unpins it.
+- pin_latest: pin "package" to its newest version; the editor looks the version up. With "package" empty, pin every package that comes from one repository, named in "value" in the user's words (such as "ppa", "intel" or part of its URL).
 - set_disk_size: set the disk size to "value", such as "32GiB".
 - set_image_name: set the image name to "value".
 Use real package names for the template's distribution, preferably from its own repositories. Never invent versions.
@@ -193,6 +198,11 @@ func validEdit(e TemplateEdit) bool {
 	switch e.Op {
 	case EditAdd, EditRemove, EditSetVersion:
 		return packageNameRE.MatchString(e.Package) && !strings.ContainsAny(e.Version, " \t\n")
+	case EditPinLatest:
+		if e.Package != "" {
+			return packageNameRE.MatchString(e.Package)
+		}
+		return e.Value != "" && !strings.ContainsAny(e.Value, "\n")
 	case EditSetDiskSize, EditSetImageName:
 		return e.Value != "" && !strings.ContainsAny(e.Value, "\n")
 	}

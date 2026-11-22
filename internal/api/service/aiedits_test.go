@@ -146,3 +146,20 @@ func TestSessionAI(t *testing.T) {
 		t.Error("ai without authoring")
 	}
 }
+
+func TestSuggestTemplateEditsPinLatest(t *testing.T) {
+	f := &fakeEditor{answer: `{"note":"","unsupported":[],"edits":[
+		{"op":"pin_latest","package":"","version":"","value":"ppa"},
+		{"op":"pin_latest","package":"htop","version":"","value":""},
+		{"op":"pin_latest","package":"","version":"","value":""}]}`}
+	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "pin the ppa packages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Edits) != 2 || got.Edits[0].Value != "ppa" || got.Edits[1].Package != "htop" {
+		t.Errorf("edits = %+v, want the repository and the package pin_latest, not the empty one", got.Edits)
+	}
+	if !strings.Contains(templateEditPrompt, "pin_latest") {
+		t.Error("the prompt doesn't offer pin_latest")
+	}
+}

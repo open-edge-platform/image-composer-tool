@@ -58,7 +58,7 @@ export function planTemplateUpdates(
 // (curl_8.5.0-2 for 1:8.5.0-2); the resolvers accept that, so it matches here.
 // A pin that names an epoch matches only that exact version: 2:1.0-1 and
 // 1:1.0-1 are different versions, and the epoch decides which is newer.
-function sameVersion(published: string, pinned: string): boolean {
+export function sameVersion(published: string, pinned: string): boolean {
   if (published === pinned) return true
   return !/^\d+:/.test(pinned) && published.replace(/^\d+:/, '') === pinned
 }
