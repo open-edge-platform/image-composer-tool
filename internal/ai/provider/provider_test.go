@@ -3,8 +3,11 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -216,5 +219,94 @@ func TestOpenAIProviderBaseURL(t *testing.T) {
 				t.Errorf("baseURL = %q, want %q", p.baseURL, tt.want)
 			}
 		})
+	}
+}
+
+func TestOpenAIProviderModelEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("OPENAI_MODEL", "gpt-5.4-mini")
+	p, err := NewOpenAIProvider("", "e", "gpt-4o-mini", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.chatModel != "gpt-5.4-mini" {
+		t.Errorf("chatModel = %q, want OPENAI_MODEL's", p.chatModel)
+	}
+}
+
+func TestOpenAIProviderKeyFileIsReadPerRequest(t *testing.T) {
+	var got []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"}}]}`))
+	}))
+	defer server.Close()
+
+	keyFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(keyFile, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY_FILE", keyFile)
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+	p, err := NewOpenAIProvider("", "e", "c", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := p.ChatJSON(ctx, nil, "x", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ChatJSON(ctx, nil, "x", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "Bearer first" || got[1] != "Bearer second" {
+		t.Errorf("Authorization headers = %q, want the file's key at each request", got)
+	}
+
+	t.Setenv("OPENAI_API_KEY_FILE", filepath.Join(t.TempDir(), "missing"))
+	if _, err := NewOpenAIProvider("", "e", "c", time.Second); err == nil {
+		t.Error("expected an error for a missing key file")
+	}
+}
+
+func TestOpenAIProviderChatJSON(t *testing.T) {
+	var body map[string]any
+	status := http.StatusOK
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(status)
+		if status != http.StatusOK {
+			_, _ = w.Write([]byte(`{"error":{"message":"token expired"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"edits\":[]}"}}]}`))
+	}))
+	defer server.Close()
+
+	p := newOpenAIProviderWithConfig("k", "e", "gpt-5.4-mini", server.URL+"/v1", 10*time.Second)
+	schema := map[string]any{"type": "object"}
+	got, err := p.ChatJSON(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, "edits", schema)
+	if err != nil || got != `{"edits":[]}` {
+		t.Fatalf("ChatJSON = %q, %v", got, err)
+	}
+	rf, _ := body["response_format"].(map[string]any)
+	js, _ := rf["json_schema"].(map[string]any)
+	if rf["type"] != "json_schema" || js["name"] != "edits" || js["strict"] != true {
+		t.Errorf("response_format = %v", body["response_format"])
+	}
+	if _, ok := body["temperature"]; ok {
+		t.Error("temperature sent; some GNAI models accept only the default")
+	}
+
+	status = http.StatusUnauthorized
+	_, err = p.ChatJSON(context.Background(), nil, "edits", schema)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || !apiErr.Unauthorized() || apiErr.Message != "token expired" {
+		t.Errorf("error = %v, want an unauthorized APIError", err)
 	}
 }

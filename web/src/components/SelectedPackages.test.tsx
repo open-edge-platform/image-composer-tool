@@ -44,12 +44,31 @@ const repos: PackageRepo[] = [
 ]
 
 beforeEach(() => {
-  useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [] })
+  useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [], aiPackages: {} })
   mockApi.searchPackages.mockReset()
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
 })
 
 describe('SelectedPackages', () => {
+  it('tags the changes Ask AI made, while they stay as it made them', () => {
+    const baseLock = {
+      info: (name: string) => ({ locked: name === 'snapd', currentIsFloating: true }),
+      ensureResolved: () => {},
+      concreteNames: ['snapd'],
+    } as unknown as BaseLock
+    const docker = { name: 'docker.io', version: '', repo: 'base' }
+    useStore.getState().setPackage(docker)
+    useStore.getState().setPackage({ name: 'htop', version: '3.3', repo: 'base' })
+    useStore.getState().setPackageRemoved('snapd', true)
+    useStore.getState().markAIPackages({ 'docker.io': docker, snapd: 'removed' })
+
+    render(<Selected repos={repos} baseLock={baseLock} authoring />)
+    expect(screen.getAllByTitle('Suggested by Ask AI')).toHaveLength(2)
+
+    act(() => useStore.getState().setPackage({ name: 'docker.io', version: '27.5.1', repo: 'base' }))
+    expect(screen.getAllByTitle('Suggested by Ask AI')).toHaveLength(1)
+  })
+
   it('lists only added packages, with their count, and none of the template’s own', () => {
     useStore.getState().setPackage({ name: 'vim', version: '9.2', repo: 'base' })
     render(<Selected repos={repos} />)

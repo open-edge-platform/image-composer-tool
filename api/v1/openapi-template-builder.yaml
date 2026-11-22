@@ -360,6 +360,62 @@ paths:
                 $ref: "#/components/schemas/Error"
 
   # ─────────────────────────────────────────────────────────────────────
+  # AI (Author mode)
+  # ─────────────────────────────────────────────────────────────────────
+
+  /ai/template-edits:
+    post:
+      tags: [Templates]
+      operationId: suggestTemplateEdits
+      summary: Ask the AI service for edits to a template
+      description: |
+        Sends the template, with passwords, SSH keys, tokens and secrets
+        removed, and the user's request to the configured OpenAI-compatible
+        service, and returns the edits it suggests. The edits are not checked
+        here: the UI checks each one against the repositories the user has
+        checked before applying it. Needs the `ai` capability.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemplateEditsRequest"
+      responses:
+        "200":
+          description: The suggested edits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateEditSuggestion"
+        "400":
+          description: Empty or too long request, or a template that isn't YAML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The ai capability is not granted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: |
+            The AI service failed. `AI_UNAUTHORIZED` means it rejected the
+            token, which may have expired; `AI_BAD_RESPONSE` that its answer
+            was not in the expected format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "504":
+          description: The AI service took too long to answer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ─────────────────────────────────────────────────────────────────────
   # Template composition
   # ─────────────────────────────────────────────────────────────────────
 
@@ -799,13 +855,65 @@ components:
 
     Capabilities:
       type: object
-      required: [authoring]
+      required: [authoring, ai]
       properties:
         authoring:
           type: boolean
           description: |
             The Advanced tab may offer Author mode, which edits a whole
             template. Set by `serve --enable-authoring`.
+        ai:
+          type: boolean
+          description: |
+            Author mode may offer Ask AI (`POST /ai/template-edits`). Set by
+            `serve --enable-ai`, which needs `--enable-authoring` too.
+
+    TemplateEditsRequest:
+      type: object
+      required: [templateYaml, request]
+      properties:
+        templateYaml:
+          type: string
+          description: The template being edited, with the user's changes so far.
+        request:
+          type: string
+          maxLength: 2000
+          description: What to change, in the user's words.
+
+    TemplateEdit:
+      type: object
+      description: |
+        One suggested change. `add`, `remove` and `set_version` use `package`
+        (and `version`; empty unpins); `set_disk_size` and `set_image_name`
+        use `value`. Unused fields are empty.
+      required: [op, package, version, value]
+      properties:
+        op:
+          type: string
+          enum: [add, remove, set_version, set_disk_size, set_image_name]
+        package:
+          type: string
+        version:
+          type: string
+        value:
+          type: string
+
+    TemplateEditSuggestion:
+      type: object
+      required: [note, edits, unsupported]
+      properties:
+        note:
+          type: string
+          description: A short summary for the user.
+        edits:
+          type: array
+          items:
+            $ref: "#/components/schemas/TemplateEdit"
+        unsupported:
+          type: array
+          description: What was asked for that these edits can't express.
+          items:
+            type: string
 
     Target:
       type: object

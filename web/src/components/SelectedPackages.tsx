@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
-import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
+import { useStore, confirmRepoRelease, isAIChange, type AddedPackage } from '../store'
 import type { PackageRepo } from '../api/types'
 import type { VersionResolver } from '../lib/useVersionResolver'
 import type { BaseLock } from '../lib/baseLock'
@@ -56,6 +56,9 @@ export function SelectedPackages({
   const storedRemovals = useStore((s) => s.removedPackages)
   const setPackageRemoved = useStore((s) => s.setPackageRemoved)
   const clearRemovedPackages = useStore((s) => s.clearRemovedPackages)
+  // Which changes Ask AI made, for the AI tag (see isAIChange).
+  const aiPackages = useStore((s) => s.aiPackages)
+  const fromAI = (name: string) => isAIChange({ aiPackages, addedPackages: picks, removedPackages: storedRemovals }, name)
   const inTemplate = (name: string) => !!baseLock?.info(name).locked
   const addedPackages = picks.filter((p) => !inTemplate(p.name))
   const modified = picks.filter((p) => inTemplate(p.name))
@@ -155,6 +158,7 @@ export function SelectedPackages({
                       >
                         {p.name}
                       </span>
+                      {fromAI(p.name) && <AITag />}
                       {p.version === '' ? (
                         liveResolved[p.name] ? (
                           <VersionBadge
@@ -192,7 +196,7 @@ export function SelectedPackages({
           {modified.length > 0 && (
             <Section title={`Modified (${modified.length})`}>
               {modified.map((p) => (
-                <Item key={p.name} name={p.name} onUndo={() => undo(p.name)} undoLabel={`Undo change to ${p.name}`}>
+                <Item key={p.name} name={p.name} ai={fromAI(p.name)} onUndo={() => undo(p.name)} undoLabel={`Undo change to ${p.name}`}>
                   <span
                     className="shrink-0 font-mono text-[10px] text-slate-500"
                     title={`Template: ${templateVersion(p.name)} · Yours: ${p.version || 'unpinned'}`}
@@ -210,6 +214,7 @@ export function SelectedPackages({
                   key={name}
                   name={name}
                   struck
+                  ai={fromAI(name)}
                   onUndo={() => setPackageRemoved(name, false)}
                   undoLabel={`Put back ${name}`}
                 />
@@ -235,12 +240,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Item({
   name,
   struck = false,
+  ai = false,
   onUndo,
   undoLabel,
   children,
 }: {
   name: string
   struck?: boolean
+  ai?: boolean
   onUndo: () => void
   undoLabel: string
   children?: ReactNode
@@ -253,6 +260,7 @@ function Item({
       >
         {name}
       </span>
+      {ai && <AITag />}
       {children}
       <button
         type="button"
@@ -285,6 +293,18 @@ function VersionBadge({ version, floating, title }: { version: string; floating:
       >
         {version}
       </span>
+    </span>
+  )
+}
+
+// Marks a change Ask AI made.
+function AITag() {
+  return (
+    <span
+      title="Suggested by Ask AI"
+      className="shrink-0 rounded bg-violet-100 px-1 text-[9px] font-bold uppercase tracking-[0.5px] text-violet-800"
+    >
+      AI
     </span>
   )
 }

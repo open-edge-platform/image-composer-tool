@@ -54,6 +54,11 @@ type Config struct {
 	// offers Author mode, which edits a whole template. Later, a user's role
 	// will grant it instead.
 	Authoring bool
+	// AI, when set, grants the ai capability: Author mode offers Ask AI, which
+	// asks this service for template edits. AITokenURL is where a user gets a
+	// new token when the service rejects the one the server has.
+	AI         TemplateEditor
+	AITokenURL string
 	// PkgIndex tunes the package-index cache SearchPackages reads through. A
 	// zero value is usable; see pkgindex.Config for its defaults.
 	PkgIndex pkgindex.Config

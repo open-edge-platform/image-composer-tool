@@ -32,5 +32,6 @@ image-templates/.ict-adv-*.yml
 # they are based on while a compose runs.
 image-templates/**/.ict-open-*.yml
 
-# GitHub token for docker-compose.yml's oep_installer_token secret
+# Tokens for docker-compose.yml's oep_installer_token and ai_token secrets
 /oep-installer-token
+/ai-token

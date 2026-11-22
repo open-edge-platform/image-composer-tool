@@ -25,6 +25,7 @@ import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 import { applyAuthorEdits, authoringProblem, basedOnOf } from '../lib/authorTemplate'
 import { openFile, type SavedFile } from '../lib/saveFile'
 import { AuthorReview } from './AuthorReview'
+import { AskAI } from './AskAI'
 import { parse as parseYaml } from 'yaml'
 import { useBaseLock } from '../lib/baseLock'
 import { overlayIncompatiblePackages, strandedPackages } from '../lib/edgepack'
@@ -78,6 +79,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
   const advancedMode = useStore((s) => s.advancedMode)
+  const capabilities = useStore((s) => s.capabilities)
   const removedPackages = useStore((s) => s.removedPackages)
 
   const [step, setStep] = useState(0)
@@ -496,6 +498,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const author = advancedMode === 'author'
   const authorProblem = author && composed ? authoringProblem(composed.templateYaml) : null
   const authoring = author && !!composed?.templateYaml && !authorProblem
+  const aiOffered = authoring && !!capabilities.ai
   // The file saved last, kept while the same template stays selected.
   const [authorSaved, setAuthorSaved] = useState<{ template: string; file: SavedFile; text: string } | null>(null)
   const authorEdit = useMemo((): { text: string; baseline: string } | { error: string } | null => {
@@ -626,6 +629,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       <AdvancedModeSwitch />
       {authorProblem && (
         <p className="mx-auto mb-4 max-w-3xl rounded bg-amber-50 p-3 text-sm text-amber-800">{authorProblem}</p>
+      )}
+      {aiOffered && composed && authorEdit && 'text' in authorEdit && (
+        <AskAI
+          os={selection.os}
+          templateText={authorEdit.text}
+          basePackages={composed.basePackages ?? []}
+          templateRepos={lastTemplateRepos}
+          templateOnlyRepos={lastTemplateOnlyRepos}
+          overlay={overlay}
+        />
       )}
 
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}

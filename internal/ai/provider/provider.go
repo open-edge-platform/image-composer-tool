@@ -197,7 +197,11 @@ const DefaultOpenAIBaseURL = "https://api.openai.com/v1"
 
 // OpenAIProvider implements EmbeddingProvider and ChatProvider using OpenAI API.
 type OpenAIProvider struct {
-	apiKey         string
+	apiKey string
+	// apiKeyFile, when set, holds the key instead of apiKey. It is read on
+	// every request, so a short-lived token (such as a GNAI SSO token) can be
+	// replaced without restarting.
+	apiKeyFile     string
 	embeddingModel string
 	chatModel      string
 	client         *http.Client
@@ -208,20 +212,62 @@ type OpenAIProvider struct {
 // NewOpenAIProvider creates a new OpenAI provider. baseURL is the API root
 // including /v1. The OPENAI_BASE_URL environment variable overrides it, the
 // way OPENAI_API_KEY supplies the key; if both are empty it is
-// DefaultOpenAIBaseURL.
+// DefaultOpenAIBaseURL. OPENAI_MODEL likewise overrides chatModel.
+//
+// The key is OPENAI_API_KEY, or else the contents of the file
+// OPENAI_API_KEY_FILE names, read again for every request.
 func NewOpenAIProvider(baseURL, embeddingModel, chatModel string, timeout time.Duration) (*OpenAIProvider, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
+	keyFile := ""
 	if apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY environment variable is not set")
+		keyFile = os.Getenv("OPENAI_API_KEY_FILE")
+		if keyFile == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY environment variable is not set")
+		}
+		if _, err := readKeyFile(keyFile); err != nil {
+			return nil, err
+		}
 	}
 	if env := os.Getenv("OPENAI_BASE_URL"); env != "" {
 		baseURL = env
+	}
+	if env := os.Getenv("OPENAI_MODEL"); env != "" {
+		chatModel = env
 	}
 	if baseURL == "" {
 		baseURL = DefaultOpenAIBaseURL
 	}
 
-	return newOpenAIProviderWithConfig(apiKey, embeddingModel, chatModel, strings.TrimRight(baseURL, "/"), timeout), nil
+	p := newOpenAIProviderWithConfig(apiKey, embeddingModel, chatModel, strings.TrimRight(baseURL, "/"), timeout)
+	p.apiKeyFile = keyFile
+	return p, nil
+}
+
+// readKeyFile reads an API key file, trimming the newline an editor or
+// `echo` leaves.
+func readKeyFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading OPENAI_API_KEY_FILE: %w", err)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("OPENAI_API_KEY_FILE %s is empty", path)
+	}
+	return key, nil
+}
+
+// authorize sets the request's bearer token.
+func (p *OpenAIProvider) authorize(req *http.Request) error {
+	key := p.apiKey
+	if p.apiKeyFile != "" {
+		var err error
+		if key, err = readKeyFile(p.apiKeyFile); err != nil {
+			return err
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	return nil
 }
 
 // newOpenAIProviderWithConfig creates an OpenAI provider with explicit configuration (for testing).
@@ -282,7 +328,9 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if err := p.authorize(req); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -360,7 +408,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if err := p.authorize(req); err != nil {
+		return "", err
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -381,5 +431,85 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 		return "", fmt.Errorf("no response from OpenAI")
 	}
 
+	return chatResp.Choices[0].Message.Content, nil
+}
+
+// APIError is an error status from an OpenAI-compatible service.
+type APIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("OpenAI API error (HTTP %d): %s", e.StatusCode, e.Message)
+}
+
+// Unauthorized reports whether the service rejected the API key, as it does
+// once a short-lived token expires.
+func (e *APIError) Unauthorized() bool {
+	return e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden
+}
+
+// ChatJSON sends a chat request whose answer must be JSON matching schema
+// (response_format json_schema, strict), and returns that JSON. name labels
+// the schema for the service.
+func (p *OpenAIProvider) ChatJSON(ctx context.Context, messages []ChatMessage, name string, schema map[string]any) (string, error) {
+	reqBody := map[string]any{
+		"model":    p.chatModel,
+		"messages": messages,
+		"response_format": map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   name,
+				"strict": true,
+				"schema": schema,
+			},
+		},
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := p.authorize(req); err != nil {
+		return "", err
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to call OpenAI API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+	var chatResp openAIChatResponse
+	decodeErr := json.Unmarshal(body, &chatResp)
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(body))
+		if decodeErr == nil && chatResp.Error != nil {
+			msg = chatResp.Error.Message
+		}
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+		return "", &APIError{StatusCode: resp.StatusCode, Message: msg}
+	}
+	if decodeErr != nil {
+		return "", fmt.Errorf("failed to decode response: %w", decodeErr)
+	}
+	if chatResp.Error != nil {
+		return "", &APIError{StatusCode: resp.StatusCode, Message: chatResp.Error.Message}
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no response from OpenAI")
+	}
 	return chatResp.Choices[0].Message.Content, nil
 }

@@ -24,3 +24,6 @@ dist
 web/node_modules
 web/dist
 image-templates/.ict-adv-*.yml
+# Tokens for docker-compose.yml's secrets: mounted at run time, never built in.
+/oep-installer-token
+/ai-token

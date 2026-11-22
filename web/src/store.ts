@@ -135,6 +135,11 @@ interface AppState {
   // Template packages removed in Author mode, by name. Customize can't remove
   // anything (its changes are layered on the template), so it ignores these.
   removedPackages: string[]
+  // Package changes Ask AI made, by name: the pick it made, or 'removed'. The
+  // Changes rail tags a change "AI" only while it is still exactly this, so a
+  // hand edit after it, or an undo, drops the tag without bookkeeping.
+  aiPackages: Record<string, AddedPackage | 'removed'>
+  markAIPackages: (changes: Record<string, AddedPackage | 'removed'>) => void
   setPackageRemoved: (name: string, removed: boolean) => void
   clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
@@ -193,6 +198,8 @@ export const useStore = create<AppState>((set) => ({
   diskEdited: false,
   diskSeed: null,
   removedPackages: [],
+  aiPackages: {},
+  markAIPackages: (changes) => set((state) => ({ aiPackages: { ...state.aiPackages, ...changes } })),
   setPackageRemoved: (name, removed) =>
     set((state) => ({
       removedPackages: removed
@@ -338,6 +345,19 @@ export const useStore = create<AppState>((set) => ({
 }))
 
 // selectionChanged is the state after the selection becomes `selection`.
+// isAIChange reports whether name's change in the Changes rail is still the
+// one Ask AI made.
+export function isAIChange(
+  state: Pick<AppState, 'aiPackages' | 'addedPackages' | 'removedPackages'>,
+  name: string,
+): boolean {
+  const change = state.aiPackages[name]
+  if (!change) return false
+  if (change === 'removed') return state.removedPackages.includes(name)
+  const now = state.addedPackages.find((p) => p.name === name)
+  return !!now && now.version === change.version && now.repo === change.repo
+}
+
 function selectionChanged(state: AppState, selection: Selection): Partial<AppState> {
   // Any selection change resolves to a (possibly) different template, so let
   // the image name re-track the new default until edited again.
