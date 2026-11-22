@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ai"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/cache"
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
+	globalconfig "github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/spf13/cobra"
 )
@@ -53,12 +56,17 @@ Examples:
 
 Configuration:
   The AI feature uses sensible defaults. If Ollama is running locally, no configuration
-  is needed. For OpenAI, set the OPENAI_API_KEY environment variable.
+  is needed. For OpenAI or an OpenAI-compatible service such as GNAI, set the
+  OPENAI_API_KEY environment variable.
 
   Optional configuration in image-composer-tool.yml:
     ai:
       provider: ollama  # or "openai"
       templates_dir: ./image-templates
+      openai:
+        base_url: https://gnai.intel.com/api/providers/openai/v1  # or OPENAI_BASE_URL
+        chat_model: gpt-5.4-mini
+        embedding_model: text-embedding-3-large
 `,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runAICommand,
@@ -77,8 +85,11 @@ Configuration:
 func runAICommand(cmd *cobra.Command, args []string) error {
 	log := logger.Logger()
 
-	// Build configuration
-	config := ai.DefaultConfig()
+	// Build configuration: the ai section of image-composer-tool.yml, then flags.
+	config, err := aiConfigFromGlobal(globalconfig.Global().AI)
+	if err != nil {
+		return err
+	}
 
 	// Apply command-line overrides
 	if aiProvider != "" {
@@ -87,6 +98,7 @@ func runAICommand(cmd *cobra.Command, args []string) error {
 	if aiTemplatesDir != "" {
 		config.TemplatesDir = aiTemplatesDir
 	}
+	config = config.Merge(ai.DefaultConfig())
 
 	// Handle cache-stats command
 	if aiCacheStats {
@@ -126,6 +138,52 @@ func runAICommand(cmd *cobra.Command, args []string) error {
 	}
 
 	return runGenerate(engine, query, config.TemplatesDir)
+}
+
+// aiConfigFromGlobal turns the ai section of image-composer-tool.yml into an
+// ai.Config. Unset fields stay empty, for Merge to fill with defaults.
+// cache.enabled can't be told apart from unset, so the cache stays on.
+func aiConfigFromGlobal(g globalconfig.AIConfig) (ai.Config, error) {
+	c := ai.Config{
+		Provider:     ai.ProviderType(g.Provider),
+		TemplatesDir: g.TemplatesDir,
+		Ollama: ai.OllamaConfig{
+			BaseURL:        g.Ollama.BaseURL,
+			Model:          g.Ollama.ChatModel,
+			EmbeddingModel: g.Ollama.EmbeddingModel,
+		},
+		OpenAI: ai.OpenAIConfig{
+			BaseURL:        g.OpenAI.BaseURL,
+			Model:          g.OpenAI.ChatModel,
+			EmbeddingModel: g.OpenAI.EmbeddingModel,
+		},
+		Cache: ai.CacheConfig{Enabled: true, Dir: g.Cache.Dir},
+		Scoring: ai.ScoringConfig{
+			Semantic: g.Scoring.SemanticWeight,
+			Keyword:  g.Scoring.KeywordWeight,
+			Package:  g.Scoring.PackageWeight,
+		},
+	}
+	var err error
+	if c.Ollama.Timeout, err = timeoutSeconds("ai.ollama.timeout", g.Ollama.Timeout); err != nil {
+		return ai.Config{}, err
+	}
+	if c.OpenAI.Timeout, err = timeoutSeconds("ai.openai.timeout", g.OpenAI.Timeout); err != nil {
+		return ai.Config{}, err
+	}
+	return c, nil
+}
+
+// timeoutSeconds parses a duration such as "120s"; empty is 0 (the default).
+func timeoutSeconds(field, value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d < time.Second {
+		return 0, fmt.Errorf("%s: %q is not a duration of at least 1s, such as \"60s\"", field, value)
+	}
+	return int(d / time.Second), nil
 }
 
 func runSearch(engine *rag.Engine, query string) error {
@@ -281,19 +339,13 @@ func showCacheStats(config ai.Config) error {
 		return nil
 	}
 
-	// Create a temporary engine just to get cache stats
-	engine, err := rag.NewEngine(config)
+	// Read the cache directly: no AI service, and so no API key, is needed.
+	c, err := cache.NewCache(config.Cache.Dir)
 	if err != nil {
-		return fmt.Errorf("failed to create engine: %w", err)
+		return fmt.Errorf("failed to open cache: %w", err)
 	}
 
-	stats := engine.GetStats()
-	if stats.CacheStats == nil {
-		fmt.Println("Cache is empty.")
-		return nil
-	}
-
-	cs := stats.CacheStats
+	cs := c.Stats()
 	fmt.Println("Cache Statistics:")
 	fmt.Printf("  Entries: %d\n", cs.EntryCount)
 	fmt.Printf("  Total Size: %.2f KB\n", float64(cs.TotalSize)/1024)
@@ -310,12 +362,12 @@ func clearCache(config ai.Config) error {
 		return nil
 	}
 
-	engine, err := rag.NewEngine(config)
+	c, err := cache.NewCache(config.Cache.Dir)
 	if err != nil {
-		return fmt.Errorf("failed to create engine: %w", err)
+		return fmt.Errorf("failed to open cache: %w", err)
 	}
 
-	if err := engine.ClearCache(); err != nil {
+	if err := c.Clear(); err != nil {
 		return fmt.Errorf("failed to clear cache: %w", err)
 	}
 

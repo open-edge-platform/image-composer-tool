@@ -160,3 +160,31 @@ func StopGPGComponents(chrootPath string) error {
 
 	return nil
 }
+
+// QemuUserPackage returns the package that provides qemu user-mode emulation
+// and binfmt registration on the host. Ubuntu 26.04 and later no longer ship
+// qemu-user-static; it is only a virtual package there, provided by
+// qemu-user-binfmt, so "apt install qemu-user-static" has no installation
+// candidate. Older releases and Debian still use qemu-user-static.
+//
+// qemu-user-binfmt is chosen only on an apt host where apt itself reports that
+// qemu-user-static cannot be installed; everywhere else the legacy name is kept.
+func QemuUserPackage() string {
+	const (
+		legacyPkg = "qemu-user-static"
+		binfmtPkg = "qemu-user-binfmt"
+	)
+	hasApt, err := shell.IsCommandExist("apt-get", shell.HostPath)
+	if err != nil || !hasApt {
+		return legacyPkg
+	}
+	// Ask apt to simulate the install. Its exit status applies the same rules as
+	// the real install (virtual packages, pins, held candidates) and does not
+	// depend on the host locale, unlike parsing "apt-cache" output. The
+	// simulation changes nothing and needs no root.
+	if _, err := shell.ExecCmdSilent("apt-get -s install "+legacyPkg, false, shell.HostPath, nil); err != nil {
+		log.Debugf("%s cannot be installed on this host, using %s", legacyPkg, binfmtPkg)
+		return binfmtPkg
+	}
+	return legacyPkg
+}

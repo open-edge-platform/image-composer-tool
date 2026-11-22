@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ai"
+	globalconfig "github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 func TestCreateAICommand(t *testing.T) {
@@ -190,5 +193,51 @@ func TestMinFunc(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("min(%d, %d) = %d, expected %d", tt.a, tt.b, result, tt.expected)
 		}
+	}
+}
+
+func TestAIConfigFromGlobal(t *testing.T) {
+	g := globalconfig.AIConfig{
+		Provider: "openai",
+		OpenAI: globalconfig.OpenAIConfig{
+			BaseURL:        "https://gnai.intel.com/api/providers/openai/v1",
+			ChatModel:      "gpt-5.4-mini",
+			EmbeddingModel: "text-embedding-3-large",
+			Timeout:        "2m",
+		},
+		Scoring: globalconfig.AIScoringConfig{SemanticWeight: 0.8},
+	}
+	c, err := aiConfigFromGlobal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = c.Merge(ai.DefaultConfig())
+
+	if c.Provider != ai.ProviderOpenAI || c.OpenAI.BaseURL != g.OpenAI.BaseURL ||
+		c.OpenAI.Model != "gpt-5.4-mini" || c.OpenAI.EmbeddingModel != "text-embedding-3-large" {
+		t.Errorf("openai settings not applied: %+v", c.OpenAI)
+	}
+	if c.OpenAI.Timeout != 120 {
+		t.Errorf("OpenAI.Timeout = %d, want 120", c.OpenAI.Timeout)
+	}
+	if c.Scoring.Semantic != 0.8 || c.Scoring.Keyword != 0.20 {
+		t.Errorf("scoring = %+v, want semantic 0.8 and the default keyword weight", c.Scoring)
+	}
+	// Unset fields take the defaults.
+	if c.Ollama.Model != ai.DefaultOllamaModel || c.TemplatesDir != ai.DefaultTemplatesDir || !c.Cache.Enabled {
+		t.Errorf("defaults not kept: %+v", c)
+	}
+
+	// An empty section is the defaults.
+	empty, err := aiConfigFromGlobal(globalconfig.AIConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Merge(ai.DefaultConfig()) != ai.DefaultConfig() {
+		t.Error("an empty ai section should give the default config")
+	}
+
+	if _, err := aiConfigFromGlobal(globalconfig.AIConfig{Ollama: globalconfig.OllamaConfig{Timeout: "soon"}}); err == nil {
+		t.Error("expected an error for an invalid timeout")
 	}
 }

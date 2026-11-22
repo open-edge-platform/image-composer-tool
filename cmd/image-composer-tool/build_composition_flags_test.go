@@ -18,7 +18,7 @@ func resetCompositionFlags(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		diskStrategy, hostname, httpProxy, httpsProxy, ftpProxy, noProxy = "", "", "", "", "", ""
-		sshKeyFlags = nil
+		sshKeyFlags, replaceAdditionalFileFlags = nil, nil
 	})
 }
 
@@ -88,6 +88,32 @@ func TestApplyCompositionFlagOverridesErrors(t *testing.T) {
 				t.Errorf("err = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestApplyCompositionFlagOverridesAdditionalFileReplacement(t *testing.T) {
+	resetCompositionFlags(t)
+	src := filepath.Join(t.TempDir(), "vendor.tar.gz")
+	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &config.ImageTemplate{SystemConfig: config.SystemConfig{AdditionalFiles: []config.AdditionalFileInfo{
+		{Local: "/default/vendor.tar.gz", Final: "/opt/vendor.tar.gz"}}}}
+	cmd := createBuildCommand() // registering the flags resets their variables
+	replaceAdditionalFileFlags = []string{"/opt/vendor.tar.gz=" + src}
+	if err := applyCompositionFlagOverrides(cmd, tmpl); err != nil {
+		t.Fatalf("applyCompositionFlagOverrides: %v", err)
+	}
+	if got := tmpl.SystemConfig.AdditionalFiles[0].Local; got != src {
+		t.Errorf("Local = %q, want %q", got, src)
+	}
+
+	for _, bad := range []string{"/opt/vendor.tar.gz", "=file", "/opt/vendor.tar.gz="} {
+		replaceAdditionalFileFlags = []string{bad}
+		err := applyCompositionFlagOverrides(cmd, &config.ImageTemplate{})
+		if err == nil || !strings.Contains(err.Error(), "FINAL=FILE") {
+			t.Errorf("flag %q: err = %v, want containing FINAL=FILE", bad, err)
+		}
 	}
 }
 

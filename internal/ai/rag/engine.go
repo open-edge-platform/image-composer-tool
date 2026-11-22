@@ -25,6 +25,12 @@ type Engine struct {
 	initialized   bool
 	indexedAt     time.Time
 	templateCount int
+
+	// cacheModelSuffix is added to the model name in the cache: "@<url>" for
+	// an OpenAI-compatible service other than api.openai.com, which may serve
+	// different vectors under the same model name. Switching services then
+	// re-indexes instead of mixing vectors.
+	cacheModelSuffix string
 }
 
 // NewEngine creates a new RAG engine with the given configuration.
@@ -32,10 +38,12 @@ func NewEngine(config ai.Config) (*Engine, error) {
 	// Create embedding provider based on config
 	var embedProvider provider.EmbeddingProvider
 	var chatProvider provider.ChatProvider
+	var cacheModelSuffix string
 
 	switch config.Provider {
 	case ai.ProviderOpenAI:
 		openaiProvider, err := provider.NewOpenAIProvider(
+			config.OpenAI.BaseURL,
 			config.OpenAI.EmbeddingModel,
 			config.OpenAI.Model,
 			config.GetTimeout(),
@@ -45,6 +53,9 @@ func NewEngine(config ai.Config) (*Engine, error) {
 		}
 		embedProvider = openaiProvider
 		chatProvider = openaiProvider
+		if u := openaiProvider.BaseURL(); u != provider.DefaultOpenAIBaseURL {
+			cacheModelSuffix = "@" + u
+		}
 	default:
 		ollamaProvider := provider.NewOllamaProvider(
 			config.Ollama.BaseURL,
@@ -73,6 +84,8 @@ func NewEngine(config ai.Config) (*Engine, error) {
 		cache:         embeddingCache,
 		index:         index.NewIndex(),
 		templatesDir:  config.TemplatesDir,
+
+		cacheModelSuffix: cacheModelSuffix,
 	}, nil
 }
 
@@ -92,8 +105,7 @@ func (e *Engine) Initialize(ctx context.Context) error {
 	e.index.Clear()
 
 	// Index each template
-	modelID := e.embedProvider.ModelID()
-	dimensions := e.embedProvider.Dimensions()
+	modelID := e.cacheModelID()
 
 	for _, tmpl := range templates {
 		// Compute content hash
@@ -118,7 +130,9 @@ func (e *Engine) Initialize(ctx context.Context) error {
 
 			// Store in cache
 			if e.cache != nil {
-				if err := e.cache.Put(contentHash, modelID, tmpl.FileName, dimensions, embedding); err != nil {
+				// Record the size the service returned, not the one the model
+				// name suggests: GNAI's text-embedding-3-large returns 1024.
+				if err := e.cache.Put(contentHash, modelID, tmpl.FileName, len(embedding), embedding); err != nil {
 					// Log warning but continue
 					fmt.Printf("Warning: failed to cache embedding for %s: %v\n", tmpl.FileName, err)
 				}
@@ -140,6 +154,11 @@ func (e *Engine) Initialize(ctx context.Context) error {
 	e.templateCount = len(templates)
 
 	return nil
+}
+
+// cacheModelID names the embeddings in the cache.
+func (e *Engine) cacheModelID() string {
+	return e.embedProvider.ModelID() + e.cacheModelSuffix
 }
 
 // SearchResult represents a template search result.

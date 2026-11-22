@@ -1,0 +1,91 @@
+# Runs the tool natively on an Ubuntu 26.04 host. Ubuntu 24.04 and 26.04 are
+# both supported build hosts, so this runs on every pull request and merge: a
+# host-only break on 26.04 (such as a package that was renamed or dropped, or
+# a changed system tool) fails here instead of waiting for a user to report it.
+# The weekly run also catches changes in the 26.04 runner image or in the
+# release itself.
+name: Ubuntu 26.04 Host
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # weekly, to catch changes in the runner image or in 26.04 itself
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Host-sensitive unit tests on Ubuntu 26.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Confirm the host is Ubuntu 26.04
+        run: grep -q 'VERSION_ID="26.04"' /etc/os-release
+
+      - name: Run host-sensitive unit tests
+        run: go test ./internal/utils/system/... ./internal/chroot/deb/... ./internal/provider/ubuntu/... ./internal/provider/elxr/... ./internal/provider/debian13/...
+
+  smoke-build:
+    name: Build ${{ matrix.name }} on Ubuntu 26.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 26.04 minimal raw
+            template: image-templates/ubuntu26/ubuntu26-x86_64-minimal-raw.yml
+          - name: Ubuntu 24.04 minimal raw
+            template: image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
+          - name: Debian 13 minimal raw
+            template: image-templates/debian13/debian13-x86_64-minimal-raw.yml
+          - name: eLxr 12 minimal raw
+            template: image-templates/elxr12/elxr12-x86_64-minimal-raw.yml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Confirm the host is Ubuntu 26.04
+        run: grep -q 'VERSION_ID="26.04"' /etc/os-release
+
+      - name: Build the tool
+        run: go build -o image-composer-tool ./cmd/image-composer-tool
+
+      # Pre-processing installs the host dependencies, which is where the
+      # qemu-user-static failure on 26.04 happened. A successful build proves
+      # the whole host setup works for that target distribution.
+      - name: Build the image
+        shell: bash
+        env:
+          TEMPLATE: ${{ matrix.template }}
+        run: |
+          set -o pipefail
+          sudo -E ./image-composer-tool build "${TEMPLATE}" \
+            2>&1 | tee "$RUNNER_TEMP/smoke-build.log"
+          grep -q "image build completed successfully" "$RUNNER_TEMP/smoke-build.log"

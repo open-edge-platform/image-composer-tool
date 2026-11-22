@@ -46,7 +46,8 @@ ai:
   # Provider for embeddings and chat completions
   provider: "ollama"
   # - ollama: Local inference (default, requires Ollama running on localhost:11434)
-  # - openai: Cloud inference (requires OPENAI_API_KEY environment variable)
+  # - openai: OpenAI or an OpenAI-compatible service such as GNAI
+  #   (requires OPENAI_API_KEY environment variable)
 
   # Directory containing template files for RAG knowledge base
   templates_dir: "./image-templates"
@@ -56,12 +57,17 @@ ai:
     base_url: "http://localhost:11434"
     embedding_model: "nomic-embed-text"
     # Embedding models: nomic-embed-text (768 dims), mxbai-embed-large (1024 dims)
-    chat_model: "llama3.2"
-    # Chat models: llama3.2, mistral, codellama, etc.
+    chat_model: "llama3.1:8b"
+    # Chat models: llama3.1:8b, llama3.2, mistral, codellama, etc.
     timeout: "120s"
 
   # OpenAI-specific settings (used when provider: openai)
   # openai:
+  #   base_url: "https://api.openai.com/v1"
+  #   # API root including /v1; OPENAI_BASE_URL overrides it. For GNAI use
+  #   # https://gnai.intel.com/api/providers/openai/v1 with
+  #   # embedding_model text-embedding-3-large and a chat model GNAI lists,
+  #   # such as gpt-5.4-mini.
   #   embedding_model: "text-embedding-3-small"
   #   chat_model: "gpt-4o-mini"
   #   timeout: "60s"

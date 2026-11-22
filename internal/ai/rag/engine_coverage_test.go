@@ -2,6 +2,9 @@ package rag
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -487,5 +490,75 @@ systemConfig:
 	err = engine.Initialize(context.Background())
 	if err != nil {
 		t.Logf("Initialize failed (expected if Ollama not running): %v", err)
+	}
+}
+
+// TestCacheModelIDIncludesServiceURL tests that embeddings from an
+// OpenAI-compatible service other than api.openai.com are cached apart.
+func TestCacheModelIDIncludesServiceURL(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", "")
+
+	tests := []struct {
+		baseURL, want string
+	}{
+		{"", "text-embedding-3-large"},
+		{"https://api.openai.com/v1/", "text-embedding-3-large"},
+		{"https://gnai.intel.com/api/providers/openai/v1", "text-embedding-3-large@https://gnai.intel.com/api/providers/openai/v1"},
+	}
+	for _, tt := range tests {
+		config := ai.DefaultConfig()
+		config.Provider = ai.ProviderOpenAI
+		config.OpenAI.BaseURL = tt.baseURL
+		config.OpenAI.EmbeddingModel = "text-embedding-3-large"
+		config.Cache.Enabled = false
+
+		engine, err := NewEngine(config)
+		if err != nil {
+			t.Fatalf("NewEngine(%q): %v", tt.baseURL, err)
+		}
+		if got := engine.cacheModelID(); got != tt.want {
+			t.Errorf("cacheModelID() for %q = %q, want %q", tt.baseURL, got, tt.want)
+		}
+	}
+}
+
+// TestInitializeCachesReturnedDimensions tests that the cache records the
+// size the service returned, not the one the model name suggests.
+func TestInitializeCachesReturnedDimensions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/openai/v1/embeddings" {
+			t.Errorf("path = %s, want /openai/v1/embeddings", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"embedding": make([]float64, 1024)}},
+		})
+	}))
+	defer server.Close()
+
+	templatesDir := t.TempDir()
+	tmpl := "image:\n  name: test\n  version: \"1.0\"\ntarget:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n"
+	if err := os.WriteFile(filepath.Join(templatesDir, "test.yml"), []byte(tmpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/openai/v1")
+	config := ai.DefaultConfig()
+	config.Provider = ai.ProviderOpenAI
+	config.OpenAI.EmbeddingModel = "text-embedding-3-large" // 3072 on api.openai.com
+	config.TemplatesDir = templatesDir
+	config.Cache.Dir = t.TempDir()
+
+	engine, err := NewEngine(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.cache.Stats().Dimensions; got != 1024 {
+		t.Errorf("cached dimensions = %d, want 1024", got)
 	}
 }

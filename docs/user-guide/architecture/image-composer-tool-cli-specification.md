@@ -167,6 +167,7 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--http-proxy URL`, `--https-proxy URL`, `--ftp-proxy URL` | Override `systemConfig.proxy.httpProxy`, `.httpsProxy`, `.ftpProxy`: the proxy persisted into the deployed system. A flag given an empty value (for example `--http-proxy ''`) clears the template's setting. Create mode only. |
 | `--no-proxy LIST` | Override `systemConfig.proxy.noProxy` (comma-separated, no spaces); `--no-proxy ''` clears it. Create mode only. |
 | `--ssh-authorized-key USER=FILE` | Add the public keys in `FILE` to `USER`'s `authorized_keys`. `USER` must be defined in `systemConfig.users`. Repeatable. |
+| `--replace-additional-file FINAL=FILE` | Replace the host file (`local`) of the `systemConfig.additionalFiles` entry whose `final` path is `FINAL` with `FILE`, for this build only. Lets an input that changes per build (for example a vendor tarball) be supplied at build time without editing the template. It does not add files: the template must already list an entry at `FINAL`, and `FILE` must be an existing regular file; a relative `FILE` is resolved against the current directory. The build stops with an error if the tool later generates the same destination (for example an apt sources, preferences or key file generated from `packageRepositories` on DEB-based create builds), because the generated file would overwrite the replacement. A replacement for the cloud-init `user-data` seed must start with a cloud-init header. Repeatable. |
 | `--oep-installer-token-file FILE` | Read the GitHub token for downloading `systemConfig.oepInstaller` files from a private repository from `FILE`, for this build only. Takes precedence over `ICT_OEP_INSTALLER_TOKEN`, `ICT_OEP_INSTALLER_TOKEN_FILE` and `oep_installer.token_file`. The file is read like a `token_file`: a regular file (or a symlink to one), trimmed, not empty. |
 
 The composition override flags change only the fields they name; an unset flag
@@ -720,12 +721,16 @@ image-composer-tool ai [flags] [QUERY]
 
 **Description:**
 
-With Ollama running locally, no configuration is needed. To use OpenAI, set the
-`OPENAI_API_KEY` environment variable **and** pass `--provider openai`. The
-command starts from built-in defaults and applies only `--provider` and
-`--templates-dir`; the `ai:` section of the global configuration file is not
-read, so models, timeouts and cache settings cannot currently be changed. The
-generated template is not built automatically; run
+With Ollama running locally, no configuration is needed. To use OpenAI or an
+OpenAI-compatible service such as GNAI, set the `OPENAI_API_KEY` environment
+variable and either pass `--provider openai` or set `provider: openai` in the
+`ai:` section of the global configuration file. That section also sets the
+service URL (`openai.base_url`, or the `OPENAI_BASE_URL` environment variable),
+models, timeouts and cache directory; `--provider` and `--templates-dir`
+override it. `cache.enabled: false` is not supported: the cache stays on.
+`--cache-stats` and `--clear-cache` need no API key. See
+[AI-Powered Template Generation](../get-started/ai-template-generation.md#configuration).
+The generated template is not built automatically; run
 [`validate`](#validate-command) on it before [`build`](#build-command).
 
 **Example:**
