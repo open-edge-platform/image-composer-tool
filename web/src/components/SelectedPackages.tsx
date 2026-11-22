@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
-import { useStore, confirmRepoRelease, isAIChange, type AddedPackage } from '../store'
+import { useStore, confirmRepoRelease, hasAIChanges, isAIChange, type AddedPackage } from '../store'
 import type { PackageRepo } from '../api/types'
 import type { VersionResolver } from '../lib/useVersionResolver'
 import type { BaseLock } from '../lib/baseLock'
@@ -57,8 +57,9 @@ export function SelectedPackages({
   const setPackageRemoved = useStore((s) => s.setPackageRemoved)
   const clearRemovedPackages = useStore((s) => s.clearRemovedPackages)
   // Which changes Ask AI made, for the AI tag (see isAIChange).
-  const aiPackages = useStore((s) => s.aiPackages)
-  const fromAI = (name: string) => isAIChange({ aiPackages, addedPackages: picks, removedPackages: storedRemovals }, name)
+  const aiChanges = useStore((s) => s.aiChanges)
+  const undoAIChanges = useStore((s) => s.undoAIChanges)
+  const fromAI = (name: string) => isAIChange({ aiChanges }, name)
   const inTemplate = (name: string) => !!baseLock?.info(name).locked
   const addedPackages = picks.filter((p) => !inTemplate(p.name))
   const modified = picks.filter((p) => inTemplate(p.name))
@@ -121,17 +122,29 @@ export function SelectedPackages({
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
         <span className="text-[13px] font-bold text-[#00285a]">Changes ({total})</span>
-        <button
-          type="button"
-          onClick={() => {
-            clearPackages(lockedRepoIds)
-            clearRemovedPackages()
-          }}
-          disabled={total === 0}
-          className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Reset to template defaults
-        </button>
+        <div className="flex items-center gap-1.5">
+          {hasAIChanges(aiChanges) && (
+            <button
+              type="button"
+              onClick={undoAIChanges}
+              title="Undo what Ask AI changed (packages, repositories, disk size and image name) and keep your own changes"
+              className="rounded-md border border-violet-300 px-3 py-1 text-xs font-medium text-violet-800 hover:border-violet-400 hover:bg-violet-50"
+            >
+              Undo AI changes
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              clearPackages(lockedRepoIds)
+              clearRemovedPackages()
+            }}
+            disabled={total === 0}
+            className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Reset to template defaults
+          </button>
+        </div>
       </div>
       {/* The list's cap tracks the viewport so the rail, which starts level
           with the search box, still ends above the Back/Next row (25rem is the

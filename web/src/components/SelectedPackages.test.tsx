@@ -8,7 +8,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SelectedPackages } from './SelectedPackages'
-import { useStore } from '../store'
+import { useStore, noAIChanges } from '../store'
 import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
@@ -44,7 +44,7 @@ const repos: PackageRepo[] = [
 ]
 
 beforeEach(() => {
-  useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [], aiPackages: {} })
+  useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [], aiChanges: noAIChanges })
   mockApi.searchPackages.mockReset()
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
 })
@@ -60,13 +60,25 @@ describe('SelectedPackages', () => {
     useStore.getState().setPackage(docker)
     useStore.getState().setPackage({ name: 'htop', version: '3.3', repo: 'base' })
     useStore.getState().setPackageRemoved('snapd', true)
-    useStore.getState().markAIPackages({ 'docker.io': docker, snapd: 'removed' })
+    useStore.getState().recordAIChanges({
+      packages: {
+        'docker.io': { after: docker, before: null, wasRemoved: false },
+        snapd: { after: 'removed', before: null, wasRemoved: false },
+      },
+      repos: [],
+    })
 
     render(<Selected repos={repos} baseLock={baseLock} authoring />)
     expect(screen.getAllByTitle('Suggested by Ask AI')).toHaveLength(2)
 
     act(() => useStore.getState().setPackage({ name: 'docker.io', version: '27.5.1', repo: 'base' }))
     expect(screen.getAllByTitle('Suggested by Ask AI')).toHaveLength(1)
+
+    // Undo AI changes puts snapd back and keeps the hand edits.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo AI changes' }))
+    expect(useStore.getState().removedPackages).toEqual([])
+    expect(useStore.getState().addedPackages.map((p) => p.name).sort()).toEqual(['docker.io', 'htop'])
+    expect(screen.queryByRole('button', { name: 'Undo AI changes' })).toBeNull()
   })
 
   it('lists only added packages, with their count, and none of the template’s own', () => {

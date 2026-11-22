@@ -104,6 +104,33 @@ export function confirmRepoRelease(
 // when the server grants the authoring capability.
 export type AdvancedMode = 'customize' | 'author'
 
+// What Ask AI changed for one package: the result (a pick, 'removed', or
+// null when it took the package out of the user's picks), and what was there
+// before, so the change can be undone on its own.
+export interface AIPackageChange {
+  after: AddedPackage | 'removed' | null
+  before: AddedPackage | null
+  wasRemoved: boolean
+}
+
+export interface AIChanges {
+  packages: Record<string, AIPackageChange>
+  // Repositories Ask AI turned on.
+  repos: string[]
+  disk?: { before: DiskModel | null; beforeEdited: boolean }
+  imageName?: { before: string; beforeEdited: boolean }
+}
+
+export const noAIChanges: AIChanges = { packages: {}, repos: [] }
+
+// forgetAI drops Ask AI's records for names, which something else changed.
+function forgetAI(ai: AIChanges, names: string[]): AIChanges {
+  if (!names.some((n) => n in ai.packages)) return ai
+  const packages = { ...ai.packages }
+  for (const n of names) delete packages[n]
+  return { ...ai, packages }
+}
+
 interface AppState {
   manifest: Manifest | null
   capabilities: Capabilities
@@ -135,11 +162,15 @@ interface AppState {
   // Template packages removed in Author mode, by name. Customize can't remove
   // anything (its changes are layered on the template), so it ignores these.
   removedPackages: string[]
-  // Package changes Ask AI made, by name: the pick it made, or 'removed'. The
-  // Changes rail tags a change "AI" only while it is still exactly this, so a
-  // hand edit after it, or an undo, drops the tag without bookkeeping.
-  aiPackages: Record<string, AddedPackage | 'removed'>
-  markAIPackages: (changes: Record<string, AddedPackage | 'removed'>) => void
+  // What Ask AI changed and what was there before. Any other edit to the
+  // same package, disk size or image name forgets the record, so the AI tag
+  // and Undo AI changes cover only changes still exactly as Ask AI made them.
+  aiChanges: AIChanges
+  // Ask AI's record of the edits it just applied, merged into aiChanges.
+  recordAIChanges: (changes: AIChanges) => void
+  // Puts back what was there before each change Ask AI made, keeping the
+  // user's own changes.
+  undoAIChanges: () => void
   setPackageRemoved: (name: string, removed: boolean) => void
   clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
@@ -198,17 +229,50 @@ export const useStore = create<AppState>((set) => ({
   diskEdited: false,
   diskSeed: null,
   removedPackages: [],
-  aiPackages: {},
-  markAIPackages: (changes) => set((state) => ({ aiPackages: { ...state.aiPackages, ...changes } })),
+  aiChanges: noAIChanges,
+  recordAIChanges: (c) =>
+    set((state) => ({
+      aiChanges: {
+        packages: { ...state.aiChanges.packages, ...c.packages },
+        repos: [...new Set([...state.aiChanges.repos, ...c.repos])],
+        disk: c.disk ?? state.aiChanges.disk,
+        imageName: c.imageName ?? state.aiChanges.imageName,
+      },
+    })),
+  undoAIChanges: () =>
+    set((state) => {
+      const ai = state.aiChanges
+      let addedPackages = state.addedPackages
+      let removedPackages = state.removedPackages
+      for (const [name, change] of Object.entries(ai.packages)) {
+        addedPackages = addedPackages.filter((p) => p.name !== name)
+        if (change.before) addedPackages = [...addedPackages, change.before]
+        removedPackages = change.wasRemoved
+          ? [...new Set([...removedPackages, name])]
+          : removedPackages.filter((n) => n !== name)
+      }
+      // A repository Ask AI turned on goes off again once nothing uses it.
+      const used = new Set(addedPackages.map((p) => p.repo))
+      return {
+        addedPackages,
+        removedPackages,
+        enabledRepos: state.enabledRepos.filter((r) => !ai.repos.includes(r) || used.has(r)),
+        ...(ai.disk ? { disk: ai.disk.before, diskEdited: ai.disk.beforeEdited } : {}),
+        ...(ai.imageName ? { imageName: ai.imageName.before, imageNameEdited: ai.imageName.beforeEdited } : {}),
+        aiChanges: noAIChanges,
+      }
+    }),
   setPackageRemoved: (name, removed) =>
     set((state) => ({
+      aiChanges: forgetAI(state.aiChanges, [name]),
       removedPackages: removed
         ? [...new Set([...state.removedPackages, name])]
         : state.removedPackages.filter((n) => n !== name),
       // A removed package has no version of its own any more.
       addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
     })),
-  clearRemovedPackages: () => set({ removedPackages: [] }),
+  clearRemovedPackages: () =>
+    set((state) => ({ removedPackages: [], aiChanges: forgetAI(state.aiChanges, state.removedPackages) })),
   setManifest: (m) => set({ manifest: m }),
   setCapabilities: (c) =>
     set((state) => ({
@@ -217,7 +281,8 @@ export const useStore = create<AppState>((set) => ({
     })),
   setAdvancedMode: (mode) =>
     set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
-  setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
+  setImageName: (value) =>
+    set((state) => ({ imageName: value, imageNameEdited: true, aiChanges: { ...state.aiChanges, imageName: undefined } })),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
   setRepoEnabled: (repo, on) =>
@@ -227,7 +292,15 @@ export const useStore = create<AppState>((set) => ({
           ? state.enabledRepos
           : [...state.enabledRepos, repo]
         : state.enabledRepos.filter((r) => r !== repo),
-      ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
+      ...(on
+        ? {}
+        : {
+            addedPackages: state.addedPackages.filter((p) => p.repo !== repo),
+            aiChanges: forgetAI(
+              { ...state.aiChanges, repos: state.aiChanges.repos.filter((r) => r !== repo) },
+              state.addedPackages.filter((p) => p.repo === repo).map((p) => p.name),
+            ),
+          }),
     })),
   // Re-pinning to a different repo can leave the one it just left with
   // nothing depending on it anymore — dropped the same way disabling that
@@ -239,9 +312,11 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       const previous = state.addedPackages.find((x) => x.name === p.name)
       const addedPackages = [...state.addedPackages.filter((x) => x.name !== p.name), p]
-      if (opts?.releaseRepo === false) return { addedPackages }
+      const aiChanges = forgetAI(state.aiChanges, [p.name])
+      if (opts?.releaseRepo === false) return { addedPackages, aiChanges }
       return {
         addedPackages,
+        aiChanges,
         enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages, opts?.protectedRepos),
       }
     }),
@@ -249,9 +324,11 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       const removed = state.addedPackages.find((p) => p.name === name)
       const addedPackages = state.addedPackages.filter((p) => p.name !== name)
-      if (opts?.releaseRepo === false) return { addedPackages }
+      const aiChanges = forgetAI(state.aiChanges, [name])
+      if (opts?.releaseRepo === false) return { addedPackages, aiChanges }
       return {
         addedPackages,
+        aiChanges,
         enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages, opts?.protectedRepos),
       }
     }),
@@ -260,13 +337,17 @@ export const useStore = create<AppState>((set) => ({
       const names = new Set(pkgs.map((p) => p.name))
       // A bulk add ("Select all") only ever grows the set, so nothing it
       // replaces can be left without a repo to drop.
-      return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
+      return {
+        addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs],
+        aiChanges: forgetAI(state.aiChanges, [...names]),
+      }
     }),
   removePackages: (names, opts) =>
     set((state) => {
       const drop = new Set(names)
       const addedPackages = state.addedPackages.filter((p) => !drop.has(p.name))
-      if (opts?.releaseRepo === false) return { addedPackages }
+      const aiChanges = forgetAI(state.aiChanges, names)
+      if (opts?.releaseRepo === false) return { addedPackages, aiChanges }
       const removedRepos = new Set(
         state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
       )
@@ -274,6 +355,7 @@ export const useStore = create<AppState>((set) => ({
       const protectedRepos = opts?.protectedRepos
       return {
         addedPackages,
+        aiChanges,
         enabledRepos: state.enabledRepos.filter(
           (r) => !removedRepos.has(r) || stillNeeded.has(r) || protectedRepos?.has(r),
         ),
@@ -284,10 +366,12 @@ export const useStore = create<AppState>((set) => ({
       const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
       return {
         addedPackages: [],
+        aiChanges: forgetAI(state.aiChanges, state.addedPackages.map((p) => p.name)),
         enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r) || protectedRepos?.has(r)),
       }
     }),
-  setDisk: (value) => set({ disk: value, diskEdited: true }),
+  setDisk: (value) =>
+    set((state) => ({ disk: value, diskEdited: true, aiChanges: { ...state.aiChanges, disk: undefined } })),
   seedDisk: (value) =>
     // A compose that resolves to a template with no disk block leaves whatever
     // is on screen alone rather than blanking the step. The seed is recorded
@@ -295,7 +379,8 @@ export const useStore = create<AppState>((set) => ({
     set((state) =>
       value === null ? {} : state.diskEdited ? { diskSeed: value } : { disk: value, diskSeed: value },
     ),
-  resetDisk: () => set((state) => ({ disk: state.diskSeed, diskEdited: false })),
+  resetDisk: () =>
+    set((state) => ({ disk: state.diskSeed, diskEdited: false, aiChanges: { ...state.aiChanges, disk: undefined } })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -345,17 +430,15 @@ export const useStore = create<AppState>((set) => ({
 }))
 
 // selectionChanged is the state after the selection becomes `selection`.
-// isAIChange reports whether name's change in the Changes rail is still the
-// one Ask AI made.
-export function isAIChange(
-  state: Pick<AppState, 'aiPackages' | 'addedPackages' | 'removedPackages'>,
-  name: string,
-): boolean {
-  const change = state.aiPackages[name]
-  if (!change) return false
-  if (change === 'removed') return state.removedPackages.includes(name)
-  const now = state.addedPackages.find((p) => p.name === name)
-  return !!now && now.version === change.version && now.repo === change.repo
+// isAIChange reports whether name's change in the Changes rail is one Ask
+// AI made and nothing has changed since.
+export function isAIChange(state: Pick<AppState, 'aiChanges'>, name: string): boolean {
+  return !!state.aiChanges.packages[name]?.after
+}
+
+// hasAIChanges reports whether Undo AI changes has anything to undo.
+export function hasAIChanges(ai: AIChanges): boolean {
+  return Object.keys(ai.packages).length > 0 || ai.repos.length > 0 || !!ai.disk || !!ai.imageName
 }
 
 function selectionChanged(state: AppState, selection: Selection): Partial<AppState> {
@@ -387,6 +470,11 @@ function selectionChanged(state: AppState, selection: Selection): Partial<AppSta
     diskSeed: null,
     // Removals name the previous template's packages.
     removedPackages: [],
+    // Ask AI's records go with what they describe: removals, the disk and
+    // the image name always, packages and repositories with the target.
+    aiChanges: osChanged
+      ? noAIChanges
+      : { ...forgetAI(state.aiChanges, state.removedPackages), repos: state.aiChanges.repos, disk: undefined, imageName: undefined },
     ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
   }
 }

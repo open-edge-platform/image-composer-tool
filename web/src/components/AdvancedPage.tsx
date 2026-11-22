@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useStore, cascadingOptions, encodePackage } from '../store'
+import { useStore, cascadingOptions, encodePackage, noAIChanges } from '../store'
 import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import type { Selection } from '../store'
 import { api } from '../api/client'
@@ -566,7 +566,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
     // A fresh start from the opened file: no changes carried over.
     selectCombination(combo)
-    useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [] })
+    useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [], aiChanges: noAIChanges })
     setOpened({ template: combo.template, text: result.text, name: result.file.name })
     setAuthorSaved({ template: combo.template, file: result.file, text: result.text })
     setStep(0)

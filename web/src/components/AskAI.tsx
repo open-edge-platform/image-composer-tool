@@ -12,7 +12,7 @@ import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult, TemplateEdit } from '../api/types'
 import { describeChanges, editPackageNames, planAIEdits, type PlannedEdit } from '../lib/aiEdits'
 import { packageEntryName } from '../lib/authorTemplate'
-import { useStore, type AddedPackage } from '../store'
+import { useStore, type AIChanges } from '../store'
 
 interface AskAIProps {
   os: string
@@ -280,14 +280,32 @@ function applyPlan(
   templateNames: Set<string | null>,
 ): string[] {
   const s = useStore.getState()
+  // The state before these edits, for Undo AI changes. A change Ask AI made
+  // earlier keeps its own "before", so undoing goes back past both.
+  const before = {
+    added: s.addedPackages,
+    removed: s.removedPackages,
+    repos: s.enabledRepos,
+    disk: s.disk,
+    diskEdited: s.diskEdited,
+    imageName: s.imageName,
+    imageNameEdited: s.imageNameEdited,
+    ai: s.aiChanges,
+  }
   const lines: string[] = []
-  const ai: Record<string, AddedPackage | 'removed'> = {}
+  const touched = new Set<string>()
+  const turnedOn: string[] = []
+  let diskChanged = false
+  let nameChanged = false
   for (const e of edits) {
     switch (e.kind) {
       case 'package':
-        if (e.enableRepo) s.setRepoEnabled(e.enableRepo, true)
+        if (e.enableRepo) {
+          s.setRepoEnabled(e.enableRepo, true)
+          if (!before.repos.includes(e.enableRepo)) turnedOn.push(e.enableRepo)
+        }
         s.setPackage(e.pkg, { releaseRepo: false })
-        ai[e.pkg.name] = e.pkg
+        touched.add(e.pkg.name)
         lines.push(
           (templateNames.has(e.pkg.name)
             ? e.pkg.version
@@ -299,32 +317,56 @@ function applyPlan(
         break
       case 'restore':
         s.setPackageRemoved(e.name, false)
+        touched.add(e.name)
         lines.push(`kept ${e.name}`)
         break
       case 'remove-template':
         s.setPackageRemoved(e.name, true)
-        ai[e.name] = 'removed'
+        touched.add(e.name)
         lines.push(`removed ${e.name}`)
         break
       case 'remove-added':
         s.removePackage(e.name, { releaseRepo: false })
+        touched.add(e.name)
         lines.push(`removed ${e.name}`)
         break
       case 'disk-size': {
         const disk = useStore.getState().disk
         if (disk) {
           s.setDisk({ ...disk, size: e.size })
+          diskChanged = true
           lines.push(`disk size ${e.size}`)
         }
         break
       }
       case 'image-name':
         s.setImageName(e.name)
+        nameChanged = true
         lines.push(`image name ${e.name}`)
         break
     }
   }
-  s.markAIPackages(ai)
+
+  const now = useStore.getState()
+  const packages: AIChanges['packages'] = {}
+  for (const name of touched) {
+    const earlier = before.ai.packages[name]
+    const was = earlier?.before ?? before.added.find((p) => p.name === name) ?? null
+    const wasRemoved = earlier ? earlier.wasRemoved : before.removed.includes(name)
+    const pick = now.addedPackages.find((p) => p.name === name) ?? null
+    const removed = now.removedPackages.includes(name)
+    // Back where it started: nothing for Ask AI to own or undo.
+    if (removed === wasRemoved && pick?.version === was?.version && pick?.repo === was?.repo) continue
+    packages[name] = { after: removed ? 'removed' : pick, before: was, wasRemoved }
+  }
+  s.recordAIChanges({
+    packages,
+    repos: turnedOn,
+    disk: diskChanged ? (before.ai.disk ?? { before: before.disk, beforeEdited: before.diskEdited }) : undefined,
+    imageName: nameChanged
+      ? (before.ai.imageName ?? { before: before.imageName, beforeEdited: before.imageNameEdited })
+      : undefined,
+  })
   return lines
 }
 
