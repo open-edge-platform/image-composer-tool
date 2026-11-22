@@ -777,6 +777,7 @@ image-composer-tool serve [flags]
 | `--package-repos STRING` | Path to a package-repository catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's repository picker. |
 | `--edge-pack STRING` | Path to an Edge Pack catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's Edge Pack picker. |
 | `--enable-authoring` | Offer the Advanced tab's Author mode, which edits a whole template and saves it to the user's machine. Off by default. Setting `ICT_WEBUI_AUTHORING=true` turns it on too. |
+| `--enable-ai` | Offer Ask AI in Author mode, which asks an OpenAI-compatible service, such as GNAI, for template edits. Needs `--enable-authoring`, and `OPENAI_API_KEY` or `OPENAI_API_KEY_FILE`. The service and chat model are `ai.openai.base_url` and `ai.openai.chat_model` in the configuration file, or `OPENAI_BASE_URL` and `OPENAI_MODEL`, whatever `ai.provider` says. Off by default. Setting `ICT_WEBUI_AI=true` turns it on too. |
 
 **Description:**
 
