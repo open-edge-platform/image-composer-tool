@@ -498,7 +498,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const author = advancedMode === 'author'
   const authorProblem = author && composed ? authoringProblem(composed.templateYaml) : null
   const authoring = author && !!composed?.templateYaml && !authorProblem
-  const aiOffered = authoring && !!capabilities.ai
+  // Author mode with a template it can edit, or one still loading.
+  const aiOffered = author && !authorProblem && !!capabilities.ai
   // The file saved last, kept while the same template stays selected.
   const [authorSaved, setAuthorSaved] = useState<{ template: string; file: SavedFile; text: string } | null>(null)
   const authorEdit = useMemo((): { text: string; baseline: string } | { error: string } | null => {
@@ -630,11 +631,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       {authorProblem && (
         <p className="mx-auto mb-4 max-w-3xl rounded bg-amber-50 p-3 text-sm text-amber-800">{authorProblem}</p>
       )}
-      {aiOffered && composed && authorEdit && 'text' in authorEdit && (
+      {/* Kept mounted while a recompose is in flight (composed is null then),
+          so the last answer stays on screen; Suggest waits for the template. */}
+      {aiOffered && (
         <AskAI
           os={selection.os}
-          templateText={authorEdit.text}
-          basePackages={composed.basePackages ?? []}
+          templateText={authorEdit && 'text' in authorEdit ? authorEdit.text : undefined}
+          basePackages={lastBasePackages ?? []}
           templateRepos={lastTemplateRepos}
           templateOnlyRepos={lastTemplateOnlyRepos}
           overlay={overlay}

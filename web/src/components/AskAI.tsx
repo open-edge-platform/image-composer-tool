@@ -17,7 +17,8 @@ import { useStore, type AddedPackage } from '../store'
 interface AskAIProps {
   os: string
   // The template with the user's changes so far, as Save would write it.
-  templateText: string
+  // Undefined while it (re)loads.
+  templateText: string | undefined
   // ComposeResponse.basePackages: the template's own package entries.
   basePackages: string[]
   // Repositories the template declares (ComposeResponse.templateRepos), and
@@ -44,7 +45,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!request.trim() || busy) return
+    if (!request.trim() || busy || templateText === undefined) return
     setBusy(true)
     setError(null)
     setOutcome(null)
@@ -118,7 +119,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
         />
         <button
           type="submit"
-          disabled={busy || !request.trim()}
+          disabled={busy || !request.trim() || templateText === undefined}
           className="rounded-md bg-violet-700 px-4 py-1.5 font-semibold text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Thinking…' : 'Suggest'}
