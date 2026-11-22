@@ -54,12 +54,17 @@ The UI applies them the same way as hand edits, so comments and layout are
 kept. Anything else is out of scope for phase 1. The AI says so in a short
 note instead of guessing.
 
-### 2. Every edit is checked before it is shown
+### 2. Every edit is checked before it is applied
 
-- Package names and versions must exist in the template's repositories. The
-  check uses the same repo index as the Packages step.
-- A name that isn't found is listed as **not found**, with the closest match if
-  there is one. It is never added quietly.
+The browser checks the edits, because it knows which repositories the user has
+checked and their priorities.
+
+- Package names and versions must exist in a repository for the target. The
+  check uses the same lookup as the Packages step, and picks the repository a
+  build would install from. A package from a repository not yet checked turns
+  that repository on, as picking a search result does.
+- A name that isn't found is listed as **not found**, with up to three similar
+  names to click (Ubuntu's `docker.io` for "docker"). It is never added quietly.
 - Disk sizes go through the Disk step's checks.
 
 This follows the rule in [adr-nl-package-selection.md](adr-nl-package-selection.md):
@@ -76,7 +81,8 @@ the AI never puts an unchecked package name in a template.
 ### 4. The server talks to the AI
 
 - New endpoint: `POST /api/v1/ai/template-edits` with the template text and
-  the request. It returns the checked edits and the note.
+  the request. It returns the edits, the note, and what the edits can't
+  express. It checks only their format; the browser checks the rest.
 - The browser never calls GNAI, so the token stays on the server and there is
   no cross-origin (CORS) problem.
 - User passwords and password hashes are removed from the template before it
@@ -86,11 +92,14 @@ the AI never puts an unchecked package name in a template.
 
 | Setting | Phase 1 |
 |---|---|
-| Turn it on | `serve --enable-ai`, or `ICT_WEBUI_AI=true` in Docker Compose. Off by default. |
+| Turn it on | `serve --enable-ai`, or `ICT_WEBUI_AI=true` in Docker Compose. Needs `--enable-authoring`. Off by default. |
 | What the UI sees | `GET /api/v1/session` returns `capabilities.ai` |
 | Service URL | `ai.openai.base_url` in `image-composer-tool.yml`, or `OPENAI_BASE_URL` |
-| Token | `OPENAI_API_KEY` on the server |
-| Models | `ai.openai.chat_model` and `ai.openai.embedding_model` |
+| Token | `OPENAI_API_KEY`, or a file named by `OPENAI_API_KEY_FILE`, read for every request |
+| Chat model | `ai.openai.chat_model`, or `OPENAI_MODEL` |
+
+Ask AI always uses the OpenAI-compatible API, whatever `ai.provider` says, so
+Docker Compose can set everything with environment variables.
 
 For GNAI:
 
@@ -104,7 +113,8 @@ ai:
 ```
 
 Intel employees get a token at <https://gnai.intel.com/auth/oauth2/sso>. It
-expires. When GNAI says the token is no longer valid, the UI shows that link.
+expires. Writing the new one to the token file is enough; no restart. When GNAI
+rejects the token, the UI shows that link.
 
 In Docker, the container must trust Intel's CA certificates to reach GNAI.
 
@@ -114,6 +124,8 @@ In Docker, the container must trust Intel's CA certificates to reach GNAI.
   Packages and Disk steps.
 - One request at a time. No chat history.
 - One server-wide token. Per-user sign-in comes with roles.
+- The Changes rail tags package changes **AI**. Disk and image name changes
+  show only in Ask AI's summary.
 
 ---
 
@@ -154,3 +166,4 @@ In Docker, the container must trust Intel's CA certificates to reach GNAI.
 | Date | Change |
 |---|---|
 | 2026-11-22 | Initial proposal |
+| 2026-11-22 | The browser checks the edits; similar names for a missing package; token file read per request |
