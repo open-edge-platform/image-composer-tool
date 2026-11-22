@@ -99,10 +99,18 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
       plan.skipped.map(async (s): Promise<Skipped> => {
         if (!s.missing || s.missing.length < 2) return s
         try {
-          const r = await api.searchPackages({ os, repos: repos.map((r) => r.id), q: s.missing, limit: 10 })
-          const alternatives = [...new Set(r.packages.map((p) => p.name))]
-            .filter((n) => n !== s.missing)
-            .slice(0, MAX_ALTERNATIVES)
+          const r = await api.searchPackages({ os, repos: repos.map((r) => r.id), q: s.missing, limit: 50 })
+          // Nearest first: from a repository the build already reads (Ubuntu's
+          // docker.io before Docker's own docker-ce), then the shortest name.
+          const rank = (p: PackageSearchResult) => [checkedRepos.has(p.repository) ? 0 : 1, p.name.length]
+          const alternatives = [
+            ...new Set(
+              r.packages
+                .filter((p) => p.name !== s.missing)
+                .sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1] - rank(b)[1] || a.name.localeCompare(b.name))
+                .map((p) => p.name),
+            ),
+          ].slice(0, MAX_ALTERNATIVES)
           return alternatives.length > 0 ? { ...s, alternatives } : s
         } catch {
           return s
