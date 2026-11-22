@@ -179,6 +179,13 @@ describe('planAIEdits pin_latest', () => {
     expect(plan.skipped[0].message).toMatch(/Couldn't read every repository/)
   })
 
+  it('reads a version of "latest" as pin_latest', () => {
+    const plan = planAIEdits([edit('set_version', 'libnss-libvirt', 'latest')], ppaCtx())
+    expect(plan.apply).toEqual([
+      { kind: 'package', pkg: { name: 'libnss-libvirt', version: '5.7~ppa', repo: 'nvl-ppa' }, enableRepo: undefined },
+    ])
+  })
+
   it('pins one package to the newest version where a build gets it', () => {
     const plan = planAIEdits([edit('pin_latest', 'libnss-libvirt'), edit('pin_latest', 'snapd')], ppaCtx())
     expect(plan.apply).toEqual([

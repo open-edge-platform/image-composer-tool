@@ -257,7 +257,13 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
     }
   }
 
-  for (const e of edits) {
+  for (const raw of edits) {
+    // "latest" is not a version: a model asked for the latest version may
+    // still write it as one, which means pin_latest.
+    const e: TemplateEdit =
+      (raw.op === 'set_version' || raw.op === 'add') && /^(latest|newest)$/i.test(raw.version)
+        ? { ...raw, op: 'pin_latest', version: '' }
+        : raw
     const name = e.package
     switch (e.op) {
       case 'add': {
