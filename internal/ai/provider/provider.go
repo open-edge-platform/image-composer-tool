@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -189,8 +190,10 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 	return chatResp.Message.Content, nil
 }
 
-// DefaultOpenAIBaseURL is the default base URL for OpenAI API.
-const DefaultOpenAIBaseURL = "https://api.openai.com"
+// DefaultOpenAIBaseURL is the default base URL for OpenAI API. Like the
+// OpenAI SDKs' OPENAI_BASE_URL, it includes the /v1 prefix, so an
+// OpenAI-compatible service such as GNAI is set by its published URL.
+const DefaultOpenAIBaseURL = "https://api.openai.com/v1"
 
 // OpenAIProvider implements EmbeddingProvider and ChatProvider using OpenAI API.
 type OpenAIProvider struct {
@@ -202,14 +205,23 @@ type OpenAIProvider struct {
 	baseURL        string
 }
 
-// NewOpenAIProvider creates a new OpenAI provider.
-func NewOpenAIProvider(embeddingModel, chatModel string, timeout time.Duration) (*OpenAIProvider, error) {
+// NewOpenAIProvider creates a new OpenAI provider. baseURL is the API root
+// including /v1. The OPENAI_BASE_URL environment variable overrides it, the
+// way OPENAI_API_KEY supplies the key; if both are empty it is
+// DefaultOpenAIBaseURL.
+func NewOpenAIProvider(baseURL, embeddingModel, chatModel string, timeout time.Duration) (*OpenAIProvider, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY environment variable is not set")
 	}
+	if env := os.Getenv("OPENAI_BASE_URL"); env != "" {
+		baseURL = env
+	}
+	if baseURL == "" {
+		baseURL = DefaultOpenAIBaseURL
+	}
 
-	return newOpenAIProviderWithConfig(apiKey, embeddingModel, chatModel, DefaultOpenAIBaseURL, timeout), nil
+	return newOpenAIProviderWithConfig(apiKey, embeddingModel, chatModel, strings.TrimRight(baseURL, "/"), timeout), nil
 }
 
 // newOpenAIProviderWithConfig creates an OpenAI provider with explicit configuration (for testing).
@@ -265,7 +277,7 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/embeddings", bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/embeddings", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -305,6 +317,11 @@ func (p *OpenAIProvider) ModelID() string {
 	return p.embeddingModel
 }
 
+// BaseURL returns the API root the provider calls, including /v1.
+func (p *OpenAIProvider) BaseURL() string {
+	return p.baseURL
+}
+
 // Dimensions returns the embedding dimensions.
 func (p *OpenAIProvider) Dimensions() int {
 	return p.dimensions
@@ -338,7 +355,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/chat/completions", bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

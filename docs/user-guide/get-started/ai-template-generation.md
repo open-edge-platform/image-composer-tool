@@ -17,6 +17,7 @@ in real, working examples.
     - [Install Ollama (recommended)](#install-ollama-recommended)
   - [Quick Start (Ollama - local, free)](#quick-start-ollama---local-free)
   - [Quick Start (OpenAI - cloud)](#quick-start-openai---cloud)
+  - [Quick Start (GNAI - Intel)](#quick-start-gnai---intel)
   - [CLI Reference](#cli-reference)
     - [Generate a Template](#generate-a-template)
     - [Search Only](#search-only)
@@ -39,7 +40,7 @@ in real, working examples.
 | Requirement | Details |
 |-------------|---------|
 | **ict** binary | Built via `earthly +build` or `go build ./cmd/image-composer-tool` |
-| **AI provider** (one of) | [Ollama](https://ollama.com) (local) **or** an [OpenAI](https://platform.openai.com) API key |
+| **AI provider** (one of) | [Ollama](https://ollama.com) (local), an [OpenAI](https://platform.openai.com) API key, **or** a token for an OpenAI-compatible service such as GNAI |
 | **Template files** | At least a few `image-templates/*.yml` files to serve as the RAG knowledge base |
 
 ### Install Ollama (recommended)
@@ -87,6 +88,37 @@ export OPENAI_API_KEY="sk-..."
 
 # 2. Generate using OpenAI
 ./image-composer-tool ai --provider openai "create a minimal elxr image for IoT"
+```
+
+## Quick Start (GNAI - Intel)
+
+GNAI is Intel's OpenAI-compatible service. Intel employees get a token at
+<https://gnai.intel.com/auth/oauth2/sso>; it expires, so get a new one when
+requests fail with an authentication error.
+
+1. Add this to `image-composer-tool.yml`:
+
+   ```yaml
+   ai:
+     provider: openai
+     openai:
+       base_url: https://gnai.intel.com/api/providers/openai/v1
+       chat_model: gpt-5.4-mini               # any chat model GNAI lists
+       embedding_model: text-embedding-3-large # the embedding model GNAI offers
+   ```
+
+2. Set the token and run:
+
+   ```bash
+   export OPENAI_API_KEY="<GNAI token>"
+   ./image-composer-tool ai "create a minimal edge image for ubuntu with docker"
+   ```
+
+To see the models GNAI offers:
+
+```bash
+curl -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+  https://gnai.intel.com/api/providers/openai/v1/models
 ```
 
 ---
@@ -178,13 +210,12 @@ required.
 
 ### Switching to OpenAI
 
-The AI command currently selects the provider via CLI flags, not
-`image-composer-tool.yml`.
+Set `provider: openai` in `image-composer-tool.yml`, or pass `--provider openai`
+for one run:
 
-Use `--provider openai` when running `image-composer-tool ai`:
-
-```bash
-./image-composer-tool ai --provider openai "minimal Ubuntu server image for cloud VMs"
+```yaml
+ai:
+  provider: openai
 ```
 
 You also need an API key:
@@ -193,12 +224,9 @@ You also need an API key:
 export OPENAI_API_KEY="sk-..."
 ```
 
-The config snippet below shows the global config file schema for reference:
-
-```yaml
-ai:
-  provider: openai
-```
+For an OpenAI-compatible service, also set `openai.base_url` (or the
+`OPENAI_BASE_URL` environment variable) to its URL, including `/v1`, and pick
+models it offers. See [Quick Start (GNAI - Intel)](#quick-start-gnai---intel).
 
 ### Full Configuration Reference
 
@@ -217,13 +245,13 @@ ai:
     timeout: "120s"                    # request timeout
 
   openai:
+    base_url: https://api.openai.com/v1  # API root including /v1
     embedding_model: text-embedding-3-small
     chat_model: gpt-4o-mini
     timeout: "60s"                     # request timeout
 
   cache:
-    enabled: true
-    dir: ./.ai-cache
+    dir: ./.ai-cache                  # the cache is always on
 
   # Advanced - rarely need to change
   scoring:
@@ -235,6 +263,10 @@ ai:
 | Environment Variable | Description |
 |----------------------|-------------|
 | `OPENAI_API_KEY` | Required when `provider: openai` |
+| `OPENAI_BASE_URL` | Overrides `openai.base_url` |
+
+`--provider` and `--templates-dir` override the file. The cache remembers the
+embedding model and service URL, and indexes again when either changes.
 
 ---
 
@@ -301,7 +333,8 @@ package lists.
 | Embeddings fail | Model not pulled | `ollama pull nomic-embed-text` |
 | Chat generation fails | Chat model not pulled | `ollama pull llama3.1:8b` |
 | Poor search results | Stale cache | `./image-composer-tool ai --clear-cache` |
-| OpenAI auth error | Missing API key | `export OPENAI_API_KEY="sk-..."` |
+| OpenAI auth error | Missing or expired API key | `export OPENAI_API_KEY="sk-..."`; for GNAI, get a new token |
+| `404` from the service | Model not offered | Pick models from the service's `/v1/models` list |
 | Slow first run | Building embedding cache | Normal - subsequent runs use cache |
 | `No matching templates found` | Empty templates dir | Check `--templates-dir` points to templates |
 

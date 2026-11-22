@@ -118,7 +118,7 @@
 						"chat_model": {
 							"type": "string",
 							"description": "Model for chat/generation",
-							"default": "llama3.2"
+							"default": "llama3.1:8b"
 						},
 						"timeout": {
 							"type": "string",
@@ -132,6 +132,11 @@
 					"type": "object",
 					"description": "OpenAI-specific settings",
 					"properties": {
+						"base_url": {
+							"type": "string",
+							"description": "API root including /v1, for OpenAI-compatible services such as GNAI",
+							"default": "https://api.openai.com/v1"
+						},
 						"embedding_model": {
 							"type": "string",
 							"description": "Model for embeddings",
@@ -162,7 +167,7 @@
 						"dir": {
 							"type": "string",
 							"description": "Cache directory",
-							"default": "./cache/ai-embeddings"
+							"default": "./.ai-cache"
 						}
 					},
 					"additionalProperties": false

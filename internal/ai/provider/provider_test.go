@@ -190,8 +190,31 @@ func TestOpenAIProviderRequiresAPIKey(t *testing.T) {
 	// Ensure OPENAI_API_KEY is not set for this test
 	t.Setenv("OPENAI_API_KEY", "")
 
-	_, err := NewOpenAIProvider("text-embedding-3-small", "gpt-4o-mini", 60*time.Second)
+	_, err := NewOpenAIProvider("", "text-embedding-3-small", "gpt-4o-mini", 60*time.Second)
 	if err == nil {
 		t.Error("expected error when OPENAI_API_KEY is not set")
+	}
+}
+
+func TestOpenAIProviderBaseURL(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	tests := []struct {
+		name, config, env, want string
+	}{
+		{"default", "", "", "https://api.openai.com/v1"},
+		{"config", "https://gnai.intel.com/api/providers/openai/v1/", "", "https://gnai.intel.com/api/providers/openai/v1"},
+		{"env wins", "https://example.com/v1", "https://gnai.intel.com/api/providers/openai/v1", "https://gnai.intel.com/api/providers/openai/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("OPENAI_BASE_URL", tt.env)
+			p, err := NewOpenAIProvider(tt.config, "text-embedding-3-large", "gpt-5.4-mini", 60*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.baseURL != tt.want {
+				t.Errorf("baseURL = %q, want %q", p.baseURL, tt.want)
+			}
+		})
 	}
 }
