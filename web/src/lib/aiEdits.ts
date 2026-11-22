@@ -345,3 +345,45 @@ export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPl
   }
   return plan
 }
+
+export interface ChangesInput {
+  basePackages: string[]
+  added: AddedPackage[]
+  removed: string[]
+  enabledRepos: string[]
+  // Set only when the user changed them.
+  diskSize?: { from: string; to: string }
+  diskLayoutEdited?: boolean
+  imageName?: string
+  repoLabel: (id: string) => string
+}
+
+// describeChanges lists the user's changes so far as the Changes rail does
+// (Added, Modified, Removed), plus the disk and image name, as plain text
+// for Ask AI to answer questions such as "summarize my changes".
+export function describeChanges(c: ChangesInput): string {
+  const template = new Map<string, string>()
+  for (const entry of c.basePackages) {
+    const name = packageEntryName(entry)
+    if (name) template.set(name, entry === name ? '' : entry.slice(name.length + 1))
+  }
+  const version = (v: string) => v || 'latest (unpinned)'
+  const lines: string[] = []
+  const added = c.added.filter((p) => !template.has(p.name))
+  const modified = c.added.filter((p) => template.has(p.name))
+  if (added.length > 0) {
+    lines.push('Added:', ...added.map((p) => `- ${p.name} ${version(p.version)}, from ${c.repoLabel(p.repo)}`))
+  }
+  if (modified.length > 0) {
+    lines.push(
+      'Modified:',
+      ...modified.map((p) => `- ${p.name}: ${version(template.get(p.name)!)} -> ${version(p.version)}, from ${c.repoLabel(p.repo)}`),
+    )
+  }
+  if (c.removed.length > 0) lines.push('Removed:', ...c.removed.map((n) => `- ${n}`))
+  if (c.enabledRepos.length > 0) lines.push(`Repositories turned on: ${c.enabledRepos.map(c.repoLabel).join(', ')}`)
+  if (c.diskSize) lines.push(`Disk size: ${c.diskSize.from || 'none'} -> ${c.diskSize.to || 'none'}`)
+  else if (c.diskLayoutEdited) lines.push('Disk layout: edited')
+  if (c.imageName) lines.push(`Image name: ${c.imageName}`)
+  return lines.join('\n')
+}

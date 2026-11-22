@@ -10,7 +10,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult, TemplateEdit } from '../api/types'
-import { editPackageNames, planAIEdits, type PlannedEdit } from '../lib/aiEdits'
+import { describeChanges, editPackageNames, planAIEdits, type PlannedEdit } from '../lib/aiEdits'
 import { packageEntryName } from '../lib/authorTemplate'
 import { useStore, type AddedPackage } from '../store'
 
@@ -43,6 +43,8 @@ interface Outcome {
   note: string
   applied: string[]
   skipped: Skipped[]
+  // A question answered in the note, with no edits asked for.
+  answerOnly?: boolean
 }
 
 const MAX_ALTERNATIVES = 3
@@ -54,6 +56,25 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
+
+  // The changes so far, for a question about them. Repository names come
+  // from the catalog; an id stands in if it can't be fetched.
+  const changesSoFar = async (): Promise<string> => {
+    const catalog = await api.listPackageRepos(os).then((r) => r.repos, () => [] as PackageRepo[])
+    const label = (id: string) => [...catalog, ...templateOnlyRepos].find((r) => r.id === id)?.displayName ?? id
+    const s = useStore.getState()
+    const sizeChanged = s.diskEdited && s.disk && s.diskSeed && s.disk.size !== s.diskSeed.size
+    return describeChanges({
+      basePackages,
+      added: s.addedPackages,
+      removed: s.removedPackages,
+      enabledRepos: s.enabledRepos,
+      diskSize: sizeChanged ? { from: s.diskSeed!.size, to: s.disk!.size } : undefined,
+      diskLayoutEdited: s.diskEdited,
+      imageName: s.imageNameEdited ? s.imageName : undefined,
+      repoLabel: label,
+    })
+  }
 
   // Checks edits and applies those that pass. Names are looked up in every
   // repository for the target, so a package from a repository not yet
@@ -136,12 +157,13 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
     setError(null)
     setOutcome(null)
     try {
-      const suggestion = await api.suggestTemplateEdits(templateText, request)
+      const suggestion = await api.suggestTemplateEdits(templateText, request, await changesSoFar())
       const { applied, skipped } = await runEdits(suggestion.edits)
       setOutcome({
         note: suggestion.note,
         applied,
         skipped: [...skipped, ...suggestion.unsupported.map((message) => ({ message }))],
+        answerOnly: suggestion.edits.length === 0 && suggestion.unsupported.length === 0 && !!suggestion.note,
       })
       setRequest('')
     } catch (err) {
@@ -205,8 +227,8 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
       )}
       {outcome && (
         <div className="mt-2 space-y-1 text-xs" aria-live="polite">
-          {outcome.note && <p className="text-slate-700">AI: {outcome.note}</p>}
-          {outcome.applied.length > 0 ? (
+          {outcome.note && <p className="whitespace-pre-line text-slate-700">AI: {outcome.note}</p>}
+          {outcome.answerOnly ? null : outcome.applied.length > 0 ? (
             <p className="text-emerald-800">
               Applied:{' '}
               {outcome.applied.length > MAX_APPLIED_LISTED

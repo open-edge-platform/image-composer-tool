@@ -56,6 +56,7 @@ type TemplateEditSuggestion struct {
 const (
 	maxEditRequest    = 2000
 	maxEditTemplate   = 1 << 20
+	maxEditChanges    = 64 << 10
 	maxSuggestedEdits = 50
 	aiEditTimeout     = 2 * time.Minute
 )
@@ -105,13 +106,18 @@ The user describes changes to the template they are editing. Answer only with th
 Use real package names for the template's distribution, preferably from its own repositories. Never invent versions.
 Leave fields an edit doesn't use as empty strings.
 List anything you can't express with these edits in "unsupported", one short sentence each.
-In "note", tell the user in one or two short sentences what you changed.`
+In "note", tell the user in one or two short sentences what you changed.
+If the user asks a question instead of asking for changes, such as what has changed so far or what a package is, answer it in "note" (a few short lines; lists are fine), and return no edits and nothing in "unsupported".
+"Changes so far" lists how the template differs from the curated one it is based on; the template shown already includes them.`
 
 // SuggestTemplateEdits asks the AI service for edits to templateYAML that do
 // what request says. The edits are not checked against any repository here:
 // the browser checks them against the repositories the user has checked, as
 // it does for edits made by hand.
-func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, request string) (*TemplateEditSuggestion, error) {
+//
+// changes is the user's changes so far as plain text, as the Changes rail
+// lists them, so the AI can answer questions about them. It may be empty.
+func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, request, changes string) (*TemplateEditSuggestion, error) {
 	if !s.aiEnabled() {
 		return nil, newError(http.StatusForbidden, "FORBIDDEN", "the AI assistant is not turned on for this server")
 	}
@@ -123,6 +129,9 @@ func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, reques
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
 			fmt.Sprintf("the request is longer than %d characters", maxEditRequest))
 	}
+	if len(changes) > maxEditChanges {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", "the list of changes is too long")
+	}
 	if strings.TrimSpace(templateYAML) == "" || len(templateYAML) > maxEditTemplate {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", "the template is empty or too large")
 	}
@@ -133,9 +142,12 @@ func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, reques
 
 	ctx, cancel := context.WithTimeout(ctx, aiEditTimeout)
 	defer cancel()
+	if strings.TrimSpace(changes) == "" {
+		changes = "none"
+	}
 	answer, err := s.cfg.AI.ChatJSON(ctx, []provider.ChatMessage{
 		{Role: "system", Content: templateEditPrompt},
-		{Role: "user", Content: "Template:\n```yaml\n" + redacted + "\n```\n\nRequest: " + request},
+		{Role: "user", Content: "Template:\n```yaml\n" + redacted + "\n```\n\nChanges so far:\n" + changes + "\n\nRequest: " + request},
 	}, "template_edits", templateEditSchema)
 	if err != nil {
 		return nil, s.aiError(err)

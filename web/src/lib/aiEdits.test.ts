@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { PackageSearchResult, TemplateEdit } from '../api/types'
-import { editPackageNames, normalizeDiskSize, planAIEdits, type AIEditContext } from './aiEdits'
+import { describeChanges, editPackageNames, normalizeDiskSize, planAIEdits, type AIEditContext } from './aiEdits'
 
 const edit = (op: TemplateEdit['op'], pkg = '', version = '', value = ''): TemplateEdit => ({
   op,
@@ -192,6 +192,41 @@ describe('planAIEdits pin_latest', () => {
       { kind: 'package', pkg: { name: 'libnss-libvirt', version: '5.7~ppa', repo: 'nvl-ppa' }, enableRepo: undefined },
       { kind: 'package', pkg: { name: 'snapd', version: '2.66', repo: 'ubuntu' }, enableRepo: undefined },
     ])
+  })
+})
+
+describe('describeChanges', () => {
+  it('lists the changes as the Changes rail groups them', () => {
+    const text = describeChanges({
+      basePackages: ['libnss-libvirt', 'snapd', 'mesa_1.0'],
+      added: [
+        { name: 'docker.io', version: '', repo: 'ubuntu' },
+        { name: 'libnss-libvirt', version: '12.0', repo: 'nvl-ppa' },
+      ],
+      removed: ['snapd'],
+      enabledRepos: ['docker'],
+      diskSize: { from: '64GiB', to: '80GiB' },
+      diskLayoutEdited: true,
+      imageName: 'nvl-docker',
+      repoLabel: (id) => ({ ubuntu: 'Ubuntu', 'nvl-ppa': 'NVL PPA', docker: 'Docker CE' })[id] ?? id,
+    })
+    expect(text).toBe(
+      [
+        'Added:',
+        '- docker.io latest (unpinned), from Ubuntu',
+        'Modified:',
+        '- libnss-libvirt: latest (unpinned) -> 12.0, from NVL PPA',
+        'Removed:',
+        '- snapd',
+        'Repositories turned on: Docker CE',
+        'Disk size: 64GiB -> 80GiB',
+        'Image name: nvl-docker',
+      ].join('\n'),
+    )
+  })
+
+  it('is empty with no changes', () => {
+    expect(describeChanges({ basePackages: [], added: [], removed: [], enabledRepos: [], repoLabel: (id) => id })).toBe('')
   })
 })
 

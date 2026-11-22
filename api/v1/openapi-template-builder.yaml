@@ -878,7 +878,12 @@ components:
         request:
           type: string
           maxLength: 2000
-          description: What to change, in the user's words.
+          description: What to change, or a question, in the user's words.
+        changes:
+          type: string
+          description: |
+            The user's changes so far as plain text, as the Changes rail lists
+            them, so a question such as "summarize my changes" can be answered.
 
     TemplateEdit:
       type: object

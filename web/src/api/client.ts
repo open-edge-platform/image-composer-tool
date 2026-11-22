@@ -53,10 +53,12 @@ export const api = {
 
   // Ask AI: the edits the AI service suggests for templateYaml. They are
   // unchecked; see lib/aiEdits.ts.
-  suggestTemplateEdits: (templateYaml: string, request: string) =>
+  // changes is the user's changes so far as text (see describeChanges), so
+  // a question about them can be answered.
+  suggestTemplateEdits: (templateYaml: string, request: string, changes: string) =>
     jsonFetch<TemplateEditSuggestion>('/ai/template-edits', {
       method: 'POST',
-      body: JSON.stringify({ templateYaml, request }),
+      body: JSON.stringify({ templateYaml, request, changes }),
     }),
 
   compose: (req: ComposeRequest) =>

@@ -79,6 +79,7 @@ describe('AskAI', () => {
     expect(mockApi.suggestTemplateEdits).toHaveBeenCalledWith(
       'systemConfig:\n  packages:\n    - snapd\n',
       'add docker, remove snapd, 32 GiB disk',
+      '',
     )
     expect(mockApi.lookupPackages).toHaveBeenCalledWith({
       os: 'ubuntu26',
@@ -126,6 +127,24 @@ describe('AskAI', () => {
     expect(useStore.getState().addedPackages).toEqual([{ name: 'docker.io', version: '', repo: 'ubuntu' }])
     expect(isAIChange(useStore.getState(), 'docker.io')).toBe(true)
     expect(screen.queryByText(/docker: not found/)).toBeNull()
+  })
+
+  it('sends the changes so far, and shows an answer without an edit summary', async () => {
+    useStore.getState().setPackage({ name: 'htop', version: '3.4', repo: 'ubuntu' })
+    useStore.getState().setPackageRemoved('snapd', true)
+    mockApi.suggestTemplateEdits.mockResolvedValue({
+      note: 'You added htop 3.4 and removed snapd.',
+      edits: [],
+      unsupported: [],
+    })
+    renderAskAI()
+    ask('summarize all changes')
+
+    await screen.findByText('AI: You added htop 3.4 and removed snapd.')
+    expect(mockApi.suggestTemplateEdits.mock.calls[0][2]).toBe(
+      'Added:\n- htop 3.4, from Ubuntu\nRemoved:\n- snapd',
+    )
+    expect(screen.queryByText('No changes were applied.')).toBeNull()
   })
 
   it('drops the AI tag once the change is undone or edited by hand', async () => {

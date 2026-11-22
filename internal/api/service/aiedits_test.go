@@ -62,7 +62,7 @@ func TestSuggestTemplateEdits(t *testing.T) {
 		         {"op":"remove","package":" snapd ","version":"","value":""},
 		         {"op":"set_disk_size","package":"","version":"","value":"32GiB"}],
 		"unsupported":["Partitions can't be added.", " "]}`}
-	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "add docker, remove snapd, 32 GiB disk")
+	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "add docker, remove snapd, 32 GiB disk", "Removed: vim")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestSuggestTemplateEdits(t *testing.T) {
 			t.Errorf("the request sent %q to the AI service:\n%s", secret, sent)
 		}
 	}
-	for _, kept := range []string{"snapd", "name: user", "add docker, remove snapd"} {
+	for _, kept := range []string{"snapd", "name: user", "add docker, remove snapd", "Changes so far:\nRemoved: vim"} {
 		if !strings.Contains(sent, kept) {
 			t.Errorf("the request lacks %q:\n%s", kept, sent)
 		}
@@ -95,7 +95,7 @@ func TestSuggestTemplateEditsDropsEditsItCantApply(t *testing.T) {
 		{"op":"partition","package":"","version":"","value":"x"},
 		{"op":"set_image_name","package":"","version":"","value":""},
 		{"op":"set_version","package":"linux-image-7.3-intel","version":"261014t080608z-resolute1","value":""}]}`}
-	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "pin the kernel")
+	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "pin the kernel", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,27 +112,27 @@ func TestSuggestTemplateEditsErrors(t *testing.T) {
 
 	off := newTestService(t)
 	off.cfg.AI = &fakeEditor{}
-	_, err := off.SuggestTemplateEdits(ctx, aiTestTemplate, "x")
+	_, err := off.SuggestTemplateEdits(ctx, aiTestTemplate, "x", "")
 	wantCode(t, err, http.StatusForbidden, "FORBIDDEN") // AI needs authoring too
 
 	s := aiService(t, &fakeEditor{})
-	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "  ")
+	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "  ", "")
 	wantCode(t, err, http.StatusBadRequest, "BAD_REQUEST")
-	_, err = s.SuggestTemplateEdits(ctx, "a: [", "x")
+	_, err = s.SuggestTemplateEdits(ctx, "a: [", "x", "")
 	wantCode(t, err, http.StatusBadRequest, "BAD_REQUEST")
 
 	s = aiService(t, &fakeEditor{err: &provider.APIError{StatusCode: http.StatusUnauthorized, Message: "expired"}})
-	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "x")
+	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "x", "")
 	if se := wantCode(t, err, http.StatusBadGateway, "AI_UNAUTHORIZED"); !strings.Contains(se.Message, "https://gnai.example/sso") {
 		t.Errorf("message %q does not say where to get a new token", se.Message)
 	}
 
 	s = aiService(t, &fakeEditor{answer: "not json"})
-	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "x")
+	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "x", "")
 	wantCode(t, err, http.StatusBadGateway, "AI_BAD_RESPONSE")
 
 	s = aiService(t, &fakeEditor{err: context.DeadlineExceeded})
-	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "x")
+	_, err = s.SuggestTemplateEdits(ctx, aiTestTemplate, "x", "")
 	wantCode(t, err, http.StatusGatewayTimeout, "AI_UNAVAILABLE")
 }
 
@@ -152,7 +152,7 @@ func TestSuggestTemplateEditsPinLatest(t *testing.T) {
 		{"op":"pin_latest","package":"","version":"","value":"ppa"},
 		{"op":"pin_latest","package":"htop","version":"","value":""},
 		{"op":"pin_latest","package":"","version":"","value":""}]}`}
-	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "pin the ppa packages")
+	got, err := aiService(t, f).SuggestTemplateEdits(context.Background(), aiTestTemplate, "pin the ppa packages", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,7 +36,11 @@ func (s *Server) SuggestTemplateEdits(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
 		return
 	}
-	res, err := s.svc.SuggestTemplateEdits(r.Context(), req.TemplateYaml, req.Request)
+	changes := ""
+	if req.Changes != nil {
+		changes = *req.Changes
+	}
+	res, err := s.svc.SuggestTemplateEdits(r.Context(), req.TemplateYaml, req.Request, changes)
 	if err != nil {
 		writeServiceError(w, err)
 		return
