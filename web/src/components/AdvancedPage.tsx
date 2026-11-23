@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, encodePackage, skuLabelFor } from '../store'
 import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import type { Selection } from '../store'
 import { api } from '../api/client'
@@ -14,6 +14,7 @@ import type {
   PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
@@ -136,7 +137,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const missingTarget = opts
     ? ([
         ['Use Case', !selection.vertical],
-        ['SKU', opts.skus.length > 0 && !selection.sku],
+        [skuLabelFor(manifest, selection.vertical), opts.skus.length > 0 && !selection.sku],
         ['Platform', !selection.platform],
         ['Operating System', !selection.os],
         ['Kernel', opts.kernels.length > 0 && !selection.kernel],
@@ -527,6 +528,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         {step === 0 && (
           <TargetStep
             opts={opts}
+            skuLabel={skuLabelFor(manifest, selection.vertical)}
+            platformFirst={cascadeOrder(manifest, selection.vertical)[1] === 'platform'}
             selection={selection}
             setSel={setSel}
             imageName={imageName}
@@ -700,12 +703,16 @@ const REQUIRED = <span className="text-red-600"> *</span>
 // Basic tab), plus the editable Image Name override.
 function TargetStep({
   opts,
+  skuLabel,
+  platformFirst,
   selection,
   setSel,
   imageName,
   setImageName,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
+  skuLabel: string
+  platformFirst: boolean
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
@@ -715,8 +722,8 @@ function TargetStep({
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed. Fields marked{' '}
+        Select a Use Case to load the default configuration. The remaining
+        selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
@@ -728,24 +735,14 @@ function TargetStep({
         options={opts.verticals}
         onChange={(v) => setSel('vertical', v)}
       />
-      <Select
-        label="SKU"
-        // SKU is optional where the manifest offers none for this use case.
-        labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-        placeholder="-- Select SKU --"
-        value={selection.sku}
-        options={opts.skus}
-        disabled={!selection.vertical}
-        onChange={(v) => setSel('sku', v)}
-      />
-      <Select
-        label="Platform"
-        labelSuffix={REQUIRED}
-        placeholder="-- Select Platform --"
-        value={selection.platform}
-        options={opts.platforms}
-        disabled={!selection.sku && opts.skus.length > 0}
-        onChange={(v) => setSel('platform', v)}
+      <SkuPlatformSelects
+        skus={opts.skus}
+        platforms={opts.platforms}
+        selection={selection}
+        setSel={setSel}
+        skuLabel={skuLabel}
+        platformFirst={platformFirst}
+        required={REQUIRED}
       />
       <Select
         label="Operating System"

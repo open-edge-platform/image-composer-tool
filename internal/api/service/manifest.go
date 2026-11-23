@@ -33,6 +33,16 @@ type Option struct {
 	DisplayName string `json:"displayName"`
 }
 
+// Vertical is a use case option. SKULabel renames the SKU dropdown for a use
+// case whose second choice is something else, such as a kernel version, and
+// PlatformFirst asks for the platform before it.
+type Vertical struct {
+	ID            string `json:"id"`
+	DisplayName   string `json:"displayName"`
+	SKULabel      string `json:"skuLabel,omitempty"`
+	PlatformFirst bool   `json:"platformFirst,omitempty"`
+}
+
 // Target is an OS option with its family and architecture.
 type Target struct {
 	ID          string `json:"id"`
@@ -44,7 +54,7 @@ type Target struct {
 // Manifest is the full configuration payload served to the UI.
 type Manifest struct {
 	Combinations []Combination `json:"combinations"`
-	Verticals    []Option      `json:"verticals"`
+	Verticals    []Vertical    `json:"verticals"`
 	SKUs         []Option      `json:"skus"`
 	Platforms    []Option      `json:"platforms"`
 	Targets      []Target      `json:"targets"`
