@@ -827,3 +827,50 @@ func TestStopGPGComponents_ComponentParsing(t *testing.T) {
 		})
 	}
 }
+
+func TestQemuUserPackage(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	hasApt := shell.MockCommand{Pattern: "command -v apt-get", Output: "/usr/bin/apt-get", Error: nil}
+
+	tests := []struct {
+		name string
+		cmds []shell.MockCommand
+		want string
+	}{
+		{
+			name: "installable (Ubuntu 24.04, Debian)",
+			cmds: []shell.MockCommand{
+				hasApt,
+				{Pattern: "apt-get -s install qemu-user-static", Output: "Inst qemu-user-static", Error: nil},
+			},
+			want: "qemu-user-static",
+		},
+		{
+			// Covers a virtual package (Ubuntu 26.04) and a package that a pin
+			// makes ineligible: apt exits 100 either way, whatever the locale.
+			name: "not installable (virtual package or pinned out)",
+			cmds: []shell.MockCommand{
+				hasApt,
+				{Pattern: "apt-get -s install qemu-user-static", Output: "", Error: fmt.Errorf("exit status 100")},
+			},
+			want: "qemu-user-binfmt",
+		},
+		{
+			name: "host without apt-get (yum, tdnf)",
+			cmds: []shell.MockCommand{
+				{Pattern: "command -v apt-get", Output: "", Error: fmt.Errorf("exit status 1")},
+			},
+			want: "qemu-user-static",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shell.Default = shell.NewMockExecutor(tt.cmds)
+			if got := system.QemuUserPackage(); got != tt.want {
+				t.Errorf("QemuUserPackage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

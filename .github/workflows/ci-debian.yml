@@ -46,7 +46,7 @@ jobs:
           go-version: '1.26'
           cache: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@0499de31b99561a6d14a36a5f662c2a54f91beee #v4.31.2
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 #v4.39.3
         with:
           languages: go
           build-mode: manual
@@ -54,7 +54,7 @@ jobs:
       - name: Build Go sources
         run: go build -a ./...
       - name: Analyze Go sources
-        uses: github/codeql-action/analyze@0499de31b99561a6d14a36a5f662c2a54f91beee #v4.31.2
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 #v4.39.3
         with:
           category: /language:go/debian
           output: codeql-results
@@ -123,7 +123,8 @@ jobs:
           test "$(dpkg-deb -f "${file}" Version)" = "${VERSION}"
           test "$(dpkg-deb -f "${file}" Architecture)" = amd64
           dpkg-deb --contents "${file}"
-          (cd dist && sha256sum "ict_${VERSION}_amd64.deb" > SHA256SUMS)
+          cp scripts/install-ict.sh dist/install-ict.sh
+          (cd dist && sha256sum "ict_${VERSION}_amd64.deb" install-ict.sh > SHA256SUMS)
       - name: Extract package payload for SBOM
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -152,9 +153,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ['ubuntu:24.04', 'debian:12']
+        image: ['ubuntu:24.04', 'ubuntu:26.04', 'debian:12', 'debian:13']
     steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 #v6.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 #v8.0.2
         with:
           name: ict-deb-amd64
           path: dist
@@ -186,8 +187,41 @@ jobs:
               test ! -e /etc/image-composer-tool/config.yml
             '
 
+  install-script:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:24.04', 'ubuntu:26.04', 'debian:12', 'debian:13']
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 #v8.0.2
+        with:
+          name: ict-deb-amd64
+          path: dist
+      - name: Install with install-ict.sh
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          docker run --rm -v "${PWD}/dist:/dist:ro" -e VERSION \
+            "${IMAGE}" bash -euo pipefail -c '
+              rm -f /etc/dpkg/dpkg.cfg.d/excludes
+              bash /dist/install-ict.sh --deb "/dist/ict_${VERSION}_amd64.deb"
+              test "$(dpkg-query -W -f="\${Version}" ict)" = "${VERSION}"
+              image-composer-tool version | grep -F "${VERSION}"
+              for tool in sudo mmdebstrap mkfs.vfat mcopy xorriso qemu-img cryptsetup fdisk parted sgdisk gpg cpio growpart; do
+                command -v "${tool}"
+              done
+              # a second run must succeed and change nothing
+              bash /dist/install-ict.sh --deb "/dist/ict_${VERSION}_amd64.deb"
+            '
+
   publish:
-    needs: [build, install]
+    needs: [build, install, install-script]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -204,7 +238,7 @@ jobs:
           {
             echo "## Published artifacts"
             echo
-            echo "Build and installation tests passed on Ubuntu 24.04 and Debian 12."
+            echo "Build and installation tests passed on Ubuntu 24.04 and 26.04, and Debian 12 and 13."
             echo
             echo "| Artifact | Download |"
             echo "|---|---|"
@@ -218,13 +252,13 @@ jobs:
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ict-')
-    needs: [build, install, publish]
+    needs: [build, install, install-script, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 #v6.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 #v8.0.2
         with:
           name: ict-deb-amd64
           path: dist
@@ -240,8 +274,8 @@ jobs:
           name="ict_${VERSION//\~/.}_amd64.deb"
           mkdir release-assets
           cp "dist/ict_${VERSION}_amd64.deb" "release-assets/${name}"
-          cp dist/sbom.spdx.json release-assets/
-          (cd release-assets && sha256sum "${name}" sbom.spdx.json > SHA256SUMS)
+          cp dist/sbom.spdx.json dist/install-ict.sh release-assets/
+          (cd release-assets && sha256sum "${name}" sbom.spdx.json install-ict.sh > SHA256SUMS)
           cat > release-notes.md <<EOF
           ICT Debian package built from \`${TAG}\`.
 
@@ -256,11 +290,20 @@ jobs:
           sudo apt install ./${name}
           \`\`\`
 
-          Verified: installs, removes and purges cleanly on Ubuntu 24.04 and
-          Debian 12, including CLI version/help and installed configuration checks.
+          To install the package together with the host tools a build uses, download
+          \`install-ict.sh\` and run it with the release tag:
+
+          \`\`\`bash
+          bash install-ict.sh --tag ${TAG}
+          \`\`\`
+
+          Verified: installs, removes and purges cleanly on Ubuntu 24.04 and 26.04
+          and Debian 12 and 13, including CLI version/help and installed configuration
+          checks; \`install-ict.sh\` installs the package and its prerequisites on the
+          same releases.
           This does not verify OS-image composition.
 
-          The Debian package, SPDX SBOM and SHA256 checksums are attached below.
+          The Debian package, installer script, SPDX SBOM and SHA256 checksums are attached below.
           Scan and coverage reports are available as artifacts in the
           [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
           EOF

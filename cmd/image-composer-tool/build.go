@@ -71,6 +71,8 @@ var (
 	ftpProxy     string
 	noProxy      string
 	sshKeyFlags  []string // --ssh-authorized-key USER=FILE, repeatable
+	// --replace-additional-file FINAL=FILE, repeatable
+	replaceAdditionalFileFlags []string
 
 	oepTokenFile string // --oep-installer-token-file: GitHub token for systemConfig.oepInstaller downloads
 )
@@ -119,6 +121,8 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().StringVar(&noProxy, "no-proxy", "", "Override systemConfig.proxy.noProxy (comma-separated)")
 	buildCmd.Flags().StringArrayVar(&sshKeyFlags, "ssh-authorized-key", nil,
 		"Add SSH public keys from FILE for an existing template user, as USER=FILE (repeatable)")
+	buildCmd.Flags().StringArrayVar(&replaceAdditionalFileFlags, "replace-additional-file", nil,
+		"Replace the host file of the systemConfig.additionalFiles entry installed at FINAL, as FINAL=FILE (repeatable). Does not add files")
 	buildCmd.Flags().StringVar(&oepTokenFile, strings.TrimPrefix(oepinstaller.TokenFileFlag, "--"), "",
 		"Read the GitHub token for systemConfig.oepInstaller downloads from FILE; takes precedence over "+
 			oepinstaller.TokenEnv+", "+oepinstaller.TokenFileEnv+" and oep_installer.token_file")
@@ -546,6 +550,14 @@ func applyCompositionFlagOverrides(cmd *cobra.Command, template *config.ImageTem
 			return fmt.Errorf("invalid --ssh-authorized-key %q: expected USER=FILE", flag)
 		}
 		overrides.SSHKeys = append(overrides.SSHKeys, config.SSHKeyOverride{User: user, File: file})
+	}
+	for _, flag := range replaceAdditionalFileFlags {
+		final, file, ok := strings.Cut(flag, "=")
+		if !ok || final == "" || file == "" {
+			return fmt.Errorf("invalid --replace-additional-file %q: expected FINAL=FILE", flag)
+		}
+		overrides.AdditionalFileReplacements = append(overrides.AdditionalFileReplacements,
+			config.AdditionalFileReplacement{Final: final, Local: file})
 	}
 	if err := template.ApplyCompositionOverrides(overrides); err != nil {
 		return fmt.Errorf("invalid command-line override: %w", err)

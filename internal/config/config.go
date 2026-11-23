@@ -488,6 +488,11 @@ type AdditionalFileInfo struct {
 	// boot/initramfs regeneration so the generator can consume it. Ignored by
 	// create-mode builds, which have a single file-copy step.
 	Stage string `yaml:"stage,omitempty"`
+
+	// replacedOnCommandLine marks an entry whose host file was replaced with
+	// --replace-additional-file, so generation that would later overwrite the
+	// entry can fail instead of silently dropping the replacement.
+	replacedOnCommandLine bool
 }
 
 // ConfigurationInfo holds information about instructions to execute during system configuration
