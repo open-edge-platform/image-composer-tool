@@ -256,6 +256,44 @@ func TestValidateAgainstTarget(t *testing.T) {
 	}
 }
 
+func TestParseDpkgStatusSourceIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	status := "Package: mesa-bin\nSource: mesa (2:26.0.8-1ppa1~resolute1)\n" +
+		"Version: 2:26.0.8-1+b1\nArchitecture: amd64\nMulti-Arch: same\nStatus: install ok installed\n\n" +
+		"Package: mesa-bin\nSource: mesa (2:26.0.8-1ppa1~resolute1)\n" +
+		"Version: 2:26.0.8-1+b1\nArchitecture: i386\nMulti-Arch: same\nStatus: install ok installed\n\n" +
+		"Package: implicit\nSource: upstream\nVersion: 1.0-1\nArchitecture: all\n\n" +
+		"Package: default\nVersion: 3:2.0-1\nArchitecture: amd64\n\n" +
+		"Package: malformed\nSource: invalid (1.0\nVersion: 1.0\nArchitecture: amd64\n\n" +
+		"Package: empty\nSource:\nVersion: 1.0\nArchitecture: amd64\n"
+	writeFile(t, root, "status", status)
+
+	packages, err := parseDpkgStatus(filepath.Join(root, "status"))
+	if err != nil {
+		t.Fatalf("parseDpkgStatus: %v", err)
+	}
+	want := []struct{ name, version, source, sourceVersion, arch, multiArch string }{
+		{"mesa-bin", "2:26.0.8-1+b1", "mesa", "2:26.0.8-1ppa1~resolute1", "amd64", "same"},
+		{"mesa-bin", "2:26.0.8-1+b1", "mesa", "2:26.0.8-1ppa1~resolute1", "i386", "same"},
+		{"implicit", "1.0-1", "upstream", "1.0-1", "all", ""},
+		{"default", "3:2.0-1", "default", "3:2.0-1", "amd64", ""},
+		{"malformed", "1.0", "", "", "amd64", ""},
+		{"empty", "1.0", "", "", "amd64", ""},
+	}
+	if len(packages) != len(want) {
+		t.Fatalf("got %d packages, want %d", len(packages), len(want))
+	}
+	for index, pkg := range packages {
+		expected := want[index]
+		if pkg.Name != expected.name || pkg.Version != expected.version || pkg.SourceName != expected.source ||
+			pkg.SourceVersion != expected.sourceVersion || pkg.Arch != expected.arch || pkg.MultiArch != expected.multiArch {
+			t.Errorf("package %d = %+v, want %+v", index, pkg, expected)
+		}
+	}
+}
+
 func TestParseDpkgStatus(t *testing.T) {
 	root := t.TempDir()
 	status := `Package: bash
