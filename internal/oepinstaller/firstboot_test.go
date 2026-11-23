@@ -55,8 +55,8 @@ func TestAddFirstBoot(t *testing.T) {
 	if files[sudoersInclude] != includeContents || !strings.Contains(files[sudoersInclude], "#includedir /run/") {
 		t.Errorf("sudoers include = %q", files[sudoersInclude])
 	}
-	// The included directory must exist at every boot, or sudo-rs rejects the
-	// sudoers file for every user.
+	// The included directory must exist at every boot, or sudo-rs reports a
+	// sudoers error on every sudo command.
 	if want := "d /run/ict-oep-installer.d 0755 root root -\n"; !strings.Contains(files[tmpfilesConf], want) {
 		t.Errorf("tmpfiles entry %s = %q, want it to contain %q", tmpfilesConf, files[tmpfilesConf], want)
 	}
