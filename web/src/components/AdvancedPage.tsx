@@ -186,6 +186,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     const t = setTimeout(() => setDebouncedBaseImage(baseImage), IMAGE_NAME_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [baseImage])
+  // Only an edited path is sent. Keyed on this rather than on the debounced
+  // value, so seeding the field from a compose doesn't trigger another compose
+  // (each of which clears the page's error).
+  const baseImageOverride = baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined
 
   // Package picks are encoded once here, and memoised on the encoded strings
   // rather than on addedPackages itself: the store hands back a new array on
@@ -194,10 +198,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Debounced for the same reason the image name is: a credential is typed, and
   // every override compose writes and removes a server-side delta file. The
   // build itself re-reads the live value, so nothing waits on a typing pause.
-  const [debouncedCredentials, setDebouncedCredentials] = useState<CredentialInput[]>([])
+  //
+  // Kept as the JSON text rather than the parsed list, so settling on the same
+  // logins (an empty list on first render, say) doesn't hand the request a new
+  // object and trigger another compose, which would clear the page's error.
   const credentialsKey = useMemo(() => JSON.stringify(credentials), [credentials])
+  const [debouncedCredentialsKey, setDebouncedCredentialsKey] = useState('[]')
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedCredentials(JSON.parse(credentialsKey)), CREDENTIALS_DEBOUNCE_MS)
+    const t = setTimeout(() => setDebouncedCredentialsKey(credentialsKey), CREDENTIALS_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [credentialsKey])
 
@@ -214,12 +222,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Debounced like the credentials, and only once every entry is complete: a
   // half-typed account is rejected by the backend, which would replace the
   // Review pane with an error while the user is still filling the form in.
-  const [debouncedNewUsers, setDebouncedNewUsers] = useState<NewUserInput[]>([])
   const newUsersKey = useMemo(() => JSON.stringify(newUsers), [newUsers])
+  const [debouncedNewUsersKey, setDebouncedNewUsersKey] = useState('[]')
   const newUsersReady = newUsersValid(newUsers, composedRequirements)
   useEffect(() => {
     if (!newUsersReady) return
-    const t = setTimeout(() => setDebouncedNewUsers(JSON.parse(newUsersKey)), CREDENTIALS_DEBOUNCE_MS)
+    const t = setTimeout(() => setDebouncedNewUsersKey(newUsersKey), CREDENTIALS_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [newUsersKey, newUsersReady])
 
@@ -281,22 +289,28 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // has edited it, and only the settled (debounced) value, so an in-progress
   // edit doesn't compose against a half-typed name. Packages and repos need no
   // debounce of their own — each arrives from a discrete click, not a keystroke.
+  // What is actually sent. The request is keyed on these rather than on the
+  // debounced values themselves, so a value that changes without being sent
+  // (the disk layout re-encoded once overlay mode is known, say) doesn't
+  // trigger another compose, each of which clears the page's error.
+  const imageNameOverride = imageNameEdited ? debouncedImageName : undefined
+  const diskOverrideKey = diskEdited ? debouncedDiskKey : ''
   const composeReq: ComposeRequest = useMemo(
     () => ({
       ...selection,
-      imageName: imageNameEdited ? debouncedImageName : undefined,
+      imageName: imageNameOverride,
       templateYaml: openedActive ? opened?.text : undefined,
-      baseImage: baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined,
+      baseImage: baseImageOverride,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
       repos: reposKey ? reposKey.split('\n') : undefined,
-      disk: diskEdited && debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
-      credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
-      users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
+      disk: diskOverrideKey ? JSON.parse(diskOverrideKey) : undefined,
+      credentials: debouncedCredentialsKey !== '[]' ? (JSON.parse(debouncedCredentialsKey) as CredentialInput[]) : undefined,
+      users: debouncedNewUsersKey !== '[]' ? (JSON.parse(debouncedNewUsersKey) as NewUserInput[]) : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, baseImageEdited, debouncedBaseImage, packagesKey, reposKey, diskEdited,
-      debouncedDiskKey, debouncedCredentials, debouncedNewUsers, openedActive, opened?.text],
+    [selection, imageNameOverride, baseImageOverride, packagesKey, reposKey, diskOverrideKey,
+      debouncedCredentialsKey, debouncedNewUsersKey, openedActive, opened?.text],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
