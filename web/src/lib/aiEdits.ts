@@ -105,6 +105,107 @@ export function normalizeDiskSize(value: string): string | null {
   return unit && amount > 0 ? `${amount}${unit}` : null
 }
 
+// The most packages one add_matching edit adds. A pattern that matches more,
+// such as gir* across Ubuntu's archive (300 or so), is reported rather than
+// applied, so the user can name a repository or narrow it.
+export const MAX_PATTERN_MATCHES = 50
+// How many search results a pattern is checked against at most.
+const MAX_PATTERN_SCAN = 1000
+
+// patternMatcher turns a package name pattern (* and ? wildcards) into the
+// literal start a search looks up and a test for whole names. Null for a
+// pattern without at least two literal characters before its first wildcard.
+export function patternMatcher(pattern: string): { prefix: string; test: (name: string) => boolean } | null {
+  const first = pattern.search(/[*?]/)
+  if (first < 2) return null
+  const source = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
+  const re = new RegExp(`^${source}$`)
+  return { prefix: pattern.slice(0, first), test: (name) => re.test(name) }
+}
+
+export interface PatternSearch {
+  // One page of names starting with prefix in repos, and how many there are.
+  search: (prefix: string, repos: string[], offset: number) => Promise<{ names: string[]; total: number }>
+  repos: AIEditContext['repos']
+  // Repositories a build reads now.
+  checkedRepos: Set<string>
+  // Packages the template has (and the user hasn't removed) or the user added.
+  present: (name: string) => boolean
+}
+
+// expandPatternEdits replaces each add_matching edit with an add for every
+// package whose name matches its pattern: in the repository it names, or in
+// every repository in use. What can't be expanded is reported in skipped.
+export async function expandPatternEdits(
+  edits: TemplateEdit[],
+  ctx: PatternSearch,
+): Promise<{ edits: TemplateEdit[]; skipped: SkippedEdit[] }> {
+  const out: TemplateEdit[] = []
+  const skipped: SkippedEdit[] = []
+  for (const e of edits) {
+    if (e.op !== 'add_matching') {
+      out.push(e)
+      continue
+    }
+    const pattern = e.package
+    const matcher = patternMatcher(pattern)
+    if (!matcher) {
+      skipped.push({ message: `${pattern}: a pattern needs at least two letters before its first * or ?.` })
+      continue
+    }
+    let scope: string[]
+    let where: string
+    if (e.value) {
+      const repo = matchRepo(e.value, ctx.repos, ctx.checkedRepos)
+      if (Array.isArray(repo)) {
+        skipped.push({
+          message:
+            repo.length === 0
+              ? `${pattern}: no repository matches "${e.value}".`
+              : `${pattern}: "${e.value}" matches several repositories (${repo.map((r) => r.displayName).join(', ')}); name one.`,
+        })
+        continue
+      }
+      scope = [repo.id]
+      where = repo.displayName
+    } else {
+      scope = [...ctx.checkedRepos]
+      where = 'the repositories in use'
+    }
+    const names = new Set<string>()
+    try {
+      for (let offset = 0; offset < MAX_PATTERN_SCAN; ) {
+        const page = await ctx.search(matcher.prefix, scope, offset)
+        page.names.filter(matcher.test).forEach((n) => names.add(n))
+        offset += page.names.length
+        if (page.names.length === 0 || offset >= page.total) break
+      }
+    } catch {
+      skipped.push({ message: `${pattern}: couldn't search ${where} right now. Try again.` })
+      continue
+    }
+    const matches = [...names].sort()
+    if (matches.length === 0) {
+      skipped.push({ message: `${pattern}: no package in ${where} matches.` })
+      continue
+    }
+    if (matches.length > MAX_PATTERN_MATCHES) {
+      skipped.push({
+        message: `${pattern}: ${matches.length} packages in ${where} match, more than the ${MAX_PATTERN_MATCHES} Ask AI adds at once. Name a repository (such as "${pattern} from af01p") or a narrower pattern.`,
+      })
+      continue
+    }
+    const already = matches.filter(ctx.present)
+    if (already.length > 0) {
+      skipped.push({ message: `${already.length} matching ${pattern} already in the template: ${listNames(already)}.` })
+    }
+    for (const name of matches) {
+      if (!ctx.present(name)) out.push({ op: 'add', package: name, version: '', value: '' })
+    }
+  }
+  return { edits: out, skipped }
+}
+
 export function planAIEdits(edits: TemplateEdit[], ctx: AIEditContext): AIEditPlan {
   const plan: AIEditPlan = { apply: [], skipped: [] }
   const priorityOf = (repo: string) => ctx.priorities[repo] ?? 500

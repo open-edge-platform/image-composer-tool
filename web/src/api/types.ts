@@ -27,7 +27,7 @@ export interface Capabilities {
 // or, with package empty, every package from the repository value names in
 // the user's words. Unused fields are empty.
 export interface TemplateEdit {
-  op: 'add' | 'remove' | 'set_version' | 'pin_latest' | 'set_disk_size' | 'set_image_name'
+  op: 'add' | 'remove' | 'set_version' | 'pin_latest' | 'add_matching' | 'set_disk_size' | 'set_image_name'
   package: string
   version: string
   value: string

@@ -10,7 +10,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult, TemplateEdit } from '../api/types'
-import { describeChanges, editPackageNames, planAIEdits, type PlannedEdit } from '../lib/aiEdits'
+import { describeChanges, editPackageNames, expandPatternEdits, planAIEdits, type PlannedEdit, type SkippedEdit } from '../lib/aiEdits'
 import { packageEntryName } from '../lib/authorTemplate'
 import { useStore, type AIChanges } from '../store'
 
@@ -80,7 +80,36 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
   // repository for the target, so a package from a repository not yet
   // checked can still be picked (and that repository turned on), as picking
   // a search hit does.
-  const runEdits = async (edits: TemplateEdit[]): Promise<{ applied: string[]; skipped: Skipped[] }> => {
+  const runEdits = async (suggested: TemplateEdit[]): Promise<{ applied: string[]; skipped: Skipped[] }> => {
+    // Every repository for the target: the catalog plus the template's own.
+    let allRepos: PackageRepo[] | null = null
+    const loadRepos = async () => {
+      if (!allRepos) {
+        const catalog = (await api.listPackageRepos(os)).repos
+        allRepos = [...catalog, ...templateOnlyRepos.filter((r) => !catalog.some((c) => c.id === r.id))]
+      }
+      return allRepos
+    }
+    // A name pattern (gir*) becomes an add for each package it matches.
+    let edits = suggested
+    let patternSkipped: SkippedEdit[] = []
+    if (suggested.some((e) => e.op === 'add_matching')) {
+      const known = await loadRepos()
+      const st = useStore.getState()
+      const inTemplate = new Set(basePackages.map((e) => packageEntryName(e)).filter((n): n is string => !!n))
+      const expanded = await expandPatternEdits(suggested, {
+        search: async (prefix, repoIds, offset) => {
+          const r = await api.searchPackages({ os, repos: repoIds, q: prefix, limit: 100, offset })
+          return { names: r.packages.map((p) => p.name), total: r.total }
+        },
+        repos: known,
+        checkedRepos: new Set([...known.filter((r) => r.enabledByDefault).map((r) => r.id), ...templateRepos, ...st.enabledRepos]),
+        present: (n) => (inTemplate.has(n) && !st.removedPackages.includes(n)) || st.addedPackages.some((p) => p.name === n),
+      })
+      edits = expanded.edits
+      patternSkipped = expanded.skipped
+    }
+
     const names = editPackageNames(edits, () => {
       const state = useStore.getState()
       return [
@@ -92,8 +121,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
     let found: Record<string, PackageSearchResult> = {}
     let lookupComplete = true
     if (names.length > 0) {
-      const catalog = (await api.listPackageRepos(os)).repos
-      repos = [...catalog, ...templateOnlyRepos.filter((r) => !catalog.some((c) => c.id === r.id))]
+      repos = await loadRepos()
       try {
         const r = await api.lookupPackages({ os, repos: repos.map((r) => r.id), names })
         found = Object.fromEntries(r.packages.map((p) => [p.name, p]))
@@ -147,7 +175,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
         }
       }),
     )
-    return { applied, skipped }
+    return { applied, skipped: [...patternSkipped, ...skipped] }
   }
 
   const onSubmit = async (e: FormEvent) => {

@@ -32,7 +32,12 @@ const (
 	// EditPinLatest pins Package to its newest version or, with Package
 	// empty, every package from the repository Value names, as the Packages
 	// step's "Update to latest version" does for the repository it browses.
-	EditPinLatest    = "pin_latest"
+	EditPinLatest = "pin_latest"
+	// EditAddMatching adds every package whose name matches the pattern in
+	// Package (* and ? wildcards, such as gir*), from the repository Value
+	// names in the user's words or, with Value empty, from every repository
+	// in use. The browser expands the pattern against the repositories.
+	EditAddMatching  = "add_matching"
 	EditSetDiskSize  = "set_disk_size"  // disk size Value, such as 32GiB
 	EditSetImageName = "set_image_name" // image name Value
 )
@@ -65,6 +70,11 @@ const (
 // package field is not a package name.
 var packageNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._~-]*$`)
 
+// packagePatternRE accepts a package name pattern: a literal start of at
+// least two characters, then at least one * or ? wildcard. The literal start
+// is what the browser searches by.
+var packagePatternRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._~-]+[*?][A-Za-z0-9+._~*?-]*$`)
+
 // templateEditSchema is the JSON the model must answer with. Strict
 // json_schema needs every property required, so unused fields are empty
 // strings.
@@ -83,7 +93,7 @@ var templateEditSchema = map[string]any{
 				"properties": map[string]any{
 					"op": map[string]any{
 						"type": "string",
-						"enum": []string{EditAdd, EditRemove, EditSetVersion, EditPinLatest, EditSetDiskSize, EditSetImageName},
+						"enum": []string{EditAdd, EditRemove, EditSetVersion, EditPinLatest, EditAddMatching, EditSetDiskSize, EditSetImageName},
 					},
 					"package": map[string]any{"type": "string"},
 					"version": map[string]any{"type": "string"},
@@ -101,6 +111,7 @@ The user describes changes to the template they are editing. Answer only with th
 - remove: remove the package named in "package".
 - set_version: pin "package" to "version"; an empty "version" unpins it.
 - pin_latest: pin "package" to its newest version; the editor looks the version up. With "package" empty, pin every package that comes from one repository, named in "value" in the user's words (such as "ppa", "intel" or part of its URL).
+- add_matching: add every package whose name matches the pattern in "package", with * and ? as wildcards (such as "gir*" or "libva*"); the editor finds the matching packages. If the user names a repository, put it in "value" in their words; otherwise leave "value" empty. Use this whenever the user asks for packages by a name pattern or prefix instead of naming each one.
 - set_disk_size: set the disk size to "value", such as "32GiB".
 - set_image_name: set the image name to "value".
 Use real package names for the template's distribution, preferably from its own repositories. Never invent versions.
@@ -215,6 +226,8 @@ func validEdit(e TemplateEdit) bool {
 			return packageNameRE.MatchString(e.Package)
 		}
 		return e.Value != "" && !strings.ContainsAny(e.Value, "\n")
+	case EditAddMatching:
+		return packagePatternRE.MatchString(e.Package) && !strings.ContainsAny(e.Value, "\n")
 	case EditSetDiskSize, EditSetImageName:
 		return e.Value != "" && !strings.ContainsAny(e.Value, "\n")
 	}

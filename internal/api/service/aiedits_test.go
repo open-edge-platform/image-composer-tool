@@ -163,3 +163,26 @@ func TestSuggestTemplateEditsPinLatest(t *testing.T) {
 		t.Error("the prompt doesn't offer pin_latest")
 	}
 }
+
+func TestSuggestTemplateEditsAddMatching(t *testing.T) {
+	answer := `{"note":"Adding the gir packages.","unsupported":[],"edits":[` +
+		`{"op":"add_matching","package":"gir*","version":"","value":"af01p"},` +
+		`{"op":"add_matching","package":"libva*","version":"","value":""},` +
+		`{"op":"add_matching","package":"*","version":"","value":""},` +
+		`{"op":"add_matching","package":"g*","version":"","value":""},` +
+		`{"op":"add_matching","package":"gir","version":"","value":""}]}`
+	got, err := aiService(t, &fakeEditor{answer: answer}).SuggestTemplateEdits(context.Background(), aiTestTemplate, "add all gir packages from af01p", "")
+	if err != nil {
+		t.Fatalf("SuggestTemplateEdits: %v", err)
+	}
+	// A pattern needs a literal start of two characters and a wildcard.
+	if len(got.Edits) != 2 || got.Edits[0].Package != "gir*" || got.Edits[0].Value != "af01p" || got.Edits[1].Package != "libva*" {
+		t.Errorf("edits = %+v, want gir* (from af01p) and libva*", got.Edits)
+	}
+	if len(got.Unsupported) != 1 || !strings.Contains(got.Unsupported[0], "3 suggested edit") {
+		t.Errorf("unsupported = %v, want the three bad patterns reported", got.Unsupported)
+	}
+	if !strings.Contains(templateEditPrompt, "add_matching") {
+		t.Error("the prompt doesn't offer add_matching")
+	}
+}

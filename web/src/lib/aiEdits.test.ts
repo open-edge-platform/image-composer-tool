@@ -1,9 +1,17 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { PackageSearchResult, TemplateEdit } from '../api/types'
-import { describeChanges, editPackageNames, normalizeDiskSize, planAIEdits, type AIEditContext } from './aiEdits'
+import {
+  describeChanges,
+  editPackageNames,
+  expandPatternEdits,
+  normalizeDiskSize,
+  patternMatcher,
+  planAIEdits,
+  type AIEditContext,
+} from './aiEdits'
 
 const edit = (op: TemplateEdit['op'], pkg = '', version = '', value = ''): TemplateEdit => ({
   op,
@@ -242,5 +250,83 @@ describe('helpers', () => {
   it('editPackageNames lists each package once', () => {
     expect(editPackageNames([edit('add', 'a'), edit('remove', 'a'), edit('set_disk_size', '', '', '1G')], () => ['x'])).toEqual(['a'])
     expect(editPackageNames([edit('pin_latest', '', '', 'ppa')], () => ['x', 'y'])).toEqual(['x', 'y'])
+  })
+})
+
+describe('patternMatcher', () => {
+  it('searches by the literal start and matches whole names', () => {
+    const m = patternMatcher('gir1.2-gst*')!
+    expect(m.prefix).toBe('gir1.2-gst')
+    expect(m.test('gir1.2-gstreamer-1.0')).toBe(true)
+    expect(m.test('gir1.2-gtk-3.0')).toBe(false)
+    expect(m.test('xgir1.2-gst')).toBe(false)
+    expect(patternMatcher('lib?a-drm*')!.test('libva-drm2')).toBe(true)
+  })
+
+  it('needs two literal characters first', () => {
+    expect(patternMatcher('*')).toBeNull()
+    expect(patternMatcher('g*')).toBeNull()
+    expect(patternMatcher('gi*')).not.toBeNull()
+  })
+})
+
+describe('expandPatternEdits', () => {
+  // af01p has a handful of gir packages; Ubuntu's archive has hundreds.
+  const af = [
+    'gir1.2-gst-plugins-bad-1.0',
+    'gir1.2-gst-plugins-base-1.0',
+    'gir1.2-gstreamer-1.0',
+    'gir1.2-spiceclientglib-2.0',
+  ]
+  const ubuntu = Array.from({ length: 120 }, (_, i) => `gir1.2-pkg${i}`)
+  const repos = [
+    { id: 'af01p', displayName: 'af01p-png.devtools.intel.com …/resolute', url: 'https://af01p-png.devtools.intel.com/x' },
+    { id: 'ubuntu-base', displayName: 'Ubuntu 26.04 Base', url: 'http://archive.ubuntu.com/ubuntu' },
+  ]
+  const search = vi.fn(async (prefix: string, scope: string[], offset: number) => {
+    const all = [...(scope.includes('af01p') ? af : []), ...(scope.includes('ubuntu-base') ? ubuntu : [])].filter((n) =>
+      n.startsWith(prefix),
+    )
+    return { names: all.slice(offset, offset + 100), total: all.length }
+  })
+  const ctx = (present: string[] = []) => ({
+    search,
+    repos,
+    checkedRepos: new Set(['af01p', 'ubuntu-base']),
+    present: (n: string) => present.includes(n),
+  })
+  const matching = (pattern: string, value = ''): TemplateEdit => ({ op: 'add_matching', package: pattern, version: '', value })
+
+  it('adds every match from the named repository, noting the ones already there', async () => {
+    const r = await expandPatternEdits([matching('gir*', 'af01p')], ctx(['gir1.2-gst-plugins-bad-1.0']))
+    expect(r.edits.map((e) => [e.op, e.package])).toEqual([
+      ['add', 'gir1.2-gst-plugins-base-1.0'],
+      ['add', 'gir1.2-gstreamer-1.0'],
+      ['add', 'gir1.2-spiceclientglib-2.0'],
+    ])
+    expect(r.skipped.map((s) => s.message)).toEqual(['1 matching gir* already in the template: gir1.2-gst-plugins-bad-1.0.'])
+  })
+
+  it('reports a pattern that matches too many in the repositories in use, adding none', async () => {
+    const r = await expandPatternEdits([matching('gir*')], ctx())
+    expect(r.edits).toEqual([])
+    expect(r.skipped[0].message).toMatch(/^gir\*: 124 packages in the repositories in use match, more than the 50/)
+    // It paged through every result to count them.
+    expect(search).toHaveBeenCalledWith('gir', ['af01p', 'ubuntu-base'], 100)
+  })
+
+  it('reports no match, an unknown repository, and a pattern too short to search', async () => {
+    const r = await expandPatternEdits([matching('xyz*'), matching('gir*', 'nowhere'), matching('*')], ctx())
+    expect(r.edits).toEqual([])
+    expect(r.skipped.map((s) => s.message)).toEqual([
+      'xyz*: no package in the repositories in use matches.',
+      'gir*: no repository matches "nowhere".',
+      '*: a pattern needs at least two letters before its first * or ?.',
+    ])
+  })
+
+  it('leaves other edits as they are', async () => {
+    const other: TemplateEdit = { op: 'remove', package: 'vim', version: '', value: '' }
+    expect((await expandPatternEdits([other], ctx())).edits).toEqual([other])
   })
 })

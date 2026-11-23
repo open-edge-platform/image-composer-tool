@@ -892,12 +892,15 @@ components:
         (and `version`; empty unpins); `set_disk_size` and `set_image_name`
         use `value`. `pin_latest` pins `package` to its newest version or,
         with `package` empty, every package from the repository `value`
-        names in the user's words. Unused fields are empty.
+        names in the user's words. `add_matching` adds every package whose
+        name matches the pattern in `package` (`*` and `?` wildcards, such
+        as `gir*`), from the repository `value` names or, with `value`
+        empty, from every repository in use. Unused fields are empty.
       required: [op, package, version, value]
       properties:
         op:
           type: string
-          enum: [add, remove, set_version, pin_latest, set_disk_size, set_image_name]
+          enum: [add, remove, set_version, pin_latest, add_matching, set_disk_size, set_image_name]
         package:
           type: string
         version:
