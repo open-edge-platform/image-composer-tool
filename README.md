@@ -38,7 +38,7 @@ combinations. The table below lists the OS and architecture combinations that ar
 ### 1. Build the Tool
 
 Requires Go 1.24+.
-Recommended Ubuntu 24.04
+Supported build hosts: Ubuntu 24.04 and Ubuntu 26.04
 
 ```bash
 git clone https://github.com/open-edge-platform/image-composer-tool.git
