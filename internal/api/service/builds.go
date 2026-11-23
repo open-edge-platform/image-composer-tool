@@ -946,6 +946,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		if verr := s.checkTemplateCredentials(p); verr != nil {
 			return "", "", nil, verr
 		}
+		if verr := checkBaseImage(p); verr != nil {
+			return "", "", nil, verr
+		}
 		return p, "template.yml", &retryInput{YAML: req.YAML}, nil
 	}
 	if req.Compose == nil {
@@ -968,6 +971,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		if verr := s.checkTemplateCredentials(full); verr != nil {
 			return "", "", nil, verr
 		}
+		if verr := checkBaseImage(full); verr != nil {
+			return "", "", nil, verr
+		}
 		sel := *c
 		return full, tmpl, &retryInput{Compose: &sel}, nil
 	}
@@ -980,6 +986,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	if verr := ValidateDisk(c.Disk, c.ImageType); verr != nil {
+		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+	}
+	if verr := ValidateBaseImage(c.BaseImage); verr != nil {
 		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	// Credentials name users and carry a password to hash, and new accounts must
@@ -1007,6 +1016,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	}
 	deltaPath, _, cleanup, derr := s.deltaForOverride(tmpl, full, *c)
 	if derr != nil {
+		if errors.Is(derr, errBadBaseImage) {
+			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, derr)
+		}
 		return "", "", nil, fmt.Errorf("generating override template: %w", derr) // server-side
 	}
 
@@ -1014,10 +1026,29 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		cleanup()
 		return "", "", nil, verr
 	}
+	if verr := checkBaseImage(deltaPath); verr != nil {
+		cleanup()
+		return "", "", nil, verr
+	}
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
 	sel := *c
 	return deltaPath, tmpl, &retryInput{Compose: &sel}, nil
+}
+
+// checkBaseImage rejects an overlay build whose baseline image is a local path
+// that isn't a file on the server, naming the path up front rather than
+// leaving the builder to fail on it. A URL is fetched at build time and isn't
+// checked here, and a template that fails to load is left to the build.
+func checkBaseImage(templatePath string) error {
+	merged, err := config.LoadAndMergeTemplate(templatePath)
+	if err != nil || merged.Baseline == nil || merged.Baseline.Mode != config.BaselineModeOverlay || merged.Baseline.Source == nil {
+		return nil
+	}
+	if p := merged.Baseline.Source.Path; p != "" && !isFile(p) {
+		return fmt.Errorf("%w: base image %s is not on the server; set the base image to the path of the baseline image there", errBadBuildRequest, p)
+	}
+	return nil
 }
 
 // checkTemplateCredentials rejects a build whose template would create an

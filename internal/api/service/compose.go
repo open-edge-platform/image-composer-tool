@@ -4,6 +4,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +26,10 @@ type Selection struct {
 	Platform  string
 	OS        string
 	ImageType string
+
+	// BaseImage overrides an overlay template's baseline.source.path: the
+	// baseline image, as a path on the server. Empty means "not overridden".
+	BaseImage string
 
 	// ImageName overrides the matched template's image.name. Empty means
 	// "not overridden".
@@ -122,7 +127,7 @@ type CredentialRequirement struct {
 // any, the curated template is resolved directly and no file is written.
 func (s Selection) hasOverrides() bool {
 	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0 ||
-		s.Disk != nil || len(s.Credentials) > 0 || len(s.NewUsers) > 0
+		s.Disk != nil || len(s.Credentials) > 0 || len(s.NewUsers) > 0 || s.BaseImage != ""
 }
 
 // credentialRequirements lists every user of a merged template, flagging which
@@ -348,6 +353,10 @@ type ComposeSummary struct {
 
 	// Overlay-mode only: the baseline image the packages are layered onto.
 	BaseImage string
+	// BaseImageMissing is true when BaseImage is a local path that isn't a
+	// file on the server, so a build would fail. Always false for a URL,
+	// which is only fetched at build time.
+	BaseImageMissing bool `json:",omitempty"`
 
 	// Advanced-tab changes layered onto the matched template. Nil when the
 	// selection overrode nothing.
@@ -360,6 +369,7 @@ type ComposeSummary struct {
 // is ever kept here.
 type AdvancedChanges struct {
 	ImageName      string             `json:",omitempty"`
+	BaseImage      string             `json:",omitempty"`
 	Packages       []string           `json:",omitempty"`
 	Repos          []string           `json:",omitempty"`
 	Disk           *DiskChangeSummary `json:",omitempty"`
@@ -390,6 +400,7 @@ func advancedChanges(sel Selection) *AdvancedChanges {
 	}
 	a := &AdvancedChanges{
 		ImageName: sel.ImageName,
+		BaseImage: sel.BaseImage,
 		Packages:  sel.Packages,
 		Repos:     sel.Repos,
 	}
@@ -477,6 +488,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 	if err := ValidateDisk(sel.Disk, sel.ImageType); err != nil {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	}
+	if err := ValidateBaseImage(sel.BaseImage); err != nil {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	}
 
 	tmpl := s.manifest.findTemplate(sel.Vertical, sel.SKU, sel.Platform, sel.OS, sel.ImageType)
 	if tmpl == "" {
@@ -532,6 +546,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 	if sel.hasOverrides() {
 		deltaPath, data, cleanup, derr := s.deltaForOverride(tmpl, path, sel)
 		if derr != nil {
+			if errors.Is(derr, errBadBaseImage) {
+				return nil, newError(http.StatusBadRequest, "BAD_REQUEST", derr.Error())
+			}
 			return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID", derr.Error())
 		}
 		defer cleanup()
@@ -630,7 +647,7 @@ func (s *Service) deltaForOverride(parentTmpl, parentPath string, sel Selection)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("loading parent template: %w", err)
 	}
-	data, err = buildDelta(parentTmpl, parent.Image, parent.Target, sel, s.toTemplateRepos(sel.OS, sel.Repos), s.edgePackNameSet())
+	data, err = buildDeltaWithBaseline(parentTmpl, parent.Image, parent.Target, parent.Baseline, sel, s.toTemplateRepos(sel.OS, sel.Repos), s.edgePackNameSet())
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -648,9 +665,11 @@ func buildComposeSummary(sel Selection, merged *config.ImageTemplate) ComposeSum
 	// For overlay-mode templates, surface the baseline image the packages are
 	// layered onto (local path or URL). Empty for from-scratch builds.
 	var baseImage string
+	var baseImageMissing bool
 	if merged.Baseline != nil && merged.Baseline.Mode == config.BaselineModeOverlay && merged.Baseline.Source != nil {
 		if merged.Baseline.Source.Path != "" {
 			baseImage = merged.Baseline.Source.Path
+			baseImageMissing = !isFile(baseImage)
 		} else {
 			baseImage = merged.Baseline.Source.URL
 		}
@@ -681,6 +700,8 @@ func buildComposeSummary(sel Selection, merged *config.ImageTemplate) ComposeSum
 		PartitionTable: merged.Disk.PartitionTableType,
 		Hostname:       merged.SystemConfig.HostName,
 		BaseImage:      baseImage,
+
+		BaseImageMissing: baseImageMissing,
 
 		Advanced: advancedChanges(sel),
 	}

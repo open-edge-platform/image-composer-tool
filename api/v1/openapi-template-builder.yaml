@@ -1240,6 +1240,12 @@ components:
           type: string
         imageType:
           type: string
+        baseImage:
+          type: string
+          description: |
+            Overrides an overlay template's base image (baseline.source.path)
+            with this absolute path on the server. Omitted or empty means "not
+            overridden". Rejected for a template not built on a base image.
         imageName:
           type: string
           description: |
@@ -1684,6 +1690,11 @@ components:
         baseImage:
           type: string
           description: Overlay-mode only — the baseline image packages are layered onto.
+        baseImageMissing:
+          type: boolean
+          description: |
+            True when `baseImage` is a local path that isn't a file on the
+            server, so a build would fail. Never set for a URL.
         advanced:
           $ref: "#/components/schemas/AdvancedChanges"
 
@@ -1697,6 +1708,9 @@ components:
         imageName:
           type: string
           description: The image name that overrode the template's.
+        baseImage:
+          type: string
+          description: The base image path that overrode the template's.
         packages:
           type: array
           description: Packages added (a `name_version` entry is a pinned version).
