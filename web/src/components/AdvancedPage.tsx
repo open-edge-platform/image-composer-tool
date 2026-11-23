@@ -23,6 +23,7 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { baseImageProblem } from '../lib/baseImage'
 import { applyAuthorEdits, authoringProblem, basedOnOf } from '../lib/authorTemplate'
 import { openFile, type SavedFile } from '../lib/saveFile'
 import { AuthorReview } from './AuthorReview'
@@ -174,6 +175,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     const t = setTimeout(() => setDebouncedImageName(imageName), IMAGE_NAME_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [imageName])
+  // The base image is typed too, so it's debounced the same way.
+  const baseImage = useStore((s) => s.baseImage)
+  const baseImageEdited = useStore((s) => s.baseImageEdited)
+  const seedBaseImage = useStore((s) => s.seedBaseImage)
+  const [debouncedBaseImage, setDebouncedBaseImage] = useState(baseImage)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBaseImage(baseImage), IMAGE_NAME_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [baseImage])
 
   // Package picks are encoded once here, and memoised on the encoded strings
   // rather than on addedPackages itself: the store hands back a new array on
@@ -274,6 +284,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       ...selection,
       imageName: imageNameEdited ? debouncedImageName : undefined,
       templateYaml: openedActive ? opened?.text : undefined,
+      baseImage: baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
@@ -282,7 +293,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
       users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
+    [selection, imageNameEdited, debouncedImageName, baseImageEdited, debouncedBaseImage, packagesKey, reposKey, diskEdited,
       debouncedDiskKey, debouncedCredentials, debouncedNewUsers, openedActive, opened?.text],
   )
 
@@ -319,6 +330,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           // resolved YAML because the compose summary only carries aggregates
           // (size/count/table), not the partition list the Disk step edits.
           seedImageName(r.summary.imageName)
+          seedBaseImage(r.summary.baseImage ?? '')
           seedDisk(parseDiskFromYaml(r.yaml))
         }
       })
@@ -397,6 +409,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // account without a login, so stop here rather than letting it fail.
   const credentialsReady = credentialsComplete(requirements, credentials) && newUsersReady
 
+  // What's wrong with an overlay template's base image. The server says
+  // whether the path it last composed is on the server.
+  const baseImageIssue = overlay
+    ? baseImageProblem(
+        baseImage,
+        !!composed?.summary.baseImageMissing && composed.summary.baseImage === baseImage.trim(),
+      )
+    : null
+  const BASE_IMAGE_ERROR = 'Fix the base image on the Disk step before composing.'
+
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
     // Unlike a compose, a build cannot fall back to the last good layout: it has
@@ -404,6 +426,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     // the server will reject.
     if (diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
+      return
+    }
+    if (baseImageIssue) {
+      setError(BASE_IMAGE_ERROR)
       return
     }
     if (overlayPackages.length > 0) {
@@ -436,6 +462,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           : {
               ...composeReq,
               imageName: imageNameEdited ? imageName : undefined,
+              baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
               disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
               credentials: credentials.length > 0 ? credentials : undefined,
               users: newUsers.length > 0 ? newUsers : undefined,
@@ -463,6 +490,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       setError('Fix the errors on the Disk step before composing.')
       return
     }
+    if (baseImageIssue) {
+      setError(BASE_IMAGE_ERROR)
+      return
+    }
     if (overlayPackages.length > 0) {
       setError(OVERLAY_PACKAGES_ERROR)
       return
@@ -482,7 +513,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     i < step &&
     (i === 0 ? targetComplete : i === 1 ? packagesChanged : i === 2 ? diskEdited && !diskInvalid : true)
   // Red, ahead of green, for a step whose values will not build.
-  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && diskInvalid)
+  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && (diskInvalid || !!baseImageIssue))
   // The wizard does not move past Target with a field missing, nor past Disk
   // while it shows an error — a required field left empty there included.
   const canLeaveStep = targetComplete && !(step === 2 && diskInvalid)
@@ -509,6 +540,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         packages: addedPackages,
         removed: removedPackages,
         imageName: imageNameEdited ? imageName : undefined,
+        baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
         repos: delta?.packageRepositories,
         basedOn: composed.template,
@@ -520,7 +552,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     } catch (e) {
       return { error: (e as Error).message }
     }
-  }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, diskEdited, disk, overlay])
+  }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, baseImageEdited, baseImage, diskEdited, disk, overlay])
 
   // Opens a template from the user's machine. Its metadata.basedOn names the
   // template it was authored from, which selects the matching use case; a
@@ -704,7 +736,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           />
         )}
 
-        {step === 2 && <DiskStep overlay={overlay} />}
+        {step === 2 && <DiskStep overlay={overlay} baseImageIssue={baseImageIssue} />}
 
         {step === 3 && (
           <div>
@@ -726,11 +758,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                 </div>
               ) : (
                 <>
+                  <ReviewSummary composed={composed} removed={removedPackages} />
                   <AuthorReview
                     templateName={composed.template}
                     text={authorEdit.text}
                     original={authorEdit.baseline}
-                    removed={removedPackages}
                     saved={authorSaved?.template === composed.template ? authorSaved : null}
                     onSaved={(s) => setAuthorSaved({ template: composed.template, ...s })}
                   />
@@ -752,47 +784,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
               )
             ) : complete && composed ? (
               <>
-                {/* Section 1: Review Image Configuration — the same summary shape
-                    the Basic tab shows, so both panes agree on what will compose. */}
-                <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
-                  <table className="w-full">
-                    <tbody>
-                      {([
-                        ['Image', `${composed.summary.imageName}${composed.summary.imageVersion ? ` (v${composed.summary.imageVersion})` : ''}`],
-                        composed.summary.baseImage ? ['Base Image', composed.summary.baseImage] : null,
-                        composed.summary.description ? ['Description', composed.summary.description] : null,
-                        ['Architecture', composed.summary.architecture],
-                        composed.summary.kernelVersion ? ['Kernel', composed.summary.kernelVersion] : null,
-                        ['Packages', `${composed.summary.packageCount} packages`],
-                        composed.summary.diskSize ? ['Disk', `${composed.summary.diskSize}${composed.summary.partitionTable ? `, ${composed.summary.partitionTable.toUpperCase()}` : ''}${composed.summary.partitionCount ? `, ${composed.summary.partitionCount} partitions` : ''}`] : null,
-                        composed.summary.hostname ? ['Hostname', composed.summary.hostname] : null,
-                      ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                        <tr key={k}>
-                          <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                          <td className="py-0.5 text-slate-700">{v}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* What this selection changes relative to the template, item
-                    by item — open here, since reviewing it is the point. */}
-                {composed.summary.advanced ? (
-                  <div className="mb-4">
-                    <AdvancedChangesCard
-                      changes={composed.summary.advanced}
-                      defaultOpen
-                      frame="rounded-lg border border-slate-200 bg-white p-4"
-                    />
-                  </div>
-                ) : (
-                  <p className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
-                    No changes yet — this build runs {composed.template} as-is.
-                    Edit the image name, packages, repositories, or disk layout
-                    and your changes appear here.
-                  </p>
-                )}
+                <ReviewSummary composed={composed} />
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
@@ -978,5 +970,61 @@ function TargetStep({
         is kept.
       </p>
     </div>
+  )
+}
+
+// The review's summary of what will compose and, item by item, what changed
+// from the template, open since reviewing it is the point. Customize and
+// Author show the same; Author also lists the template packages it removed,
+// which only the browser knows.
+function ReviewSummary({ composed, removed = [] }: { composed: ComposeResponse; removed?: string[] }) {
+  const s = composed.summary
+  const packageCount = s.packageCount - removed.length
+  return (
+    <>
+      {/* The same summary shape the Basic tab shows, so both panes agree on
+          what will compose. */}
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
+        <table className="w-full">
+          <tbody>
+            {([
+              ['Image', `${s.imageName}${s.imageVersion ? ` (v${s.imageVersion})` : ''}`],
+              s.baseImage ? ['Base Image', s.baseImage] : null,
+              s.description ? ['Description', s.description] : null,
+              ['Architecture', s.architecture],
+              s.kernelVersion ? ['Kernel', s.kernelVersion] : null,
+              ['Packages', `${packageCount} packages`],
+              s.diskSize
+                ? ['Disk', `${s.diskSize}${s.partitionTable ? `, ${s.partitionTable.toUpperCase()}` : ''}${s.partitionCount ? `, ${s.partitionCount} partitions` : ''}`]
+                : null,
+              s.hostname ? ['Hostname', s.hostname] : null,
+            ] as ([string, string] | null)[])
+              .filter((r): r is [string, string] => r !== null)
+              .map(([k, v]) => (
+                <tr key={k}>
+                  <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                  <td className="py-0.5 text-slate-700">{v}</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      {s.advanced || removed.length > 0 ? (
+        <div className="mb-4">
+          <AdvancedChangesCard
+            changes={s.advanced ?? {}}
+            removed={removed}
+            defaultOpen
+            frame="rounded-lg border border-slate-200 bg-white p-4"
+          />
+        </div>
+      ) : (
+        <p className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
+          No changes yet — {composed.template} is as written. Edit the image name, packages,
+          repositories, or disk layout and your changes appear here.
+        </p>
+      )}
+    </>
   )
 }

@@ -17,7 +17,6 @@ function Harness({ text }: { text: string }) {
       templateName="ubuntu26/nvl.yml"
       text={text}
       original="a: 1\n"
-      removed={['vim']}
       saved={saved}
       onSaved={setSaved}
     />
@@ -47,10 +46,11 @@ afterEach(() => {
 })
 
 describe('AuthorReview', () => {
-  it('shows the edited template and what was removed', () => {
+  it('keeps the edited template in a section that opens', () => {
     render(<Harness text={'a: 2\n'} />)
+    expect(screen.queryByLabelText('Edited template')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Template.*nvl\.yml/ }))
     expect(screen.getByLabelText('Edited template').textContent).toBe('a: 2\n')
-    expect(screen.getByText(/Removed: vim/)).toBeTruthy()
   })
 
   it('asks where on the first Save, then saves in place', async () => {

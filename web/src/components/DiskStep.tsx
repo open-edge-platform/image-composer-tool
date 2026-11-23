@@ -103,7 +103,17 @@ const MODE_LABELS: Record<LayoutMode, string> = {
 // overlay is true for an overlay-mode template. Its partition layout comes from
 // the baseline image it builds on, so the partition table and partitions are
 // not offered for editing; size, max size and artifacts still apply.
-export function DiskStep({ overlay = false }: { overlay?: boolean }) {
+export function DiskStep({
+  overlay = false,
+  baseImageIssue = null,
+}: {
+  overlay?: boolean
+  // What's wrong with an overlay template's base image (see baseImageProblem),
+  // or null when a build can use it.
+  baseImageIssue?: string | null
+}) {
+  const baseImage = useStore((s) => s.baseImage)
+  const setBaseImage = useStore((s) => s.setBaseImage)
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
   const setDisk = useStore((s) => s.setDisk)
@@ -287,10 +297,36 @@ export function DiskStep({ overlay = false }: { overlay?: boolean }) {
       )}
 
       {overlay ? (
-        <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          This image builds on an existing baseline image and keeps its partition
-          table and partitions, so they cannot be changed here.
-        </p>
+        <>
+          <div className="mb-4">
+            <label htmlFor="base-image" className={LABEL}>
+              Base Image <span className="text-red-600">*</span>
+            </label>
+            <input
+              id="base-image"
+              className={
+                'w-full rounded-md border px-3 py-2 font-mono text-sm ' +
+                (baseImageIssue ? 'border-red-400 bg-red-50' : 'border-slate-300')
+              }
+              placeholder="/images/ubuntu-26.04-base.raw"
+              value={baseImage}
+              onChange={(e) => setBaseImage(e.target.value)}
+            />
+            {baseImageIssue ? (
+              <p className="mt-1 text-xs text-red-700" role="alert">
+                {baseImageIssue}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">
+                The installed RAW image this image builds on, as a path on the server that runs the build.
+              </p>
+            )}
+          </div>
+          <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            This image builds on an existing baseline image and keeps its partition
+            table and partitions, so they cannot be changed here.
+          </p>
+        </>
       ) : (
         <>
           <div className="mb-4">

@@ -94,16 +94,19 @@ export function PackageRepoBrowser({
   const isEnabled = (r: PackageRepo) => alwaysOn(r) || enabledRepos.includes(r.id)
 
   // Which repository's catalog is listed — independent of which
-  // repos are checked. Defaults to the top-ranked repo (base or
-  // template-locked, if either exists) so there's always something to look
-  // at, and re-picks a default if the current selection disappears (e.g. the
-  // target OS changes) without overriding a user's own click.
+  // repos are checked. Defaults to a repo the template itself draws from,
+  // and only then the base repo: the base repo lists the whole distribution
+  // (thousands of packages), which is slow to page through and rarely where
+  // a template's own packages are. Re-picks a
+  // default if the current selection disappears (e.g. the target OS changes)
+  // without overriding a user's own click.
   const [selectedRepoId, setSelectedRepoId] = useState<string | undefined>(undefined)
   const pickerRepoIdsKey = pickerRepos.map((r) => r.id).join(',')
   useEffect(() => {
     if (pickerRepos.length === 0) return
     if (selectedRepoId && pickerRepos.some((r) => r.id === selectedRepoId)) return
-    setSelectedRepoId(pickerRepos[0].id)
+    const preferred = pickerRepos.find((r) => lockedRepoIds.has(r.id) && !r.enabledByDefault) ?? pickerRepos[0]
+    setSelectedRepoId(preferred.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pickerRepoIdsKey stands in for pickerRepos
   }, [pickerRepoIdsKey, selectedRepoId])
   const selectedRepo = pickerRepos.find((r) => r.id === selectedRepoId)

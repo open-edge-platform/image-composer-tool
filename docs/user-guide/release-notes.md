@@ -8,6 +8,18 @@
 
 - **Added**: `image-composer-tool ai` works with OpenAI-compatible services such as Intel's GNAI. Set `ai.openai.base_url` in `image-composer-tool.yml`, or `OPENAI_BASE_URL`, to the service URL including `/v1` (for GNAI, `https://gnai.intel.com/api/providers/openai/v1`). The embedding cache records the service URL and the vector size the service returns, so switching services re-indexes.
 - **Fixed**: `image-composer-tool ai` now reads the `ai:` section of `image-composer-tool.yml` (provider, models, timeouts, cache directory and scoring weights). It was parsed but ignored, so only `--provider` and `--templates-dir` took effect; they still override the file. The sample file's Ollama chat model is now `llama3.1:8b`, the default the guide tells you to pull. `--cache-stats` and `--clear-cache` no longer need an API key.
+- The Web UI's Advanced tab handles templates built on a base image (overlay
+  templates) better. The Disk step shows a **Base Image** field for them only:
+  the path of the installed RAW image on the server, seeded from the template.
+  It says when the path is empty, not absolute, still the template's
+  `/path/to/…` placeholder, or not found on the server, and **Compose Image**
+  is blocked until it is fixed; the Basic tab warns the same way. A changed
+  path is sent as the new `baseImage` compose and build field, and the build
+  server refuses any overlay build whose base image it can't find, instead of
+  failing partway in. The partition table stays as the base image has it. The
+  Packages step's repository browser now opens on a repository the template
+  itself uses, such as af01p for the NVL BKC template, rather than Ubuntu's
+  base repository with its thousands of packages.
 - **Fixed**: in the Web UI Advanced tab's Packages step, an unpinned template
   package showed the version the Ubuntu base repository publishes, with no
   repository named, even when a build installs another one. For example, the
@@ -45,6 +57,11 @@
   save in place; other browsers download a copy. Templates that use `extends`
   can't be edited in Author mode yet, and building an edited template comes
   next.
+- In Author mode the Review step shows the same summary and expandable list
+  of changes as Customize (now including **Packages removed**), with the
+  whole edited template in a section that opens and scrolls, above **Save
+  Template** and **Save As…**. A changed base image is written into the
+  template's `baseline.source.path`.
 - **Changed**: the Advanced tab's **Selected** panel is now **Changes**. It
   lists how your packages differ from the template under **Added**,
   **Modified** (a template package given another version, shown as
