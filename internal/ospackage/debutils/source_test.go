@@ -12,8 +12,156 @@ import (
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/ulikunitz/xz"
 )
+
+func TestVerifySourceRelease(t *testing.T) {
+	t.Parallel()
+
+	signer, err := openpgp.NewEntity("Signer", "test", "signer@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	other, err := openpgp.NewEntity("Other", "test", "other@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("create other signer: %v", err)
+	}
+	var key, wrongKey, signature, signed bytes.Buffer
+	if err := signer.Serialize(&key); err != nil {
+		t.Fatalf("serialize key: %v", err)
+	}
+	if err := other.Serialize(&wrongKey); err != nil {
+		t.Fatalf("serialize other key: %v", err)
+	}
+	release := []byte("Suite: test\nSHA256:\n")
+	if err := openpgp.DetachSign(&signature, signer, bytes.NewReader(release), nil); err != nil {
+		t.Fatalf("sign Release: %v", err)
+	}
+	writer, err := clearsign.Encode(&signed, signer.PrivateKey, nil)
+	if err != nil {
+		t.Fatalf("create InRelease: %v", err)
+	}
+	if _, err := writer.Write(release); err != nil {
+		t.Fatalf("write InRelease: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close InRelease: %v", err)
+	}
+	tests := []struct {
+		name                    string
+		release, signature, key []byte
+		inRelease, wantErr      bool
+	}{
+		{"detached", release, signature.Bytes(), key.Bytes(), false, false},
+		{"inrelease", signed.Bytes(), nil, key.Bytes(), true, false},
+		{"wrong detached key", release, signature.Bytes(), wrongKey.Bytes(), false, true},
+		{"wrong inrelease key", signed.Bytes(), nil, wrongKey.Bytes(), true, true},
+		{"missing key", signed.Bytes(), nil, nil, true, true},
+		{"invalid signature", release, []byte("invalid"), key.Bytes(), false, true},
+		{"invalid inrelease", release, nil, key.Bytes(), true, true},
+		{"trailing data", append(bytes.Clone(signed.Bytes()), []byte("unverified")...), nil, key.Bytes(), true, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := verifySourceRelease(tt.release, tt.signature, tt.key, tt.inRelease)
+			if tt.wantErr {
+				if !errors.Is(err, errSourceVerification) || got != nil {
+					t.Fatalf("verifySourceRelease = %q, %v; want verification error", got, err)
+				}
+			} else if err != nil || !bytes.Equal(got, release) {
+				t.Fatalf("verifySourceRelease = %q, %v; want %q", got, err, release)
+			}
+		})
+	}
+}
+
+func TestFindSourcePackage(t *testing.T) {
+	t.Parallel()
+
+	packages := []SourcePackageMetadata{
+		{Name: "mesa", Version: "2:26.0-1", Directory: "pool/first"},
+		{Name: "mesa", Version: "2:26.0-2", Directory: "pool/second"},
+		{Name: "other", Version: "2:26.0-1", Directory: "pool/other"},
+	}
+	got, err := findSourcePackage(packages, "mesa", "2:26.0-1")
+	if err != nil || got == nil || got.Directory != "pool/first" {
+		t.Fatalf("exact match = %+v, %v", got, err)
+	}
+	if _, err := findSourcePackage(packages, "mesa", "26.0-1"); !errors.Is(err, errSourceVersionMissing) {
+		t.Errorf("missing epoch error = %v", err)
+	}
+	packages = append(packages, SourcePackageMetadata{Name: "mesa", Version: "2:26.0-1"})
+	if got, err := findSourcePackage(packages, "mesa", "2:26.0-1"); err == nil || got != nil {
+		t.Errorf("duplicate match = %+v, %v", got, err)
+	}
+}
+
+func TestDiscoverSourceIndexes(t *testing.T) {
+	t.Parallel()
+
+	digest := strings.Repeat("a", 64)
+	release := "Suite: test\nSHA256:\n" +
+		" " + digest + " 10 main/source/Sources\n" +
+		" " + digest + " 20 main/source/Sources.gz\n" +
+		" " + strings.ToUpper(digest) + " 30 main/source/Sources.xz\n" +
+		" " + digest + " 40 universe/source/Sources.xz\n"
+
+	indexes, err := discoverSourceIndexes([]byte(release), "main")
+	if err != nil {
+		t.Fatalf("discoverSourceIndexes: %v", err)
+	}
+	want := []sourceIndexMetadata{
+		{Path: "main/source/Sources.xz", SHA256: digest, Size: 30},
+		{Path: "main/source/Sources.gz", SHA256: digest, Size: 20},
+		{Path: "main/source/Sources", SHA256: digest, Size: 10},
+	}
+	if len(indexes) != len(want) {
+		t.Fatalf("got indexes %+v, want %+v", indexes, want)
+	}
+	for index := range want {
+		if indexes[index] != want[index] {
+			t.Errorf("index %d = %+v, want %+v", index, indexes[index], want[index])
+		}
+	}
+}
+
+func TestDiscoverSourceIndexesRejectsInvalidMetadata(t *testing.T) {
+	t.Parallel()
+
+	digest := strings.Repeat("a", 64)
+	entry := " " + digest + " 10 main/source/Sources.gz\n"
+	tests := []struct {
+		name, release, component string
+		missing                  bool
+	}{
+		{"missing index", "SHA256:\n" + entry, "universe", true},
+		{"missing section", "Suite: test\n", "main", false},
+		{"duplicate section", "SHA256:\n" + entry + "SHA256:\n" + entry, "main", false},
+		{"duplicate entry", "SHA256:\n" + entry + entry, "main", false},
+		{"invalid digest", "SHA256:\n invalid 10 main/source/Sources.gz\n", "main", false},
+		{"invalid size", "SHA256:\n " + digest + " -1 main/source/Sources.gz\n", "main", false},
+		{"malformed entries", "SHA256:\n " + digest + " 10\n", "main", false},
+		{"traversal", "SHA256:\n" + entry, "../main", false},
+		{"encoded component", "SHA256:\n" + entry, "%2e%2e", false},
+		{"absolute component", "SHA256:\n" + entry, "/main", false},
+		{"query component", "SHA256:\n" + entry, "main?secret", false},
+		{"control component", "SHA256:\n" + entry, "main\x00extra", false},
+		{"unicode space component", "SHA256:\n" + entry, "main\u00a0extra", false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			indexes, err := discoverSourceIndexes([]byte(tt.release), tt.component)
+			if err == nil || indexes != nil || errors.Is(err, errSourceIndexMissing) != tt.missing {
+				t.Fatalf("discoverSourceIndexes = %v, %v; want missing=%v", indexes, err, tt.missing)
+			}
+		})
+	}
+}
 
 func TestSourceArtifactsWithURLs(t *testing.T) {
 	t.Parallel()
@@ -204,6 +352,11 @@ func TestParseSourceIndexFromSignedRelease(t *testing.T) {
 			verifiedRelease, err := VerifyInRelease(inRelease, keyPath)
 			if err != nil {
 				t.Fatalf("verify InRelease: %v", err)
+			}
+			indexes, err := discoverSourceIndexes(verifiedRelease, "main")
+			if err != nil || len(indexes) != 1 || indexes[0].Path != indexPath ||
+				indexes[0].SHA256 != digest || indexes[0].Size != uint64(content.Len()) {
+				t.Fatalf("discovered indexes %+v, error %v", indexes, err)
 			}
 			packages, gotDigest, err := parseSourceIndexFromRelease(verifiedRelease, content.Bytes(), indexPath)
 			if err != nil {
