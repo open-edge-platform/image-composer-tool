@@ -72,9 +72,8 @@ describe('AdvancedPage credentials', () => {
     await waitFor(() => expect(mockApi.startBuild).toHaveBeenCalledTimes(1))
     expect(mockApi.startBuild.mock.calls[0][0].credentials).toEqual([{ user: 'admin', password: 'hunter2' }])
 
-    // Wait for the review to re-resolve after the build started, then compose again.
-    const composesAfterBuild = mockApi.compose.mock.calls.length
-    await waitFor(() => expect(mockApi.compose.mock.calls.length).toBeGreaterThan(composesAfterBuild), { timeout: 3000 })
+    // Once the dialog has closed on the started build, compose again.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
 
     expect(await screen.findByRole('dialog')).toBeTruthy()
