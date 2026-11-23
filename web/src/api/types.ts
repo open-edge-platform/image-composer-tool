@@ -67,6 +67,9 @@ export interface ComposeRequest {
   os: string
   kernel?: string
   imageType: string
+  // Overrides an overlay template's base image (baseline.source.path), as an
+  // absolute path on the server. Omitted means "not overridden".
+  baseImage?: string
   // Advanced-mode override for the matched template's image.name. Omitted (not
   // just empty) means "not overridden" — the backend resolves the curated
   // template directly rather than generating an override delta for it.
@@ -157,6 +160,8 @@ export interface ComposeSummary {
   partitionTable: string
   hostname: string
   baseImage?: string
+  // True when baseImage is a local path that isn't a file on the server.
+  baseImageMissing?: boolean
   // What the Advanced tab changed relative to the matched template. Absent
   // when nothing was overridden.
   advanced?: AdvancedChanges
@@ -164,6 +169,7 @@ export interface ComposeSummary {
 
 export interface AdvancedChanges {
   imageName?: string
+  baseImage?: string
   // Added packages; a `name_version` entry is a pinned version.
   packages?: string[]
   repos?: string[]

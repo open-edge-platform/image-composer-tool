@@ -23,6 +23,7 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { baseImageProblem } from '../lib/baseImage'
 import { applyAuthorEdits, authoringProblem } from '../lib/authorTemplate'
 import type { SavedFile } from '../lib/saveFile'
 import { AuthorReview } from './AuthorReview'
@@ -159,6 +160,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     const t = setTimeout(() => setDebouncedImageName(imageName), IMAGE_NAME_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [imageName])
+  // The base image is typed too, so it's debounced the same way.
+  const baseImage = useStore((s) => s.baseImage)
+  const baseImageEdited = useStore((s) => s.baseImageEdited)
+  const seedBaseImage = useStore((s) => s.seedBaseImage)
+  const [debouncedBaseImage, setDebouncedBaseImage] = useState(baseImage)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBaseImage(baseImage), IMAGE_NAME_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [baseImage])
 
   // Package picks are encoded once here, and memoised on the encoded strings
   // rather than on addedPackages itself: the store hands back a new array on
@@ -258,6 +268,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     () => ({
       ...selection,
       imageName: imageNameEdited ? debouncedImageName : undefined,
+      baseImage: baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
@@ -266,7 +277,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
       users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
+    [selection, imageNameEdited, debouncedImageName, baseImageEdited, debouncedBaseImage, packagesKey, reposKey, diskEdited,
       debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
   )
 
@@ -303,6 +314,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           // resolved YAML because the compose summary only carries aggregates
           // (size/count/table), not the partition list the Disk step edits.
           seedImageName(r.summary.imageName)
+          seedBaseImage(r.summary.baseImage ?? '')
           seedDisk(parseDiskFromYaml(r.yaml))
         }
       })
@@ -381,6 +393,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // account without a login, so stop here rather than letting it fail.
   const credentialsReady = credentialsComplete(requirements, credentials) && newUsersReady
 
+  // What's wrong with an overlay template's base image. The server says
+  // whether the path it last composed is on the server.
+  const baseImageIssue = overlay
+    ? baseImageProblem(
+        baseImage,
+        !!composed?.summary.baseImageMissing && composed.summary.baseImage === baseImage.trim(),
+      )
+    : null
+  const BASE_IMAGE_ERROR = 'Fix the base image on the Disk step before composing.'
+
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
     // Unlike a compose, a build cannot fall back to the last good layout: it has
@@ -388,6 +410,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     // the server will reject.
     if (diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
+      return
+    }
+    if (baseImageIssue) {
+      setError(BASE_IMAGE_ERROR)
       return
     }
     if (overlayPackages.length > 0) {
@@ -408,6 +434,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       const buildReq: ComposeRequest = {
         ...composeReq,
         imageName: imageNameEdited ? imageName : undefined,
+        baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
         users: newUsers.length > 0 ? newUsers : undefined,
@@ -435,6 +462,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       setError('Fix the errors on the Disk step before composing.')
       return
     }
+    if (baseImageIssue) {
+      setError(BASE_IMAGE_ERROR)
+      return
+    }
     if (overlayPackages.length > 0) {
       setError(OVERLAY_PACKAGES_ERROR)
       return
@@ -454,7 +485,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     i < step &&
     (i === 0 ? targetComplete : i === 1 ? packagesChanged : i === 2 ? diskEdited && !diskInvalid : true)
   // Red, ahead of green, for a step whose values will not build.
-  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && diskInvalid)
+  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && (diskInvalid || !!baseImageIssue))
   // The wizard does not move past Target with a field missing, nor past Disk
   // while it shows an error — a required field left empty there included.
   const canLeaveStep = targetComplete && !(step === 2 && diskInvalid)
@@ -585,7 +616,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           />
         )}
 
-        {step === 2 && <DiskStep overlay={overlay} />}
+        {step === 2 && <DiskStep overlay={overlay} baseImageIssue={baseImageIssue} />}
 
         {step === 3 && (
           <div>
