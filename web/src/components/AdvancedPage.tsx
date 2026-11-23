@@ -512,6 +512,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         packages: addedPackages,
         removed: removedPackages,
         imageName: imageNameEdited ? imageName : undefined,
+        baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
         repos: delta?.packageRepositories,
       })
@@ -519,7 +520,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     } catch (e) {
       return { error: (e as Error).message }
     }
-  }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, diskEdited, disk, overlay])
+  }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, baseImageEdited, baseImage, diskEdited, disk, overlay])
 
   const exportYaml = () => {
     if (!composed || !deltaYaml) return
@@ -638,11 +639,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                 </div>
               ) : (
                 <>
+                  <ReviewSummary composed={composed} removed={removedPackages} />
                   <AuthorReview
                     templateName={composed.template}
                     text={authorEdit.text}
                     original={composed.templateYaml ?? ''}
-                    removed={removedPackages}
                     saved={authorSaved?.template === composed.template ? authorSaved : null}
                     onSaved={(s) => setAuthorSaved({ template: composed.template, ...s })}
                   />
@@ -653,47 +654,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
               )
             ) : complete && composed ? (
               <>
-                {/* Section 1: Review Image Configuration — the same summary shape
-                    the Basic tab shows, so both panes agree on what will compose. */}
-                <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
-                  <table className="w-full">
-                    <tbody>
-                      {([
-                        ['Image', `${composed.summary.imageName}${composed.summary.imageVersion ? ` (v${composed.summary.imageVersion})` : ''}`],
-                        composed.summary.baseImage ? ['Base Image', composed.summary.baseImage] : null,
-                        composed.summary.description ? ['Description', composed.summary.description] : null,
-                        ['Architecture', composed.summary.architecture],
-                        composed.summary.kernelVersion ? ['Kernel', composed.summary.kernelVersion] : null,
-                        ['Packages', `${composed.summary.packageCount} packages`],
-                        composed.summary.diskSize ? ['Disk', `${composed.summary.diskSize}${composed.summary.partitionTable ? `, ${composed.summary.partitionTable.toUpperCase()}` : ''}${composed.summary.partitionCount ? `, ${composed.summary.partitionCount} partitions` : ''}`] : null,
-                        composed.summary.hostname ? ['Hostname', composed.summary.hostname] : null,
-                      ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                        <tr key={k}>
-                          <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                          <td className="py-0.5 text-slate-700">{v}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* What this selection changes relative to the template, item
-                    by item — open here, since reviewing it is the point. */}
-                {composed.summary.advanced ? (
-                  <div className="mb-4">
-                    <AdvancedChangesCard
-                      changes={composed.summary.advanced}
-                      defaultOpen
-                      frame="rounded-lg border border-slate-200 bg-white p-4"
-                    />
-                  </div>
-                ) : (
-                  <p className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
-                    No changes yet — this build runs {composed.template} as-is.
-                    Edit the image name, packages, repositories, or disk layout
-                    and your changes appear here.
-                  </p>
-                )}
+                <ReviewSummary composed={composed} />
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
@@ -874,5 +835,61 @@ function TargetStep({
         is kept.
       </p>
     </div>
+  )
+}
+
+// The review's summary of what will compose and, item by item, what changed
+// from the template, open since reviewing it is the point. Customize and
+// Author show the same; Author also lists the template packages it removed,
+// which only the browser knows.
+function ReviewSummary({ composed, removed = [] }: { composed: ComposeResponse; removed?: string[] }) {
+  const s = composed.summary
+  const packageCount = s.packageCount - removed.length
+  return (
+    <>
+      {/* The same summary shape the Basic tab shows, so both panes agree on
+          what will compose. */}
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
+        <table className="w-full">
+          <tbody>
+            {([
+              ['Image', `${s.imageName}${s.imageVersion ? ` (v${s.imageVersion})` : ''}`],
+              s.baseImage ? ['Base Image', s.baseImage] : null,
+              s.description ? ['Description', s.description] : null,
+              ['Architecture', s.architecture],
+              s.kernelVersion ? ['Kernel', s.kernelVersion] : null,
+              ['Packages', `${packageCount} packages`],
+              s.diskSize
+                ? ['Disk', `${s.diskSize}${s.partitionTable ? `, ${s.partitionTable.toUpperCase()}` : ''}${s.partitionCount ? `, ${s.partitionCount} partitions` : ''}`]
+                : null,
+              s.hostname ? ['Hostname', s.hostname] : null,
+            ] as ([string, string] | null)[])
+              .filter((r): r is [string, string] => r !== null)
+              .map(([k, v]) => (
+                <tr key={k}>
+                  <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                  <td className="py-0.5 text-slate-700">{v}</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      {s.advanced || removed.length > 0 ? (
+        <div className="mb-4">
+          <AdvancedChangesCard
+            changes={s.advanced ?? {}}
+            removed={removed}
+            defaultOpen
+            frame="rounded-lg border border-slate-200 bg-white p-4"
+          />
+        </div>
+      ) : (
+        <p className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
+          No changes yet — {composed.template} is as written. Edit the image name, packages,
+          repositories, or disk layout and your changes appear here.
+        </p>
+      )}
+    </>
   )
 }

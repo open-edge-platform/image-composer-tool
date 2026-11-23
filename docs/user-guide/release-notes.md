@@ -55,6 +55,11 @@
   save in place; other browsers download a copy. Templates that use `extends`
   can't be edited in Author mode yet, and building an edited template comes
   next.
+- In Author mode the Review step shows the same summary and expandable list
+  of changes as Customize (now including **Packages removed**), with the
+  whole edited template in a section that opens and scrolls, above **Save
+  Template** and **Save As…**. A changed base image is written into the
+  template's `baseline.source.path`.
 - **Changed**: the Advanced tab's **Selected** panel is now **Changes**. It
   lists how your packages differ from the template under **Added**,
   **Modified** (a template package given another version, shown as

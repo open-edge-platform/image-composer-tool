@@ -8,10 +8,13 @@ import type { AdvancedChanges } from '../api/types'
 
 export function AdvancedChangesCard({
   changes,
+  removed = [],
   defaultOpen = false,
   frame = 'rounded bg-white p-3 shadow-sm',
 }: {
   changes: AdvancedChanges
+  // Template packages removed in Author mode, which only the browser knows.
+  removed?: string[]
   defaultOpen?: boolean
   // Border/background/padding, so the card can match the panels around it.
   frame?: string
@@ -27,22 +30,23 @@ export function AdvancedChangesCard({
       >
         <span className="text-[10px] text-slate-400">{open ? '▼' : '▶'}</span>
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Advanced customization</span>
-        <span className="text-[11px] text-slate-400">— {advancedHeadline(changes)}</span>
+        <span className="text-[11px] text-slate-400">— {advancedHeadline(changes, removed)}</span>
       </button>
-      {open && <AdvancedChangesList changes={changes} />}
+      {open && <AdvancedChangesList changes={changes} removed={removed} />}
     </div>
   )
 }
 
 // One-line digest of an Advanced-tab delta for the collapsed header, so two
 // builds of the same template can be told apart without expanding either.
-function advancedHeadline(c: AdvancedChanges): string {
+function advancedHeadline(c: AdvancedChanges, removed: string[] = []): string {
   const n = (count: number | undefined, one: string, many = `${one}s`) =>
     count ? `${count} ${count === 1 ? one : many}` : null
   const parts = [
     c.imageName ? 'image name' : null,
     c.baseImage ? 'base image' : null,
     n(c.packages?.length, 'package'),
+    removed.length ? `${removed.length} removed` : null,
     n(c.repos?.length, 'repo'),
     c.disk ? 'disk layout' : null,
     n(c.newUsers?.length, 'new user'),
@@ -86,7 +90,7 @@ function ExpandableList({ items, mono = true }: { items: string[]; mono?: boolea
 
 // The Advanced-tab delta as a label/value table, styled like the Selection and
 // Image Configuration cards above it.
-function AdvancedChangesList({ changes }: { changes: AdvancedChanges }) {
+function AdvancedChangesList({ changes, removed = [] }: { changes: AdvancedChanges; removed?: string[] }) {
   const disk = changes.disk
   const partitions = (disk?.partitions ?? []).map((p) =>
     [p.id, p.fsType, p.mountPoint, p.start || p.end ? `${p.start ?? ''}–${p.end ?? ''}` : '']
@@ -98,6 +102,7 @@ function AdvancedChangesList({ changes }: { changes: AdvancedChanges }) {
     ['Image name', changes.imageName || null],
     ['Base image', changes.baseImage ? <span className="break-all font-mono">{changes.baseImage}</span> : null],
     ['Packages', list(changes.packages)],
+    ['Packages removed', list(removed)],
     ['Repositories', list(changes.repos)],
     [
       'Disk',
