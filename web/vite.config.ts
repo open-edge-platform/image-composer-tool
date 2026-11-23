@@ -33,5 +33,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // The page tests click through several steps, each waiting on a debounced
+    // compose; with the whole suite running in parallel that can pass the
+    // default 5 seconds. (src/test/setup.ts raises the per-wait limit too.)
+    testTimeout: 20000,
   },
 })
