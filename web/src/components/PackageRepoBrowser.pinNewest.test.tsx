@@ -363,6 +363,23 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
     }
   })
 
+  it('still updates the rest when another repo in use is unreadable, leaving unpinned template packages alone', async () => {
+    // The browsed repo (base) answers; the check across every repo in use
+    // can't read Intel ECI, so where vim comes from is unknown.
+    mockApi.lookupPackages.mockImplementation(({ repos: asked }: { repos?: string[] }) =>
+      Promise.resolve(
+        asked?.length === 1 && asked[0] === 'base'
+          ? { packages: [versioned('vim', '2:9.1.0016-1'), versioned('curl', '8.5.0-2', '8.4.0-1')], unavailableRepos: [] }
+          : { packages: [], unavailableRepos: ['intel-eci'] },
+      ),
+    )
+    await renderWith(templateLock({ curl: '8.4.0-1' }, ['vim']))
+    await act(async () => fireEvent.click(pinButton()))
+
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'curl', version: '8.5.0-2', repo: 'base' }])
+    expect(screen.getByText(/Couldn't read Intel ECI right now, so the template's unpinned packages were left unpinned/)).toBeTruthy()
+  })
+
   it('counts and pins the template packages too, as overrides', async () => {
     mockApi.lookupPackages.mockResolvedValue({
       packages: [versioned('vim', '2:9.1.0016-1'), versioned('curl', '8.5.0-2', '8.4.0-1')],

@@ -411,19 +411,31 @@ function MergedPane({
     ])
       .then(([{ found, complete, unavailableRepos, stale }, across]) => {
         const resolvedFrom = new Map<string, string>()
-        if (across) {
-          if (!across.complete || across.stale) {
-            setPinNotice("Couldn't tell where the template's unpinned packages come from, so nothing was updated. Try again.")
-            return
-          }
-          for (const name of floating) {
-            const hit = across.found[name]
-            if (hit) resolvedFrom.set(name, buildResolution(hit, priorities).repository)
+        // A repo that can't be read right now leaves where the unpinned
+        // template packages come from unknown. They stay unpinned, which
+        // changes nothing; everything else is still updated.
+        let unchecked: string[] = []
+        let uncheckedNotice: string | null = null
+        if (across && !across.stale) {
+          if (across.complete) {
+            for (const name of floating) {
+              const hit = across.found[name]
+              if (hit) resolvedFrom.set(name, buildResolution(hit, priorities).repository)
+            }
+          } else {
+            unchecked = floating
+            const where =
+              across.unavailableRepos.length > 0
+                ? `Couldn't read ${across.unavailableRepos.map(repoLabelFor).join(', ')} right now`
+                : "Couldn't check the other repositories in use"
+            uncheckedNotice = `${where}, so the template's unpinned packages were left unpinned: where a build takes them from couldn't be told. Try again to update them.`
           }
         }
-        const keptUnpinned = floating.filter((name) => (resolvedFrom.get(name) ?? repoId) !== repoId)
-        const dispatchedTemplate = candidates.filter((name) => !keptUnpinned.includes(name))
-        if (stale || latestBrowsedRepo.current !== repoId) {
+        const keptUnpinned = floating.filter(
+          (name) => !unchecked.includes(name) && (resolvedFrom.get(name) ?? repoId) !== repoId,
+        )
+        const dispatchedTemplate = candidates.filter((name) => !keptUnpinned.includes(name) && !unchecked.includes(name))
+        if (stale || across?.stale || latestBrowsedRepo.current !== repoId) {
           setPinNotice(
             'The target, checked repositories or browsed repository changed while checking, so nothing was updated. Try again.',
           )
@@ -441,7 +453,15 @@ function MergedPane({
         const pins = current
           .filter((p) => dispatched.includes(p) && found[p.name])
           .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
-        const templatePins = planTemplatePins(dispatchedTemplate, templateKey, current, found, keptUnpinned, resolvedFrom)
+        const templatePins = planTemplatePins(
+          dispatchedTemplate,
+          templateKey,
+          current,
+          found,
+          keptUnpinned,
+          resolvedFrom,
+          uncheckedNotice,
+        )
         const all = [...pins, ...templatePins]
         if (all.length > 0) {
           setPackages(all)
@@ -463,8 +483,10 @@ function MergedPane({
     found: Record<string, PackageSearchResult>,
     keptUnpinned: string[],
     resolvedFrom: Map<string, string>,
+    uncheckedNotice: string | null,
   ): AddedPackage[] => {
-    const keptNotice = resolvesElsewhereNotice(keptUnpinned, repoLabelFor, resolvedFrom)
+    const keptNotice =
+      [uncheckedNotice, resolvesElsewhereNotice(keptUnpinned, repoLabelFor, resolvedFrom)].filter(Boolean).join(' ') || null
     setPinNotice(keptNotice)
     if (names.length === 0) return []
     if (latestTemplateKey.current !== templateKey) {
