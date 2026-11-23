@@ -2,6 +2,9 @@ package debutils
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -9,7 +12,95 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/ulikunitz/xz"
 )
+
+func parseSourceIndexFromRelease(release, index []byte, indexPath string) ([]SourcePackageMetadata, string, error) {
+	digest, err := verifySourceIndex(release, index, indexPath)
+	if err != nil {
+		return nil, "", err
+	}
+	var reader io.Reader = bytes.NewReader(index)
+	var compressed *gzip.Reader
+	if strings.HasSuffix(indexPath, ".gz") {
+		compressed, err = gzip.NewReader(reader)
+		if err != nil {
+			return nil, "", fmt.Errorf("open gzip source index: %w", err)
+		}
+		reader = compressed
+	} else if strings.HasSuffix(indexPath, ".xz") {
+		reader, err = xz.NewReader(reader)
+		if err != nil {
+			return nil, "", fmt.Errorf("open xz source index: %w", err)
+		}
+	}
+	packages, parseErr := ParseSourceIndex(reader)
+	if compressed != nil {
+		if closeErr := compressed.Close(); closeErr != nil && parseErr == nil {
+			return nil, "", fmt.Errorf("close gzip source index: %w", closeErr)
+		}
+	}
+	if parseErr != nil {
+		return nil, "", fmt.Errorf("parse source index: %w", parseErr)
+	}
+	return packages, digest, nil
+}
+
+func verifySourceIndex(release []byte, index []byte, indexPath string) (string, error) {
+	if !safeSourcePath(indexPath, false) {
+		return "", fmt.Errorf("invalid source index path %q", indexPath)
+	}
+	name := path.Base(indexPath)
+	component := strings.TrimSuffix(indexPath, "/source/"+name)
+	if component == indexPath || component == "" ||
+		(name != "Sources" && name != "Sources.gz" && name != "Sources.xz") {
+		return "", fmt.Errorf("invalid source index path %q", indexPath)
+	}
+	fields, err := textproto.NewReader(bufio.NewReader(strings.NewReader(string(release)))).ReadMIMEHeader()
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("parse Release metadata: %w", err)
+	}
+	checksums := fields.Values("SHA256")
+	if len(checksums) != 1 {
+		return "", fmt.Errorf("Release must contain exactly one SHA256 section")
+	}
+	words := strings.Fields(checksums[0])
+	if len(words)%3 != 0 {
+		return "", fmt.Errorf("invalid Release SHA256 section")
+	}
+	var expected string
+	var expectedSize uint64
+	for position := 0; position < len(words); position += 3 {
+		if words[position+2] != indexPath {
+			continue
+		}
+		if expected != "" {
+			return "", fmt.Errorf("duplicate Release entry for %q", indexPath)
+		}
+		digest, decodeErr := hex.DecodeString(words[position])
+		if decodeErr != nil || len(digest) != sha256.Size {
+			return "", fmt.Errorf("invalid Release SHA256 for %q", indexPath)
+		}
+		expectedSize, err = strconv.ParseUint(words[position+1], 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("invalid Release size for %q: %w", indexPath, err)
+		}
+		expected = words[position]
+	}
+	if expected == "" {
+		return "", fmt.Errorf("source index %q missing from Release SHA256", indexPath)
+	}
+	if uint64(len(index)) != expectedSize {
+		return "", fmt.Errorf("source index %q size mismatch", indexPath)
+	}
+	digest := sha256.Sum256(index)
+	actual := hex.EncodeToString(digest[:])
+	if !strings.EqualFold(actual, expected) {
+		return "", fmt.Errorf("source index %q SHA256 mismatch", indexPath)
+	}
+	return actual, nil
+}
 
 type SourceArtifactMetadata struct {
 	Filename string
