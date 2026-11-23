@@ -20,6 +20,10 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
+// aptSourcesListFinal is where the apt sources file generated from
+// packageRepositories is installed in the image.
+const aptSourcesListFinal = "/etc/apt/sources.list.d/package-repositories.list"
+
 // GenerateAptSourcesFromRepositories creates an apt sources file from packageRepositories
 // and adds it to the image's additionalFiles configuration
 func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
@@ -83,7 +87,7 @@ func (t *ImageTemplate) addAptSourcesFile(content string) error {
 	}
 	aptSourcesFile := AdditionalFileInfo{
 		Local: tempFile,
-		Final: "/etc/apt/sources.list.d/package-repositories.list",
+		Final: aptSourcesListFinal,
 	}
 	if err := t.addGeneratedAdditionalFile(aptSourcesFile); err != nil {
 		return err
@@ -328,6 +332,22 @@ func (t *ImageTemplate) addGeneratedAdditionalFile(f AdditionalFileInfo) error {
 		if InImagePathsOverlap(s.Final, f.Final) {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: final %q collides with %q, a path the tool "+
 				"generates; choose another path", s.Name, s.Final, f.Final)
+		}
+	}
+	// A replacement's destination can spell the generated path differently
+	// (an alias like /etc/apt/./x), or be a directory that receives the file
+	// under its source basename (cp semantics), so compare normalised paths and
+	// both spellings, as validateAdditionalFilesNotGenerated does.
+	generated := filepath.Clean("/" + f.Final)
+	for _, e := range t.SystemConfig.AdditionalFiles {
+		if !e.replacedOnCommandLine {
+			continue
+		}
+		dest := filepath.Clean("/" + e.Final)
+		if dest == generated || dest+"/"+filepath.Base(e.Local) == generated {
+			return fmt.Errorf("additional file %q was replaced on the command line, but image-composer-tool "+
+				"generates %q from packageRepositories and would overwrite the replacement; remove the "+
+				"replacement or change the repository settings", e.Final, f.Final)
 		}
 	}
 	t.addUniqueAdditionalFile(f)

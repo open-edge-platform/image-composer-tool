@@ -152,16 +152,67 @@ combinations:
     imageType: iso
     template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
 
-  # Upstream BKC (Best Known Configuration) image for Nova Lake on Ubuntu
-  # 26.04. An overlay build: it layers the BKC stack onto an installed Ubuntu
-  # 26.04 RAW image. The template here is a starter; the full BKC template
-  # replaces it under the same name where it is deployed.
-  - vertical: platform-enablement
-    sku: upstream-bkc
+  # BKC (Best Known Configuration) use cases. Their second choice is a kernel
+  # version rather than a SKU: each version is a `sku` id, and the use case's
+  # `skuLabel` (under `verticals`) renames the dropdown, and `platformFirst`
+  # asks for the platform before it. A version with an empty
+  # template is listed but grayed out; give it a template to make it buildable.
+  #
+  # Upstream BKC for Nova Lake on Ubuntu 26.04 is an overlay build: it layers
+  # the BKC stack onto an installed Ubuntu 26.04 RAW image. The template here is
+  # a starter; the full BKC template replaces it under the same name where it
+  # is deployed.
+  - vertical: upstream-bkc
+    sku: mainline-7.0.14
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ""
+
+  - vertical: upstream-bkc
+    sku: mainline-7.1.13
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ""
+
+  - vertical: upstream-bkc
+    sku: mainline-7.2.11
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ""
+
+  # The NVL cBKC template installs the Intel 7.3 kernel
+  # (linux-image-7.3-intel, build 261014t080608z-resolute1).
+  - vertical: upstream-bkc
+    sku: mainline-7.3
     platform: nvl
     os: ubuntu26
     imageType: raw
     template: ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml
+
+  # Ubuntu LTS BKC (HWE kernels): planned, no templates yet.
+  - vertical: ubuntu-lts-bkc
+    sku: hwe-7.0
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ""
+
+  - vertical: ubuntu-lts-bkc
+    sku: hwe-7.1
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ""
+
+  - vertical: ubuntu-lts-bkc
+    sku: hwe-7.2
+    platform: nvl
+    os: ubuntu26
+    imageType: raw
+    template: ""
 
 verticals:
   - id: retail
@@ -172,6 +223,14 @@ verticals:
     displayName: Fed Aero
   - id: platform-enablement
     displayName: Platform Enablement
+  - id: upstream-bkc
+    displayName: Platform Enablement - Upstream BKC
+    skuLabel: Mainline Kernel Version
+    platformFirst: true
+  - id: ubuntu-lts-bkc
+    displayName: Platform Enablement - Ubuntu LTS BKC
+    skuLabel: HWE Kernel Version
+    platformFirst: true
 
 skus:
   - id: desktop-virtualization
@@ -188,8 +247,20 @@ skus:
     displayName: EdgePack Minimal Server
   - id: edgepack-standard-only
     displayName: EdgePack Standard Base Only (Demo)
-  - id: upstream-bkc
-    displayName: Upstream BKC
+  - id: mainline-7.0.14
+    displayName: "7.0.14"
+  - id: mainline-7.1.13
+    displayName: "7.1.13"
+  - id: mainline-7.2.11
+    displayName: "7.2.11"
+  - id: mainline-7.3
+    displayName: "7.3"
+  - id: hwe-7.0
+    displayName: HWE-7.0
+  - id: hwe-7.1
+    displayName: HWE-7.1
+  - id: hwe-7.2
+    displayName: HWE-7.2
 
 platforms:
   - id: arl
