@@ -18,6 +18,9 @@ export interface AuthorEdits {
   removed: string[]
   // Set only when the user edited it.
   imageName?: string
+  // An overlay template's base image (baseline.source.path), set only when
+  // the user edited it.
+  baseImage?: string
   // The complete disk block, set only when the user edited it.
   disk?: Record<string, unknown>
   // packageRepositories entries the added packages need. One whose url and
@@ -139,6 +142,12 @@ function splices(text: string, doc: Document, edits: AuthorEdits): Splice[] | nu
     out.push({ start: node.range[0], end: node.range[1], text: scalarText(node, edits.imageName) })
   }
 
+  if (edits.baseImage !== undefined) {
+    const node = doc.getIn(['baseline', 'source', 'path'], true)
+    if (!isScalar(node) || !node.range) return null
+    out.push({ start: node.range[0], end: node.range[1], text: scalarText(node, edits.baseImage) })
+  }
+
   if (edits.disk !== undefined) {
     const pair = topPair(doc, 'disk')
     const value = blockNode(pair?.value)
@@ -242,6 +251,7 @@ function applyViaDocument(doc: Document, edits: AuthorEdits): string {
     }
   }
   if (edits.imageName !== undefined) doc.setIn(['image', 'name'], edits.imageName)
+  if (edits.baseImage !== undefined) doc.setIn(['baseline', 'source', 'path'], edits.baseImage)
   if (edits.disk !== undefined) doc.set('disk', doc.createNode(edits.disk))
   if (edits.basedOn !== undefined) doc.setIn(['metadata', 'basedOn'], edits.basedOn)
   return doc.toString({ lineWidth: 0 })

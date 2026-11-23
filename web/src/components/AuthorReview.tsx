@@ -4,13 +4,13 @@
 import { useState } from 'react'
 import { canSaveInPlace, saveFile, saveFileAs, type SavedFile } from '../lib/saveFile'
 
-// The Review step in Author mode: the whole template with the user's changes,
-// and Save / Save As to keep it on the user's machine.
+// The Review step in Author mode, below the same summary and list of changes
+// Customize shows: the whole edited template, in a section that opens and
+// scrolls, and Save / Save As to keep it on the user's machine.
 export function AuthorReview({
   templateName,
   text,
   original,
-  removed,
   saved,
   onSaved,
 }: {
@@ -20,13 +20,12 @@ export function AuthorReview({
   text: string
   // The template as it was before any change.
   original: string
-  // Template packages the user removed.
-  removed: string[]
   // The file saved last this session, and the text saved to it.
   saved: { file: SavedFile; text: string } | null
   onSaved: (saved: { file: SavedFile; text: string }) => void
 }) {
   const [saving, setSaving] = useState(false)
+  const [showTemplate, setShowTemplate] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const file = saved?.file ?? null
   const suggestedName = templateName.split('/').pop() || 'template.yml'
@@ -51,16 +50,29 @@ export function AuthorReview({
 
   return (
     <div>
-      <p className="mb-2 text-xs text-slate-500">
-        {changed ? 'Your changes are applied to the template below.' : 'No changes yet. The template below is as written.'}
-        {removed.length > 0 && <> Removed: {removed.join(', ')}.</>}
-      </p>
-      <pre
-        aria-label="Edited template"
-        className="mb-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700"
-      >
-        {text}
-      </pre>
+      <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 text-xs">
+        <button
+          type="button"
+          className="flex w-full items-center gap-1.5 text-left"
+          onClick={() => setShowTemplate((o) => !o)}
+          aria-expanded={showTemplate}
+        >
+          <span className="text-[10px] text-slate-400">{showTemplate ? '▼' : '▶'}</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Template</span>
+          <span className="text-[11px] text-slate-400">
+            — {suggestedName}
+            {changed ? ', with your changes' : ', as written'}
+          </span>
+        </button>
+        {showTemplate && (
+          <pre
+            aria-label="Edited template"
+            className="mt-2 max-h-96 overflow-auto rounded border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700"
+          >
+            {text}
+          </pre>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <button

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DiskStep } from './DiskStep'
 import { useStore } from '../store'
@@ -31,5 +31,19 @@ describe('DiskStep for an overlay template', () => {
     expect(screen.getByText(/keeps its partition\s+table and partitions/)).not.toBeNull()
     expect(screen.getByLabelText('Disk Size')).not.toBeNull()
     expect(screen.getByLabelText('Max Size')).not.toBeNull()
+  })
+
+  it('offers the base image only for an overlay template, and shows what is wrong with it', () => {
+    useStore.setState({ baseImage: '/path/to/ubuntu-26.04-base.raw', baseImageEdited: false })
+    const { rerender } = render(<DiskStep />)
+    expect(screen.queryByLabelText(/Base Image/)).toBeNull()
+
+    rerender(<DiskStep overlay baseImageIssue="This is the template's placeholder." />)
+    const input = screen.getByLabelText(/Base Image/) as HTMLInputElement
+    expect(input.value).toBe('/path/to/ubuntu-26.04-base.raw')
+    expect(screen.getByRole('alert').textContent).toBe("This is the template's placeholder.")
+
+    fireEvent.change(input, { target: { value: '/images/base.raw' } })
+    expect(useStore.getState()).toMatchObject({ baseImage: '/images/base.raw', baseImageEdited: true })
   })
 })

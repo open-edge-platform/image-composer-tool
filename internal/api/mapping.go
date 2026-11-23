@@ -27,6 +27,13 @@ func optStr(s string) *string {
 // optStrs returns nil for an empty slice, else a pointer to it. Omitting rather
 // than emitting `[]` keeps "the server has nothing to say here" distinct from
 // "the server says the list is empty" for clients that check presence.
+func optBool(b bool) *bool {
+	if !b {
+		return nil
+	}
+	return &b
+}
+
 func optStrs(v []string) *[]string {
 	if len(v) == 0 {
 		return nil
@@ -51,6 +58,9 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	}
 	if r.TemplateYaml != nil {
 		sel.TemplateYAML = *r.TemplateYaml
+	}
+	if r.BaseImage != nil {
+		sel.BaseImage = *r.BaseImage
 	}
 	if r.Packages != nil {
 		sel.Packages = *r.Packages
@@ -418,22 +428,23 @@ func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 		return nil
 	}
 	return &httpapi.ComposeSummary{
-		Vertical:       s.Vertical,
-		Sku:            s.SKU,
-		Platform:       s.Platform,
-		Os:             s.OS,
-		ImageType:      s.ImageType,
-		ImageName:      s.ImageName,
-		ImageVersion:   s.ImageVersion,
-		Description:    s.Description,
-		Architecture:   s.Architecture,
-		KernelVersion:  s.KernelVersion,
-		PackageCount:   s.PackageCount,
-		DiskSize:       s.DiskSize,
-		PartitionCount: s.PartitionCount,
-		PartitionTable: s.PartitionTable,
-		Hostname:       s.Hostname,
-		BaseImage:      optStr(s.BaseImage),
+		Vertical:         s.Vertical,
+		Sku:              s.SKU,
+		Platform:         s.Platform,
+		Os:               s.OS,
+		ImageType:        s.ImageType,
+		ImageName:        s.ImageName,
+		ImageVersion:     s.ImageVersion,
+		Description:      s.Description,
+		Architecture:     s.Architecture,
+		KernelVersion:    s.KernelVersion,
+		PackageCount:     s.PackageCount,
+		DiskSize:         s.DiskSize,
+		PartitionCount:   s.PartitionCount,
+		PartitionTable:   s.PartitionTable,
+		Hostname:         s.Hostname,
+		BaseImage:        optStr(s.BaseImage),
+		BaseImageMissing: optBool(s.BaseImageMissing),
 
 		Advanced: fromAdvancedChanges(s.Advanced),
 	}
@@ -445,6 +456,7 @@ func fromAdvancedChanges(a *service.AdvancedChanges) *httpapi.AdvancedChanges {
 	}
 	out := &httpapi.AdvancedChanges{
 		ImageName:      optStr(a.ImageName),
+		BaseImage:      optStr(a.BaseImage),
 		Packages:       optStrs(a.Packages),
 		Repos:          optStrs(a.Repos),
 		NewUsers:       optStrs(a.NewUsers),

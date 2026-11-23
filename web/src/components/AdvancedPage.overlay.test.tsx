@@ -53,7 +53,8 @@ function composeResponse(req: ComposeRequest): ComposeResponse {
       vertical: req.vertical, sku: req.sku ?? '', platform: req.platform, os: req.os, imageType: req.imageType,
       imageName: 'ubuntu26-nvl-bkc-overlay', imageVersion: '26.04', description: '', architecture: 'x86_64',
       kernelVersion: '', packageCount: 1, diskSize: '', partitionCount: 0, partitionTable: '', hostname: '',
-      baseImage: '/path/to/ubuntu-26.04-base.raw',
+      baseImage: req.baseImage ?? '/path/to/ubuntu-26.04-base.raw',
+      baseImageMissing: !req.baseImage,
     },
   }
 }
@@ -78,6 +79,8 @@ beforeEach(() => {
     imageNameEdited: true,
     disk: parseDiskFromYaml(minimalPtlPvRaw),
     diskEdited: false,
+    baseImage: '',
+    baseImageEdited: false,
   })
 })
 
@@ -93,5 +96,31 @@ describe('AdvancedPage for an overlay template', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(await screen.findByText(/keeps its partition\s+table and partitions/)).toBeTruthy()
     expect(screen.queryByText('Partition Table')).toBeNull()
+  })
+
+  it('blocks Compose until the base image is a path the server has, then sends it', async () => {
+    useStore.setState({ addedPackages: [] })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false), { timeout: 5000 })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    // Seeded with the template's placeholder, which the step flags.
+    const input = (await screen.findByLabelText(/Base Image/, {}, { timeout: 5000 })) as HTMLInputElement
+    expect(input.value).toBe('/path/to/ubuntu-26.04-base.raw')
+    expect(screen.getByRole('alert').textContent).toMatch(/placeholder/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
+    expect(await screen.findByText('Fix the base image on the Disk step before composing.')).toBeTruthy()
+
+    // A real path goes to the server as an override.
+    fireEvent.click(screen.getByRole('button', { name: /Disk/ }))
+    fireEvent.change(await screen.findByLabelText(/Base Image/), { target: { value: '/images/base.raw' } })
+    await waitFor(() =>
+      expect(mockApi.compose).toHaveBeenLastCalledWith(expect.objectContaining({ baseImage: '/images/base.raw' })),
+      { timeout: 5000 },
+    )
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull(), { timeout: 5000 })
   })
 })
