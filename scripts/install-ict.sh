@@ -36,6 +36,9 @@ Install the Image Composer Tool Debian package and its prerequisites.
   --skip-prerequisites  Install only the package and what apt requires for it.
   -h, --help            Show this help.
 
+Set ICT_GITHUB_REPOSITORY=OWNER/REPO to download from another repository's release
+(default: open-edge-platform/image-composer-tool), with GITHUB_TOKEN if it is private.
+
 Run as a user that can use sudo, without sudo in front (the script elevates its
 apt commands itself, so exported GITHUB_TOKEN and proxy variables are kept), or as
 root. Needs network access to the
@@ -129,8 +132,10 @@ if [[ -n "${tag}" ]]; then
     curl -fsSL "${auth[@]}" -H "Accept: application/vnd.github+json" \
         -o "${workdir}/release.json" "${api}/repos/${repo}/releases/tags/${tag//+/%2B}" \
         || die "could not read release ${tag} of ${repo}"
-    deb_name="$(jq -r '[.assets[].name | select(test("^ict_.*_amd64\\.deb$"))][0] // empty' "${workdir}/release.json")"
-    [[ -n "${deb_name}" ]] || die "release ${tag} has no ict_*_amd64.deb asset"
+    # The package is published as ict_<version>_amd64.deb by this repository's release
+    # workflow, and as image-composer-tool_<version>_amd64.deb by some other builds of it.
+    deb_name="$(jq -r '[.assets[].name | select(test("^(ict|image-composer-tool)_.*_amd64\\.deb$"))][0] // empty' "${workdir}/release.json")"
+    [[ -n "${deb_name}" ]] || die "release ${tag} has no ict_*_amd64.deb or image-composer-tool_*_amd64.deb asset"
     jq -e '.assets[] | select(.name == "SHA256SUMS")' "${workdir}/release.json" >/dev/null \
         || die "release ${tag} has no SHA256SUMS asset"
     # Download through the API asset URLs: they work for private repositories too,
