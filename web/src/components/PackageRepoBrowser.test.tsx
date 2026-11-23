@@ -64,6 +64,16 @@ function browse(repoId: string) {
 }
 
 describe('a repo the matched template already draws a package from', () => {
+  it('is browsed first, rather than the base repo with its whole distribution', () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} lockedRepoIds={new Set(['intel-eci'])} />)
+    expect((screen.getByRole('combobox', { name: 'Choose repository' }) as HTMLSelectElement).value).toBe('intel-eci')
+  })
+
+  it('leaves the base repo browsed first when the template draws from no other', () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+    expect((screen.getByRole('combobox', { name: 'Choose repository' }) as HTMLSelectElement).value).toBe('base')
+  })
+
   it('renders as always on, same as the base repo', () => {
     render(
       <Browser
