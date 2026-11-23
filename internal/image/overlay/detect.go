@@ -68,7 +68,9 @@ type BaselinePackage struct {
 	// Name is the package name (e.g. "libc6", "bash").
 	Name string
 	// Version is the full version string, including release/epoch where present.
-	Version string
+	Version       string
+	SourceName    string
+	SourceVersion string
 	// Arch is the package architecture (e.g. "amd64", "x86_64", "all", "noarch").
 	Arch      string
 	MultiArch string
@@ -631,10 +633,14 @@ func parseDpkgStatus(statusPath string) ([]BaselinePackage, error) {
 		deps = append(deps, parseDebDependencies(fields["Depends"])...)
 		requirements := parseDebDependsField(name, fields["Pre-Depends"])
 		requirements = append(requirements, parseDebDependsField(name, fields["Depends"])...)
+		source, hasSource := fields["Source"]
+		sourceName, sourceVersion := parseSourceIdentity(name, fields["Version"], source, hasSource)
 
 		pkgs = append(pkgs, BaselinePackage{
 			Name:              name,
 			Version:           fields["Version"],
+			SourceName:        sourceName,
+			SourceVersion:     sourceVersion,
 			Arch:              fields["Architecture"],
 			MultiArch:         fields["Multi-Arch"],
 			Installed:         isDpkgInstalled(fields["Status"]),
@@ -649,6 +655,24 @@ func parseDpkgStatus(statusPath string) ([]BaselinePackage, error) {
 		return nil, fmt.Errorf("dpkg status database %s contained no packages", statusPath)
 	}
 	return pkgs, nil
+}
+
+func parseSourceIdentity(name, version, source string, hasSource bool) (string, string) {
+	if !hasSource {
+		return name, version
+	}
+	fields := strings.Fields(source)
+	if len(fields) == 1 && !strings.ContainsAny(fields[0], "()") {
+		return fields[0], version
+	}
+	if len(fields) == 2 && !strings.ContainsAny(fields[0], "()") &&
+		strings.HasPrefix(fields[1], "(") && strings.HasSuffix(fields[1], ")") {
+		sourceVersion := strings.TrimSuffix(strings.TrimPrefix(fields[1], "("), ")")
+		if sourceVersion != "" && !strings.ContainsAny(sourceVersion, "()") {
+			return fields[0], sourceVersion
+		}
+	}
+	return "", ""
 }
 
 // parseDeb822Fields parses a single deb822 stanza into its top-level fields,
