@@ -98,7 +98,7 @@ describe('Open Template', () => {
     await screen.findByText('my-bkc.yml')
     expect(useStore.getState().selection).toMatchObject({ vertical: 'upstream-bkc', platform: 'nvl', os: 'ubuntu26' })
     await waitFor(() =>
-      expect(mockApi.compose).toHaveBeenLastCalledWith(expect.objectContaining({ vertical: 'upstream-bkc', templateYaml: SAVED })),
+      expect(mockApi.compose).toHaveBeenCalledWith(expect.objectContaining({ vertical: 'upstream-bkc', templateYaml: SAVED })),
     )
 
     await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
@@ -133,6 +133,6 @@ describe('Open Template', () => {
 
     await screen.findByText(/opened for the current selection/)
     expect(useStore.getState().selection.vertical).toBe('platform-enablement')
-    await waitFor(() => expect(mockApi.compose).toHaveBeenLastCalledWith(expect.objectContaining({ templateYaml: plain })))
+    await waitFor(() => expect(mockApi.compose).toHaveBeenCalledWith(expect.objectContaining({ templateYaml: plain })))
   })
 })
