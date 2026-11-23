@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1062,6 +1063,12 @@ type SSHKeyOverride struct {
 	User, File string
 }
 
+// AdditionalFileReplacement replaces the host file (local) of every
+// systemConfig.additionalFiles entry whose destination (final) is Final.
+type AdditionalFileReplacement struct {
+	Final, Local string
+}
+
 // ProxyOverrides are proxy settings supplied on the command line. A nil field
 // was not set and leaves the template value alone; a pointer to an empty
 // string was set explicitly and clears it.
@@ -1084,10 +1091,15 @@ type CompositionOverrides struct {
 	Hostname     string
 	Proxy        ProxyOverrides
 	SSHKeys      []SSHKeyOverride
+	// AdditionalFileReplacements point additionalFiles entries at a different host
+	// file, so an input that changes per build (for example a vendor tarball)
+	// can be supplied at build time without editing the template.
+	AdditionalFileReplacements []AdditionalFileReplacement
 }
 
 func (o CompositionOverrides) isEmpty() bool {
-	return o.DiskStrategy == "" && o.Hostname == "" && o.Proxy.isEmpty() && len(o.SSHKeys) == 0
+	return o.DiskStrategy == "" && o.Hostname == "" && o.Proxy.isEmpty() && len(o.SSHKeys) == 0 &&
+		len(o.AdditionalFileReplacements) == 0
 }
 
 // ApplyCompositionOverrides applies CLI overrides to a merged template and
@@ -1127,9 +1139,72 @@ func (t *ImageTemplate) ApplyCompositionOverrides(o CompositionOverrides) error 
 			return err
 		}
 	}
+	for _, f := range o.AdditionalFileReplacements {
+		if err := t.applyAdditionalFileReplacement(f); err != nil {
+			return err
+		}
+	}
 	// Overrides can enable a generated file (a proxy, or SSH keys that make a
 	// sudo user key-only) after finalizeProvisioning checked the template.
 	return t.validateAdditionalFilesNotGenerated()
+}
+
+// applyAdditionalFileReplacement points every additionalFiles entry placed
+// at o.Final at the host file o.Local. The file must exist and be a regular
+// file; a destination the template does not list is an error rather than a
+// silent no-op, so a typo cannot leave the template default in use.
+func (t *ImageTemplate) applyAdditionalFileReplacement(o AdditionalFileReplacement) error {
+	abs, err := filepath.Abs(o.Local)
+	if err != nil {
+		return fmt.Errorf("additional file replacement for %q: %w", o.Final, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("additional file replacement for %q: %w", o.Final, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("additional file replacement for %q: %s is not a regular file", o.Final, abs)
+	}
+	if err := t.checkAdditionalFileReplacementAllowed(o.Final, abs); err != nil {
+		return err
+	}
+	matched := false
+	for i := range t.SystemConfig.AdditionalFiles {
+		if t.SystemConfig.AdditionalFiles[i].Final == o.Final {
+			log.Infof("Additional file %s now comes from %s (was %s)", o.Final, abs,
+				t.SystemConfig.AdditionalFiles[i].Local)
+			t.SystemConfig.AdditionalFiles[i].Local = abs
+			t.SystemConfig.AdditionalFiles[i].replacedOnCommandLine = true
+			matched = true
+		}
+	}
+	if !matched {
+		return fmt.Errorf("additional file replacement: no systemConfig.additionalFiles entry has final path %q", o.Final)
+	}
+	return nil
+}
+
+// checkAdditionalFileReplacementAllowed holds replacements to the rules the
+// template's own files meet. The cloud-init user-data seed was validated for its
+// header when the template was lowered, so a replacement must meet the same
+// rule. A final that is a directory receives the file under its source
+// basename, so both spellings of the destination are checked. Files the tool
+// generates later (apt sources, preferences, keys) are caught where they are
+// generated, see addGeneratedAdditionalFile.
+func (t *ImageTemplate) checkAdditionalFileReplacementAllowed(final, local string) error {
+	if !t.SystemConfig.CloudInit.IsEnabled() {
+		return nil
+	}
+	clean := filepath.Clean("/" + final)
+	for _, dest := range []string{clean, clean + "/" + filepath.Base(local)} {
+		if dest == CloudInitSeedDir+"/user-data" {
+			if err := checkUserDataHeader(local); err != nil {
+				return fmt.Errorf("additional file replacement for %q: %w", final, err)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // applyDiskStrategyOverride sets the disk selection strategy. It clears any

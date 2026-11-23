@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { labelFor, useStore } from '../store'
+import { labelFor, skuLabelFor, useStore } from '../store'
 import type { HistoryItem, Manifest } from '../api/types'
 
 interface HistorySidebarProps {
@@ -192,7 +192,7 @@ function rowLabels(
     : [platformShort, os, imageType]
 
   const tooltip = [
-    sku && `SKU: ${sku}`,
+    sku && `${skuLabelFor(manifest, s.vertical)}: ${sku}`,
     vertical && `Use Case: ${vertical}`,
     platform && `Platform: ${platform}`,
     os && `OS: ${os}`,
