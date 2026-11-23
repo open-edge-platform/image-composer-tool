@@ -15,6 +15,72 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
+func TestSourceArtifactsWithURLs(t *testing.T) {
+	t.Parallel()
+
+	pkg := SourcePackageMetadata{
+		Directory: "pool/main/m/mesa",
+		Artifacts: []SourceArtifactMetadata{
+			{Filename: "mesa.dsc", Size: 10, SHA256: "descriptor"},
+			{Filename: "mesa.orig.tar.xz", Size: 20, SHA256: "archive"},
+			{Filename: "mesa.extra+vendor.tar.gz", Size: 30, SHA256: "extra"},
+		},
+	}
+
+	artifacts, err := sourceArtifactsWithURLs("https://user:secret@example.org/snapshot/", pkg)
+	if err != nil {
+		t.Fatalf("sourceArtifactsWithURLs: %v", err)
+	}
+	want := []string{
+		"https://example.org/snapshot/pool/main/m/mesa/mesa.dsc",
+		"https://example.org/snapshot/pool/main/m/mesa/mesa.orig.tar.xz",
+		"https://example.org/snapshot/pool/main/m/mesa/mesa.extra+vendor.tar.gz",
+	}
+	if len(artifacts) != len(want) {
+		t.Fatalf("got %d artifacts, want %d", len(artifacts), len(want))
+	}
+	for index, artifact := range artifacts {
+		if artifact.URL != want[index] || artifact.Size != pkg.Artifacts[index].Size ||
+			artifact.SHA256 != pkg.Artifacts[index].SHA256 || pkg.Artifacts[index].URL != "" {
+			t.Errorf("artifact %d = %+v, want URL %q and original metadata", index, artifact, want[index])
+		}
+	}
+}
+
+func TestSourceArtifactsWithURLsRejectsUnsafeInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, base, directory, filename string }{
+		{"query", "https://example.org/repo?token=secret", "pool/main", "pkg.dsc"},
+		{"empty query", "https://example.org/repo?", "pool/main", "pkg.dsc"},
+		{"fragment", "https://example.org/repo#secret", "pool/main", "pkg.dsc"},
+		{"unsupported scheme", "file:///repo", "pool/main", "pkg.dsc"},
+		{"missing host", "https:///repo", "pool/main", "pkg.dsc"},
+		{"encoded base traversal", "https://example.org/%2e%2e/repo", "pool/main", "pkg.dsc"},
+		{"base traversal", "https://example.org/a/../repo", "pool/main", "pkg.dsc"},
+		{"directory traversal", "https://example.org/repo", "../outside", "pkg.dsc"},
+		{"absolute directory", "https://example.org/repo", "/outside", "pkg.dsc"},
+		{"encoded directory", "https://example.org/repo", "pool/%2e%2e", "pkg.dsc"},
+		{"filename traversal", "https://example.org/repo", "pool/main", "../pkg.dsc"},
+		{"filename query", "https://example.org/repo", "pool/main", "pkg.dsc?token=secret"},
+		{"absolute filename", "https://example.org/repo", "pool/main", "//other.example/pkg.dsc"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := SourcePackageMetadata{Directory: tt.directory, Artifacts: []SourceArtifactMetadata{{Filename: tt.filename}}}
+			artifacts, err := sourceArtifactsWithURLs(tt.base, pkg)
+			if err == nil || artifacts != nil {
+				t.Fatalf("sourceArtifactsWithURLs = %v, %v; want error", artifacts, err)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error contains sensitive input: %v", err)
+			}
+		})
+	}
+}
+
 func TestVerifySourceIndex(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +212,17 @@ func TestParseSourceIndexFromSignedRelease(t *testing.T) {
 			if gotDigest != digest || len(packages) != 1 || packages[0].Name != "mesa" ||
 				len(packages[0].Artifacts) != 3 || packages[0].Artifacts[2].Size != 30 {
 				t.Fatalf("unexpected digest %q or packages %+v", gotDigest, packages)
+			}
+			artifacts, err := sourceArtifactsWithURLs("https://example.org/snapshot/", packages[0])
+			if err != nil {
+				t.Fatalf("resolve source artifacts: %v", err)
+			}
+			wantNames := []string{"mesa.dsc", "mesa.orig.tar.xz", "mesa.extra.tar.gz"}
+			for index, artifact := range artifacts {
+				wantURL := "https://example.org/snapshot/pool/main/m/mesa/" + wantNames[index]
+				if artifact.URL != wantURL || artifact.Size != uint64((index+1)*10) || artifact.SHA256 != checksum {
+					t.Errorf("artifact %d = %+v, want URL %q", index, artifact, wantURL)
+				}
 			}
 		})
 	}

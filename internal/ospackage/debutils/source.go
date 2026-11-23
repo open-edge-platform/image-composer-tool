@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/textproto"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -104,6 +105,7 @@ func verifySourceIndex(release []byte, index []byte, indexPath string) (string, 
 
 type SourceArtifactMetadata struct {
 	Filename string
+	URL      string
 	Size     uint64
 	MD5      string
 	SHA1     string
@@ -122,6 +124,37 @@ type SourcePackageMetadata struct {
 type SourceIndexError struct {
 	Stanza int
 	Err    error
+}
+
+func sourceArtifactsWithURLs(baseURL string, pkg SourcePackageMetadata) ([]SourceArtifactMetadata, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil || base == nil || (base.Scheme != "http" && base.Scheme != "https") ||
+		base.Hostname() == "" || base.Opaque != "" || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" ||
+		strings.ContainsAny(base.EscapedPath(), "%\\") {
+		return nil, fmt.Errorf("invalid source repository URL")
+	}
+	if base.Path != "" && (path.Clean(base.Path) != strings.TrimSuffix(base.Path, "/") && base.Path != "/") {
+		return nil, fmt.Errorf("invalid source repository URL path")
+	}
+	if !safeSourcePath(pkg.Directory, false) {
+		return nil, fmt.Errorf("invalid source artifact directory")
+	}
+	base.User = nil
+	artifacts := make([]SourceArtifactMetadata, len(pkg.Artifacts))
+	for index, artifact := range pkg.Artifacts {
+		if !safeSourcePath(artifact.Filename, true) {
+			return nil, fmt.Errorf("invalid source artifact filename")
+		}
+		artifactURL := *base
+		artifactURL.Path = path.Join(base.Path, pkg.Directory, artifact.Filename)
+		if !strings.HasPrefix(artifactURL.Path, "/") {
+			artifactURL.Path = "/" + artifactURL.Path
+		}
+		artifactURL.RawPath = ""
+		artifact.URL = artifactURL.String()
+		artifacts[index] = artifact
+	}
+	return artifacts, nil
 }
 
 func (err *SourceIndexError) Error() string {
