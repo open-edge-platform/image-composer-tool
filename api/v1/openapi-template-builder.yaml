@@ -807,6 +807,28 @@ components:
             The Advanced tab may offer Author mode, which edits a whole
             template. Set by `serve --enable-authoring`.
 
+    Vertical:
+      type: object
+      description: A use case (vertical) option for the Basic tab's first dropdown.
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        skuLabel:
+          type: string
+          description: |
+            Label for the SKU dropdown under this use case, for a use case whose
+            second choice is not a SKU (e.g. "Mainline Kernel Version"). Omitted
+            means the UI labels it "SKU".
+        platformFirst:
+          type: boolean
+          description: |
+            Ask for the platform before the SKU dropdown, for a use case whose
+            SKU choices depend on the platform (e.g. kernel versions). Omitted
+            means false.
+
     Target:
       type: object
       description: An OS option with its family and architecture.
@@ -857,7 +879,7 @@ components:
         verticals:
           type: array
           items:
-            $ref: "#/components/schemas/Option"
+            $ref: "#/components/schemas/Vertical"
         skus:
           type: array
           items:

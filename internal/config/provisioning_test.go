@@ -775,6 +775,128 @@ func TestApplyCompositionOverrides(t *testing.T) {
 	}
 }
 
+func TestApplyCompositionOverridesAdditionalFileReplacement(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newSrc := writeProvisioningTestFile(t, filepath.Join(dir, "vendor-2.tar.gz"), "new")
+
+	newTmpl := func() *ImageTemplate {
+		return &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+			{Local: "/default/vendor.tar.gz", Final: "/opt/vendor/vendor.tar.gz"},
+			{Local: "files/a.conf", Final: "/etc/a.conf"},
+		}}}
+	}
+
+	tmpl := newTmpl()
+	if err := tmpl.ApplyCompositionOverrides(CompositionOverrides{
+		AdditionalFileReplacements: []AdditionalFileReplacement{{Final: "/opt/vendor/vendor.tar.gz", Local: newSrc}},
+	}); err != nil {
+		t.Fatalf("ApplyCompositionOverrides: %v", err)
+	}
+	got := tmpl.SystemConfig.AdditionalFiles
+	if got[0].Local != newSrc || got[0].Final != "/opt/vendor/vendor.tar.gz" {
+		t.Errorf("matching entry must use the new source and keep its destination: %+v", got[0])
+	}
+	if got[1].Local != "files/a.conf" {
+		t.Errorf("other entries must be left alone: %+v", got[1])
+	}
+
+	errCases := map[string][]AdditionalFileReplacement{
+		"unknown final path": {{Final: "/opt/nope", Local: newSrc}},
+		"missing file":       {{Final: "/etc/a.conf", Local: filepath.Join(dir, "missing")}},
+		"directory":          {{Final: "/etc/a.conf", Local: dir}},
+	}
+	for name, o := range errCases {
+		o := o
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := newTmpl().ApplyCompositionOverrides(CompositionOverrides{AdditionalFileReplacements: o}); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+}
+
+func TestAdditionalFileReplacementUserDataHeader(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	plain := writeProvisioningTestFile(t, filepath.Join(dir, "plain.txt"), "no header\n")
+	good := writeProvisioningTestFile(t, filepath.Join(dir, "good.yaml"), "#cloud-config\npackages: [vim]\n")
+	headerless := writeProvisioningTestFile(t, filepath.Join(dir, "user-data"), "packages: [vim]\n")
+	enabled, disabled := true, false
+
+	newTmpl := func(on *bool, final string) *ImageTemplate {
+		return &ImageTemplate{SystemConfig: SystemConfig{
+			CloudInit:       CloudInitConfig{Enabled: on},
+			AdditionalFiles: []AdditionalFileInfo{{Local: "/gen/user-data", Final: final}},
+		}}
+	}
+	apply := func(tmpl *ImageTemplate, final, local string) error {
+		return tmpl.ApplyCompositionOverrides(CompositionOverrides{
+			AdditionalFileReplacements: []AdditionalFileReplacement{{Final: final, Local: local}}})
+	}
+	seed := CloudInitSeedDir + "/user-data"
+
+	if err := apply(newTmpl(&enabled, seed), seed, plain); err == nil {
+		t.Error("user-data without a cloud-init header must be rejected")
+	}
+	if err := apply(newTmpl(&enabled, seed), seed, good); err != nil {
+		t.Errorf("user-data with a #cloud-config header must be accepted: %v", err)
+	}
+	if err := apply(newTmpl(&enabled, CloudInitSeedDir), CloudInitSeedDir, headerless); err == nil {
+		t.Error("a file named user-data replacing the seed directory entry must get the header check too")
+	}
+	if err := apply(newTmpl(&disabled, seed), seed, plain); err != nil {
+		t.Errorf("cloud-init is off, so the header rule does not apply: %v", err)
+	}
+}
+
+func TestGeneratedFileMayNotOverwriteCommandLineReplacement(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := writeProvisioningTestFile(t, filepath.Join(dir, "sources.list"), "deb http://x y z\n")
+	tmpl := &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+		{Local: "/gen/sources.list", Final: aptSourcesListFinal},
+		{Local: "/gen/other", Final: "/etc/other"},
+	}}}
+	if err := tmpl.ApplyCompositionOverrides(CompositionOverrides{
+		AdditionalFileReplacements: []AdditionalFileReplacement{{Final: aptSourcesListFinal, Local: src}}}); err != nil {
+		t.Fatalf("ApplyCompositionOverrides: %v", err)
+	}
+	if err := tmpl.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen", Final: aptSourcesListFinal}); err == nil {
+		t.Error("generating a file the command line replaced must fail, not drop the replacement")
+	}
+	if got := tmpl.SystemConfig.AdditionalFiles[0].Local; got != src {
+		t.Errorf("the replacement must be kept, got %q", got)
+	}
+	// An alias of the generated path, or a directory entry that receives a
+	// replacement named like the generated file, is the same destination.
+	aliased := &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+		{Local: "/gen/a", Final: "/etc/apt/sources.list.d/./package-repositories.list"}}}}
+	if err := aliased.ApplyCompositionOverrides(CompositionOverrides{AdditionalFileReplacements: []AdditionalFileReplacement{
+		{Final: "/etc/apt/sources.list.d/./package-repositories.list", Local: src}}}); err != nil {
+		t.Fatalf("alias replacement: %v", err)
+	}
+	if err := aliased.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen", Final: aptSourcesListFinal}); err == nil {
+		t.Error("an aliased destination is the generated file and must fail")
+	}
+	namedLike := writeProvisioningTestFile(t, filepath.Join(dir, "package-repositories.list"), "deb http://x y z\n")
+	dirEntry := &ImageTemplate{SystemConfig: SystemConfig{AdditionalFiles: []AdditionalFileInfo{
+		{Local: "/gen/b", Final: "/etc/apt/sources.list.d"}}}}
+	if err := dirEntry.ApplyCompositionOverrides(CompositionOverrides{AdditionalFileReplacements: []AdditionalFileReplacement{
+		{Final: "/etc/apt/sources.list.d", Local: namedLike}}}); err != nil {
+		t.Fatalf("directory replacement: %v", err)
+	}
+	if err := dirEntry.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen", Final: aptSourcesListFinal}); err == nil {
+		t.Error("a directory destination receiving a file with the generated name must fail")
+	}
+	// Generation of a file nobody replaced, and replacing a template entry no
+	// generation touches, are unaffected.
+	if err := tmpl.addGeneratedAdditionalFile(AdditionalFileInfo{Local: "/tmp/gen2", Final: "/etc/apt/preferences.d/x"}); err != nil {
+		t.Errorf("unrelated generated file: %v", err)
+	}
+}
+
 func TestApplyCompositionOverridesDiskStrategyClearsPath(t *testing.T) {
 	t.Parallel()
 	tmpl := &ImageTemplate{Disk: DiskConfig{Path: "/dev/sda"}}
