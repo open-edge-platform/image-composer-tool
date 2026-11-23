@@ -207,3 +207,10 @@ describe('basedOn', () => {
     expect(basedOnOf(nvl)).toBeUndefined()
   })
 })
+
+describe('baseImage', () => {
+  it("replaces the overlay template's base image path in place", () => {
+    const out = applyAuthorEdits(nvl, { ...none, baseImage: '/images/ubuntu-26.04-base.raw' })
+    expect(out).toBe(nvl.replace('path: /path/to/ubuntu-26.04-base.raw', 'path: /images/ubuntu-26.04-base.raw'))
+  })
+})

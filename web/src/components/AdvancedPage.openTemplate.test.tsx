@@ -104,6 +104,7 @@ describe('Open Template', () => {
 
     await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^.Template/ }))
     expect((await screen.findByLabelText('Edited template')).textContent).toBe(SAVED)
     expect(screen.getByText(/No changes yet/)).toBeTruthy()
 

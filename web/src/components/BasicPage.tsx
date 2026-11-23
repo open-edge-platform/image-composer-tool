@@ -211,7 +211,7 @@ export function BasicPage({
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!complete || !review || loadingSummary || busy || buildInProgress}
+              disabled={!complete || !review || loadingSummary || busy || buildInProgress || !!review.summary.baseImageMissing}
               onClick={onComposeClick}
             >
               {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
@@ -264,6 +264,14 @@ export function BasicPage({
                   ))}
                 </tbody>
               </table>
+              {/* An overlay template whose base image isn't on the server can't
+                  build; say so here rather than after the build starts. */}
+              {review.summary.baseImageMissing && (
+                <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800" role="alert">
+                  The base image {review.summary.baseImage} isn't on the server, so this image can't be composed yet.
+                  Set the base image on the Advanced tab's Disk step.
+                </p>
+              )}
             </div>
           </div>
         )}
