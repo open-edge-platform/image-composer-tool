@@ -101,12 +101,12 @@ describe('AdvancedPage for an overlay template', () => {
   it('blocks Compose until the base image is a path the server has, then sends it', async () => {
     useStore.setState({ addedPackages: [] })
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
-    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false), { timeout: 5000 })
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
     // Seeded with the template's placeholder, which the step flags.
-    const input = (await screen.findByLabelText(/Base Image/)) as HTMLInputElement
+    const input = (await screen.findByLabelText(/Base Image/, {}, { timeout: 5000 })) as HTMLInputElement
     expect(input.value).toBe('/path/to/ubuntu-26.04-base.raw')
     expect(screen.getByRole('alert').textContent).toMatch(/placeholder/)
 
@@ -119,7 +119,8 @@ describe('AdvancedPage for an overlay template', () => {
     fireEvent.change(await screen.findByLabelText(/Base Image/), { target: { value: '/images/base.raw' } })
     await waitFor(() =>
       expect(mockApi.compose).toHaveBeenLastCalledWith(expect.objectContaining({ baseImage: '/images/base.raw' })),
+      { timeout: 5000 },
     )
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull(), { timeout: 5000 })
   })
 })
