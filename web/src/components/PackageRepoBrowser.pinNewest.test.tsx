@@ -32,7 +32,8 @@ const repos: PackageRepo[] = [
 function Browser({ os = 'ubuntu24', baseLock = noLock, authoring = false }: { os?: string; baseLock?: BaseLock; authoring?: boolean }) {
   const enabledRepos = useStore((s) => s.enabledRepos)
   const enabledRepoIds = repos.filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
-  const resolver = useVersionResolver(os, enabledRepoIds)
+  const priorities = Object.fromEntries(repos.filter((r) => r.priority != null).map((r) => [r.id, r.priority!]))
+  const resolver = useVersionResolver(os, enabledRepoIds, priorities)
   return <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} resolver={resolver} authoring={authoring} />
 }
 
@@ -312,6 +313,73 @@ describe('PackageRepoBrowser — Update to latest version, template packages', (
       expect(useStore.getState().removedPackages).toEqual(['vim'])
     } finally {
       useStore.setState({ removedPackages: [] })
+    }
+  })
+
+  // libnss-libvirt in the NVL BKC template: unpinned, browsed in one repo,
+  // but a build takes it from another. Here Intel ECI outranks base.
+  const elsewhereAnswer = ({ repos: asked }: { repos?: string[] }) =>
+    Promise.resolve({
+      packages:
+        asked?.length === 1 && asked[0] === 'base'
+          ? [versioned('vim', '2:9.1.0016-1')]
+          : [
+              {
+                name: 'vim',
+                version: '2:9.2-1',
+                repository: 'intel-eci',
+                versions: [
+                  { version: '2:9.2-1', repository: 'intel-eci' },
+                  { version: '2:9.1.0016-1', repository: 'base' },
+                ],
+              },
+            ],
+      unavailableRepos: [],
+    })
+
+  it('shows an unpinned template package at the version a build installs, via its repository', async () => {
+    repos[1].priority = 1001
+    try {
+      mockApi.lookupPackages.mockImplementation(elsewhereAnswer)
+      await renderWith(templateLock({}, ['vim']))
+      await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
+
+      expect(screen.getByTitle('The version Unpinned currently resolves to').textContent).toBe('2:9.2-1')
+      expect(screen.getByRole('button', { name: 'Intel ECI' }).closest('span')?.textContent).toBe('via Intel ECI')
+    } finally {
+      delete repos[1].priority
+    }
+  })
+
+  it("keeps an unpinned template package unpinned when a build takes it from another repo, and says so", async () => {
+    repos[1].priority = 1001
+    try {
+      mockApi.lookupPackages.mockImplementation(elsewhereAnswer)
+      await renderWith(templateLock({}, ['vim']))
+      await act(async () => fireEvent.click(screen.getByRole('checkbox', { name: /Show only selected/ })))
+      expect(pinButton().textContent).toBe('Update to latest version (0)')
+
+      await act(async () => fireEvent.click(pinButton()))
+      expect(useStore.getState().addedPackages).toEqual([])
+    } finally {
+      delete repos[1].priority
+    }
+  })
+
+  it('checks where an unpinned template package resolves before pinning it, even before the row knows', async () => {
+    repos[1].priority = 1001
+    try {
+      // Not listing the template's packages, the rows haven't looked vim up,
+      // so the button counts it; its own check finds where it comes from.
+      mockApi.lookupPackages.mockImplementation(elsewhereAnswer)
+      await renderWith(templateLock({}, ['vim']))
+      expect(pinButton().textContent).toBe('Update to latest version (1)')
+      await act(async () => fireEvent.click(pinButton()))
+
+      expect(useStore.getState().addedPackages).toEqual([])
+      expect(screen.getByText(/Kept vim unpinned: a build installs it from Intel ECI/)).toBeTruthy()
+    } finally {
+      delete repos[1].priority
     }
   })
 

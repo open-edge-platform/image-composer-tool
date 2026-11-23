@@ -8,7 +8,7 @@ import type {
 } from '../api/types'
 import { artifactKindLabel } from '../api/types'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
-import { labelFor, useStore } from '../store'
+import { labelFor, skuLabelFor, useStore } from '../store'
 import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
@@ -415,7 +415,7 @@ export function BuildView({
                       <tbody>
                         {([
                           ['Use Case', labelFor(manifest?.verticals ?? [], details.summary.vertical)],
-                          details.summary.sku ? ['SKU', labelFor(manifest?.skus ?? [], details.summary.sku)] : null,
+                          details.summary.sku ? [skuLabelFor(manifest, details.summary.vertical), labelFor(manifest?.skus ?? [], details.summary.sku)] : null,
                           ['Platform', labelFor(manifest?.platforms ?? [], details.summary.platform)],
                           ['OS', labelFor(manifest?.targets ?? [], details.summary.os)],
                           ['Image Type', details.summary.imageType.toUpperCase()],

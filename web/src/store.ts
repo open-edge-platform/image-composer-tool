@@ -385,28 +385,10 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       const selection = { ...state.selection, [key]: value }
       // Reset downstream fields when an upstream one changes, so the cascade
-      // never leaves an invalid combination selected.
-      // Cascade order: vertical → sku → platform → os → kernel → imageType.
-      if (key === 'vertical') {
-        selection.sku = ''
-        selection.platform = ''
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'sku') {
-        selection.platform = ''
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'platform') {
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'os') {
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'kernel') {
-        selection.imageType = ''
+      // never leaves an invalid combination selected. See cascadeOrder.
+      const order = cascadeOrder(state.manifest, selection.vertical)
+      for (const field of order.slice(order.indexOf(key) + 1)) {
+        selection[field] = ''
       }
       // Auto-fill each downstream dimension with its first available option, so
       // selecting a vertical immediately populates a valid default combination
@@ -502,7 +484,7 @@ function releaseIfOrphaned(
 // first option available for the current upstream choices. Walks the cascade in
 // order so each step sees the defaults picked by the previous one.
 function autoFillCascade(manifest: Manifest, selection: Selection): void {
-  const order: (keyof Selection)[] = ['sku', 'platform', 'os', 'kernel', 'imageType']
+  const order = cascadeOrder(manifest, selection.vertical).slice(1)
   const optsKey: Record<string, keyof ReturnType<typeof cascadingOptions>> = {
     sku: 'skus',
     platform: 'platforms',
@@ -530,6 +512,23 @@ function autoFillCascade(manifest: Manifest, selection: Selection): void {
 // for a value the manifest does not list — an old build's retired SKU, say.
 export function labelFor(options: { id: string; displayName: string }[], id: string): string {
   return options.find((o) => o.id === id)?.displayName ?? id
+}
+
+// cascadeOrder is the order the selection dropdowns cascade in: vertical → sku →
+// platform → os → kernel → imageType, or with platform before sku for a use
+// case that sets platformFirst. Each field's options depend on the ones before
+// it, and changing a field clears the ones after it.
+export function cascadeOrder(manifest: Manifest | null, vertical: string): (keyof Selection)[] {
+  const platformFirst = manifest?.verticals.find((v) => v.id === vertical)?.platformFirst
+  return platformFirst
+    ? ['vertical', 'platform', 'sku', 'os', 'kernel', 'imageType']
+    : ['vertical', 'sku', 'platform', 'os', 'kernel', 'imageType']
+}
+
+// The label of the SKU dropdown under a use case: the use case's own skuLabel
+// (e.g. "Mainline Kernel Version"), or "SKU".
+export function skuLabelFor(manifest: Manifest | null, vertical: string): string {
+  return manifest?.verticals.find((v) => v.id === vertical)?.skuLabel || 'SKU'
 }
 
 // Distinct ids present in combinations, optionally filtered by prior selections.
@@ -588,12 +587,19 @@ export function cascadingOptions(
     }))
 
   const verticals = map(distinct(c, 'vertical', {}), manifest.verticals)
+  const platformFirst = cascadeOrder(manifest, selection.vertical)[1] === 'platform'
   const skus = map(
-    distinct(c, 'sku', { vertical: selection.vertical }),
+    distinct(c, 'sku', {
+      vertical: selection.vertical,
+      ...(platformFirst ? { platform: selection.platform } : {}),
+    }),
     manifest.skus,
   )
   const platforms = map(
-    distinct(c, 'platform', { vertical: selection.vertical, sku: selection.sku }),
+    distinct(c, 'platform', {
+      vertical: selection.vertical,
+      ...(platformFirst ? {} : { sku: selection.sku }),
+    }),
     manifest.platforms,
   )
   const oses = map(

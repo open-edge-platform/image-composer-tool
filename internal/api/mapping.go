@@ -205,7 +205,7 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 func fromManifest(m *service.Manifest) httpapi.Manifest {
 	out := httpapi.Manifest{
 		Combinations: make([]httpapi.Combination, len(m.Combinations)),
-		Verticals:    fromOptions(m.Verticals),
+		Verticals:    fromVerticals(m.Verticals),
 		Skus:         fromOptions(m.SKUs),
 		Platforms:    fromOptions(m.Platforms),
 		Targets:      make([]httpapi.Target, len(m.Targets)),
@@ -398,6 +398,17 @@ func fromOptions(opts []service.Option) []httpapi.Option {
 	out := make([]httpapi.Option, len(opts))
 	for i, o := range opts {
 		out[i] = httpapi.Option{Id: o.ID, DisplayName: o.DisplayName}
+	}
+	return out
+}
+
+func fromVerticals(vs []service.Vertical) []httpapi.Vertical {
+	out := make([]httpapi.Vertical, len(vs))
+	for i, v := range vs {
+		out[i] = httpapi.Vertical{Id: v.ID, DisplayName: v.DisplayName, SkuLabel: optStr(v.SKULabel)}
+		if v.PlatformFirst {
+			out[i].PlatformFirst = &v.PlatformFirst
+		}
 	}
 	return out
 }
