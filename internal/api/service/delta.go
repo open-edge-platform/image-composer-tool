@@ -4,6 +4,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -83,6 +84,24 @@ func ValidatePackages(packages []string) error {
 //
 // Used only to match entries by package name; nothing here rewrites what the
 // user chose.
+// ValidateBaseImage checks a base image override: an absolute path on the
+// server. Empty means "not overridden".
+func ValidateBaseImage(path string) error {
+	if path == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\n\r") || filepath.Clean(path) != path {
+		return fmt.Errorf("base image %q must be an absolute path on the server, such as /images/ubuntu-26.04.raw", path)
+	}
+	return nil
+}
+
+// isFile reports whether path is a regular file the server can see.
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 func packageName(entry string) string {
 	i := strings.Index(entry, "_")
 	if i <= 0 || i == len(entry)-1 {
@@ -134,6 +153,9 @@ type deltaTemplate struct {
 	// omitempty throughout, so an unset field is omitted rather than emitted
 	// zero-valued.
 	Disk *DiskOverride `yaml:"disk,omitempty"`
+	// Baseline carries a changed base image. extends replaces the whole
+	// baseline block, so it is the parent's block with the new path.
+	Baseline *config.Baseline `yaml:"baseline,omitempty"`
 }
 
 // deltaSystemConfig is the only systemConfig a delta ever declares. Advanced
@@ -211,6 +233,17 @@ type deltaDkms struct {
 // which is what the plain-package tests want.
 func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarget config.TargetInfo,
 	sel Selection, repos []config.PackageRepository, edgePackNames map[string]bool) ([]byte, error) {
+	return buildDeltaWithBaseline(parentTemplate, parentImage, parentTarget, nil, sel, repos, edgePackNames)
+}
+
+// errBadBaseImage marks a base image override the matched template can't
+// take, a client error.
+var errBadBaseImage = errors.New("bad base image")
+
+// buildDeltaWithBaseline is buildDelta for a parent whose baseline block is
+// known, so a base image override (sel.BaseImage) can be applied to it.
+func buildDeltaWithBaseline(parentTemplate string, parentImage config.ImageInfo, parentTarget config.TargetInfo,
+	parentBaseline *config.Baseline, sel Selection, repos []config.PackageRepository, edgePackNames map[string]bool) ([]byte, error) {
 	name := parentImage.Name
 	if sel.ImageName != "" {
 		name = sel.ImageName
@@ -220,6 +253,19 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 		Image:               config.ImageInfo{Name: name, Version: parentImage.Version},
 		Target:              parentTarget,
 		PackageRepositories: repos,
+	}
+	if sel.BaseImage != "" {
+		if parentBaseline == nil || parentBaseline.Mode != config.BaselineModeOverlay {
+			return nil, fmt.Errorf("%w: a base image applies only to a template built on one (baseline.mode: overlay)", errBadBaseImage)
+		}
+		b := *parentBaseline
+		src := config.BaselineSource{}
+		if parentBaseline.Source != nil {
+			src = *parentBaseline.Source
+		}
+		src.Path, src.URL = sel.BaseImage, ""
+		b.Source = &src
+		d.Baseline = &b
 	}
 	if len(sel.Packages) > 0 {
 		// Sorted rather than kept in click order, so the delta the Review pane

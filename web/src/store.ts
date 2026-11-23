@@ -147,6 +147,12 @@ interface AppState {
   selectCombination: (c: Combination) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
+  // An overlay template's base image (baseline.source.path), seeded from the
+  // resolved template like imageName and kept once the user edits it.
+  baseImage: string
+  baseImageEdited: boolean
+  setBaseImage: (value: string) => void
+  seedBaseImage: (value: string) => void
   // Default image name from the resolved template; ignored once the user edits.
   seedImageName: (value: string) => void
   // Disabling a repo also drops any packages added from it — a disabled repo's
@@ -211,6 +217,10 @@ export const useStore = create<AppState>((set) => ({
   setAdvancedMode: (mode) =>
     set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
+  baseImage: '',
+  baseImageEdited: false,
+  setBaseImage: (value) => set({ baseImage: value, baseImageEdited: true }),
+  seedBaseImage: (value) => set((state) => (state.baseImageEdited ? {} : { baseImage: value })),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
   setRepoEnabled: (repo, on) =>
@@ -344,6 +354,8 @@ function selectionChanged(state: AppState, selection: Selection): Partial<AppSta
   return {
     selection,
     imageNameEdited: false,
+    baseImage: '',
+    baseImageEdited: false,
     disk: null,
     diskEdited: false,
     diskSeed: null,
