@@ -41,6 +41,10 @@ func NormalizeDebArch(targetArch string) (string, error) {
 	}
 }
 
+// runtimeGOARCH is the host architecture; tests override it to exercise both
+// cross-architecture directions on any machine.
+var runtimeGOARCH = runtime.GOARCH
+
 func normalizeRuntimeArch(goArch string) (string, error) {
 	switch goArch {
 	case "amd64":
@@ -53,7 +57,7 @@ func normalizeRuntimeArch(goArch string) (string, error) {
 }
 
 func (debInstaller *DebInstaller) validateCrossArchDeps(targetArch string) error {
-	hostArch, err := normalizeRuntimeArch(runtime.GOARCH)
+	hostArch, err := normalizeRuntimeArch(runtimeGOARCH)
 	if err != nil {
 		return err
 	}
@@ -68,19 +72,21 @@ func (debInstaller *DebInstaller) validateCrossArchDeps(targetArch string) error
 		pkg  string   // apt package that provides it
 	}
 
-	qemuCmdByArch := map[string]string{
-		"arm64": "qemu-aarch64-static",
-		"amd64": "qemu-x86_64-static",
+	// qemu-user-static ships the *-static binaries; qemu-user-binfmt (Ubuntu
+	// 26.04+) ships the dynamic ones, so accept either.
+	qemuCmdsByArch := map[string][]string{
+		"arm64": {"qemu-aarch64-static", "qemu-aarch64"},
+		"amd64": {"qemu-x86_64-static", "qemu-x86_64"},
 	}
 
-	qemuCmd, ok := qemuCmdByArch[targetArch]
+	qemuCmds, ok := qemuCmdsByArch[targetArch]
 	if !ok {
 		return fmt.Errorf("unsupported target architecture for cross-architecture dependency validation: %s", targetArch)
 	}
 
 	deps := []crossArchDep{
 		{name: "arch-test", cmds: []string{"arch-test"}, pkg: "arch-test"},
-		{name: qemuCmd, cmds: []string{qemuCmd}, pkg: "qemu-user-static"},
+		{name: qemuCmds[0], cmds: qemuCmds, pkg: system.QemuUserPackage()},
 		{name: "binfmt-support", cmds: []string{"update-binfmts"}, pkg: "binfmt-support"},
 	}
 
