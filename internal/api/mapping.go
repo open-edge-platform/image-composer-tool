@@ -49,6 +49,9 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.ImageName != nil {
 		sel.ImageName = *r.ImageName
 	}
+	if r.TemplateYaml != nil {
+		sel.TemplateYAML = *r.TemplateYaml
+	}
 	if r.Packages != nil {
 		sel.Packages = *r.Packages
 	}
@@ -202,7 +205,7 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 func fromManifest(m *service.Manifest) httpapi.Manifest {
 	out := httpapi.Manifest{
 		Combinations: make([]httpapi.Combination, len(m.Combinations)),
-		Verticals:    fromOptions(m.Verticals),
+		Verticals:    fromVerticals(m.Verticals),
 		Skus:         fromOptions(m.SKUs),
 		Platforms:    fromOptions(m.Platforms),
 		Targets:      make([]httpapi.Target, len(m.Targets)),
@@ -399,6 +402,17 @@ func fromOptions(opts []service.Option) []httpapi.Option {
 	return out
 }
 
+func fromVerticals(vs []service.Vertical) []httpapi.Vertical {
+	out := make([]httpapi.Vertical, len(vs))
+	for i, v := range vs {
+		out[i] = httpapi.Vertical{Id: v.ID, DisplayName: v.DisplayName, SkuLabel: optStr(v.SKULabel)}
+		if v.PlatformFirst {
+			out[i].PlatformFirst = &v.PlatformFirst
+		}
+	}
+	return out
+}
+
 func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 	if s == nil {
 		return nil
@@ -466,6 +480,7 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		DeltaYaml: optStr(r.DeltaYAML),
 		BaseYaml:  optStr(r.BaseYAML),
 	}
+	out.TemplateYaml = optStr(r.TemplateYAML)
 	if len(r.BasePackages) > 0 {
 		basePackages := r.BasePackages
 		out.BasePackages = &basePackages

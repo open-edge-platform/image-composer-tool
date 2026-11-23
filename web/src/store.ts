@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Manifest, Combination } from './api/types'
+import type { Capabilities, Manifest, Combination } from './api/types'
 import type { DiskModel } from './lib/disk'
 
 // Selection state for the Basic tab.
@@ -99,8 +99,15 @@ export function confirmRepoRelease(
   )
 }
 
+// Advanced-tab mode. Customize builds the user's changes on top of the
+// selected template; Author edits a whole template. Author is offered only
+// when the server grants the authoring capability.
+export type AdvancedMode = 'customize' | 'author'
+
 interface AppState {
   manifest: Manifest | null
+  capabilities: Capabilities
+  advancedMode: AdvancedMode
   selection: Selection
   // Advanced-tab override for the image name. Kept out of `Selection` so it never
   // leaks into the compose request body; it seeds from the resolved template's
@@ -125,8 +132,19 @@ interface AppState {
   // defaults" has something to restore. Without it, resetting would blank the
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
+  // Template packages removed in Author mode, by name. Customize can't remove
+  // anything (its changes are layered on the template), so it ignores these.
+  removedPackages: string[]
+  setPackageRemoved: (name: string, removed: boolean) => void
+  clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
+  // Gaining the authoring capability starts in Author mode (the user can still
+  // switch); losing it drops back to Customize.
+  setCapabilities: (c: Capabilities) => void
+  setAdvancedMode: (mode: AdvancedMode) => void
   setField: (key: keyof Selection, value: string) => void
+  // Selects a whole combination at once, as opening a saved template does.
+  selectCombination: (c: Combination) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
   // Default image name from the resolved template; ignored once the user edits.
@@ -164,6 +182,8 @@ const emptySelection: Selection = {
 
 export const useStore = create<AppState>((set) => ({
   manifest: null,
+  capabilities: { authoring: false },
+  advancedMode: 'customize',
   selection: emptySelection,
   imageName: '',
   imageNameEdited: false,
@@ -172,7 +192,24 @@ export const useStore = create<AppState>((set) => ({
   disk: null,
   diskEdited: false,
   diskSeed: null,
+  removedPackages: [],
+  setPackageRemoved: (name, removed) =>
+    set((state) => ({
+      removedPackages: removed
+        ? [...new Set([...state.removedPackages, name])]
+        : state.removedPackages.filter((n) => n !== name),
+      // A removed package has no version of its own any more.
+      addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
+    })),
+  clearRemovedPackages: () => set({ removedPackages: [] }),
   setManifest: (m) => set({ manifest: m }),
+  setCapabilities: (c) =>
+    set((state) => ({
+      capabilities: c,
+      advancedMode: !c.authoring ? 'customize' : state.capabilities.authoring ? state.advancedMode : 'author',
+    })),
+  setAdvancedMode: (mode) =>
+    set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
@@ -256,28 +293,10 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       const selection = { ...state.selection, [key]: value }
       // Reset downstream fields when an upstream one changes, so the cascade
-      // never leaves an invalid combination selected.
-      // Cascade order: vertical → sku → platform → os → kernel → imageType.
-      if (key === 'vertical') {
-        selection.sku = ''
-        selection.platform = ''
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'sku') {
-        selection.platform = ''
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'platform') {
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'os') {
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'kernel') {
-        selection.imageType = ''
+      // never leaves an invalid combination selected. See cascadeOrder.
+      const order = cascadeOrder(state.manifest, selection.vertical)
+      for (const field of order.slice(order.indexOf(key) + 1)) {
+        selection[field] = ''
       }
       // Auto-fill each downstream dimension with its first available option, so
       // selecting a vertical immediately populates a valid default combination
@@ -285,36 +304,54 @@ export const useStore = create<AppState>((set) => ({
       if (state.manifest) {
         autoFillCascade(state.manifest, selection)
       }
-      // Any selection change resolves to a (possibly) different template, so let
-      // the image name re-track the new default until edited again.
-      //
-      // Enabled repos and added packages are dropped only when the target OS
-      // actually changes, because repo ids (and the packages resolved from
-      // them) are scoped to a target — keeping them would leave an ubuntu24
-      // repo/package enabled under a Debian target. Unlike imageName, which
-      // re-seeds itself from the next compose response, there is no server-side
-      // default to fall back to, so empty is the only sane value. Comparing the
-      // post-cascade os (autoFillCascade above may refill it with the same
-      // value) means a SKU or platform tweak within one OS keeps the user's
-      // toggles.
-      //
-      // The disk layout is dropped on *any* selection change, unlike repos and
-      // packages: it is not a user pick scoped to a target, it is a copy of the
-      // matched template's own partition table, and a SKU or platform tweak can
-      // resolve to a different template. It is cleared outright rather than just
-      // unflagged, because leaving the previous template's partitions on screen
-      // until the next compose lands would show a layout that no longer applies.
-      const osChanged = selection.os !== state.selection.os
-      return {
-        selection,
-        imageNameEdited: false,
-        disk: null,
-        diskEdited: false,
-        diskSeed: null,
-        ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
-      }
+      return selectionChanged(state, selection)
     }),
+  selectCombination: (c) =>
+    set((state) =>
+      selectionChanged(state, {
+        vertical: c.vertical,
+        sku: c.sku ?? '',
+        platform: c.platform,
+        os: c.os,
+        kernel: c.kernel ?? '',
+        imageType: c.imageType,
+      }),
+    ),
 }))
+
+// selectionChanged is the state after the selection becomes `selection`.
+function selectionChanged(state: AppState, selection: Selection): Partial<AppState> {
+  // Any selection change resolves to a (possibly) different template, so let
+  // the image name re-track the new default until edited again.
+  //
+  // Enabled repos and added packages are dropped only when the target OS
+  // actually changes, because repo ids (and the packages resolved from
+  // them) are scoped to a target — keeping them would leave an ubuntu24
+  // repo/package enabled under a Debian target. Unlike imageName, which
+  // re-seeds itself from the next compose response, there is no server-side
+  // default to fall back to, so empty is the only sane value. Comparing the
+  // post-cascade os (setField's autoFillCascade may refill it with the same
+  // value) means a SKU or platform tweak within one OS keeps the user's
+  // toggles.
+  //
+  // The disk layout is dropped on *any* selection change, unlike repos and
+  // packages: it is not a user pick scoped to a target, it is a copy of the
+  // matched template's own partition table, and a SKU or platform tweak can
+  // resolve to a different template. It is cleared outright rather than just
+  // unflagged, because leaving the previous template's partitions on screen
+  // until the next compose lands would show a layout that no longer applies.
+  const osChanged = selection.os !== state.selection.os
+  return {
+    selection,
+    imageNameEdited: false,
+    disk: null,
+    diskEdited: false,
+    diskSeed: null,
+    // Removals name the previous template's packages.
+    removedPackages: [],
+    ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
+  }
+}
 
 // releaseIfOrphaned drops `changed`'s previous repo from enabledRepos when
 // nothing in `remaining` still references it. `changed` is the entry as it
@@ -339,7 +376,7 @@ function releaseIfOrphaned(
 // first option available for the current upstream choices. Walks the cascade in
 // order so each step sees the defaults picked by the previous one.
 function autoFillCascade(manifest: Manifest, selection: Selection): void {
-  const order: (keyof Selection)[] = ['sku', 'platform', 'os', 'kernel', 'imageType']
+  const order = cascadeOrder(manifest, selection.vertical).slice(1)
   const optsKey: Record<string, keyof ReturnType<typeof cascadingOptions>> = {
     sku: 'skus',
     platform: 'platforms',
@@ -367,6 +404,23 @@ function autoFillCascade(manifest: Manifest, selection: Selection): void {
 // for a value the manifest does not list — an old build's retired SKU, say.
 export function labelFor(options: { id: string; displayName: string }[], id: string): string {
   return options.find((o) => o.id === id)?.displayName ?? id
+}
+
+// cascadeOrder is the order the selection dropdowns cascade in: vertical → sku →
+// platform → os → kernel → imageType, or with platform before sku for a use
+// case that sets platformFirst. Each field's options depend on the ones before
+// it, and changing a field clears the ones after it.
+export function cascadeOrder(manifest: Manifest | null, vertical: string): (keyof Selection)[] {
+  const platformFirst = manifest?.verticals.find((v) => v.id === vertical)?.platformFirst
+  return platformFirst
+    ? ['vertical', 'platform', 'sku', 'os', 'kernel', 'imageType']
+    : ['vertical', 'sku', 'platform', 'os', 'kernel', 'imageType']
+}
+
+// The label of the SKU dropdown under a use case: the use case's own skuLabel
+// (e.g. "Mainline Kernel Version"), or "SKU".
+export function skuLabelFor(manifest: Manifest | null, vertical: string): string {
+  return manifest?.verticals.find((v) => v.id === vertical)?.skuLabel || 'SKU'
 }
 
 // Distinct ids present in combinations, optionally filtered by prior selections.
@@ -425,12 +479,19 @@ export function cascadingOptions(
     }))
 
   const verticals = map(distinct(c, 'vertical', {}), manifest.verticals)
+  const platformFirst = cascadeOrder(manifest, selection.vertical)[1] === 'platform'
   const skus = map(
-    distinct(c, 'sku', { vertical: selection.vertical }),
+    distinct(c, 'sku', {
+      vertical: selection.vertical,
+      ...(platformFirst ? { platform: selection.platform } : {}),
+    }),
     manifest.skus,
   )
   const platforms = map(
-    distinct(c, 'platform', { vertical: selection.vertical, sku: selection.sku }),
+    distinct(c, 'platform', {
+      vertical: selection.vertical,
+      ...(platformFirst ? {} : { sku: selection.sku }),
+    }),
     manifest.platforms,
   )
   const oses = map(

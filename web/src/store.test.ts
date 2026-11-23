@@ -264,3 +264,26 @@ describe('confirmRepoRelease', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('removed template packages', () => {
+  beforeEach(() => {
+    useStore.setState({ removedPackages: [], addedPackages: [] })
+  })
+
+  it('records a removal, drops any version change, and puts the package back', () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '2', repo: 'base' }] })
+    useStore.getState().setPackageRemoved('vim', true)
+    useStore.getState().setPackageRemoved('vim', true)
+    expect(useStore.getState().removedPackages).toEqual(['vim'])
+    expect(useStore.getState().addedPackages).toEqual([])
+
+    useStore.getState().setPackageRemoved('vim', false)
+    expect(useStore.getState().removedPackages).toEqual([])
+  })
+
+  it('forgets removals when the selection changes', () => {
+    useStore.getState().setPackageRemoved('vim', true)
+    useStore.getState().setField('platform', 'ptl')
+    expect(useStore.getState().removedPackages).toEqual([])
+  })
+})

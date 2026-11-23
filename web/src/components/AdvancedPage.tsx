@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage } from '../store'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useStore, cascadeOrder, cascadingOptions, encodePackage, skuLabelFor } from '../store'
+import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -13,6 +14,7 @@ import type {
   PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
@@ -21,6 +23,10 @@ import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { applyAuthorEdits, authoringProblem, basedOnOf } from '../lib/authorTemplate'
+import { openFile, type SavedFile } from '../lib/saveFile'
+import { AuthorReview } from './AuthorReview'
+import { parse as parseYaml } from 'yaml'
 import { useBaseLock } from '../lib/baseLock'
 import { overlayIncompatiblePackages, strandedPackages } from '../lib/edgepack'
 
@@ -72,6 +78,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const seedDisk = useStore((s) => s.seedDisk)
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
+  const advancedMode = useStore((s) => s.advancedMode)
+  const removedPackages = useStore((s) => s.removedPackages)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -127,6 +135,21 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   const complete = !!opts?.matched
 
+  // A template the user opened from their machine in Author mode, used in
+  // place of the use case's own template. It stays in use only while the
+  // selection still resolves to the template it was opened against.
+  const selectCombination = useStore((s) => s.selectCombination)
+  const [opened, setOpened] = useState<{ template: string; text: string; name: string } | null>(null)
+  const [openMessage, setOpenMessage] = useState<{ error: boolean; text: string } | null>(null)
+  const matchedTemplate = opts?.matched?.template
+  const openedActive = advancedMode === 'author' && !!opened && opened.template === matchedTemplate
+  useEffect(() => {
+    if (opened && matchedTemplate && opened.template !== matchedTemplate) {
+      setOpened(null)
+      setOpenMessage(null)
+    }
+  }, [opened, matchedTemplate])
+
   // Every field the Target step requires, by label, that is still empty. SKU and
   // Kernel only count when the cascade offers them — the selectors are hidden
   // (or skippable) otherwise. The wizard does not move past Target, and Target
@@ -135,7 +158,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const missingTarget = opts
     ? ([
         ['Use Case', !selection.vertical],
-        ['SKU', opts.skus.length > 0 && !selection.sku],
+        [skuLabelFor(manifest, selection.vertical), opts.skus.length > 0 && !selection.sku],
         ['Platform', !selection.platform],
         ['Operating System', !selection.os],
         ['Kernel', opts.kernels.length > 0 && !selection.kernel],
@@ -250,6 +273,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     () => ({
       ...selection,
       imageName: imageNameEdited ? debouncedImageName : undefined,
+      templateYaml: openedActive ? opened?.text : undefined,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
@@ -259,7 +283,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
     }),
     [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
-      debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
+      debouncedDiskKey, debouncedCredentials, debouncedNewUsers, openedActive, opened?.text],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -397,13 +421,25 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // The two debounced fields are then re-read live: a discrete action
       // shouldn't wait on a typing pause, so the build gets whatever is
       // currently on screen rather than the value the Review preview settled on.
-      const buildReq: ComposeRequest = {
-        ...composeReq,
-        imageName: imageNameEdited ? imageName : undefined,
-        disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
-        credentials: credentials.length > 0 ? credentials : undefined,
-        users: newUsers.length > 0 ? newUsers : undefined,
-      }
+      //
+      // In Author mode the edited template is what gets built: every change is
+      // already in its text, so only the logins from the dialog ride along.
+      const authored = authoring && authorEdit && 'text' in authorEdit ? authorEdit.text : undefined
+      const buildReq: ComposeRequest =
+        authored !== undefined
+          ? {
+              ...selection,
+              templateYaml: authored,
+              credentials: credentials.length > 0 ? credentials : undefined,
+              users: newUsers.length > 0 ? newUsers : undefined,
+            }
+          : {
+              ...composeReq,
+              imageName: imageNameEdited ? imageName : undefined,
+              disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
+              credentials: credentials.length > 0 ? credentials : undefined,
+              users: newUsers.length > 0 ? newUsers : undefined,
+            }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
       // build actually runs rather than the debounced preview.
@@ -455,6 +491,123 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // generated, and the build runs the curated template unchanged.
   const deltaYaml = composed?.deltaYaml ?? ''
 
+  // Author mode edits the template file itself. It needs the file's own text,
+  // which the server sends only when authoring is allowed, and works only on a
+  // template that doesn't extend another.
+  const author = advancedMode === 'author'
+  const authorProblem = author && composed ? authoringProblem(composed.templateYaml) : null
+  const authoring = author && !!composed?.templateYaml && !authorProblem
+  // The file saved last, kept while the same template stays selected.
+  const [authorSaved, setAuthorSaved] = useState<{ template: string; file: SavedFile; text: string } | null>(null)
+  const authorEdit = useMemo((): { text: string; baseline: string } | { error: string } | null => {
+    if (!authoring || !composed?.templateYaml) return null
+    try {
+      // The repositories new packages need come from the generated delta,
+      // which already maps the enabled repos to packageRepositories entries.
+      const delta = deltaYaml ? (parseYaml(deltaYaml) as { packageRepositories?: Record<string, unknown>[] }) : null
+      const text = applyAuthorEdits(composed.templateYaml, {
+        packages: addedPackages,
+        removed: removedPackages,
+        imageName: imageNameEdited ? imageName : undefined,
+        disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
+        repos: delta?.packageRepositories,
+        basedOn: composed.template,
+      })
+      // The template as it would save with no changes, recording basedOn, so
+      // that alone doesn't count as a change.
+      const baseline = applyAuthorEdits(composed.templateYaml, { packages: [], removed: [], basedOn: composed.template })
+      return { text, baseline }
+    } catch (e) {
+      return { error: (e as Error).message }
+    }
+  }, [authoring, composed?.templateYaml, deltaYaml, addedPackages, removedPackages, imageNameEdited, imageName, diskEdited, disk, overlay])
+
+  // Opens a template from the user's machine. Its metadata.basedOn names the
+  // template it was authored from, which selects the matching use case; a
+  // template without one is opened against the current selection.
+  const onOpenTemplate = async () => {
+    setOpenMessage(null)
+    let result
+    try {
+      result = await openFile()
+    } catch (e) {
+      setOpenMessage({ error: true, text: `Could not open the file: ${(e as Error).message}` })
+      return
+    }
+    if (!result || !manifest) return
+    const problem = authoringProblem(result.text)
+    if (problem) {
+      setOpenMessage({ error: true, text: problem })
+      return
+    }
+    const based = basedOnOf(result.text)
+    const combos = manifest.combinations.filter((c) => c.template.trim() !== '' && c.template === based)
+    // Several combinations can share one template (one per platform, say):
+    // keep the current one if it is among them.
+    const current = opts?.matched
+    const combo = combos.find((c) => c === current) ?? combos[0] ?? current
+    if (!combo) {
+      setOpenMessage({
+        error: true,
+        text: "This template doesn't record which use case it belongs to. Choose the use case first, then open it again.",
+      })
+      return
+    }
+    if (combos.length === 0) {
+      setOpenMessage({
+        error: false,
+        text: based
+          ? `It is based on ${based}, which no use case here offers, so it was opened for the current selection.`
+          : "It doesn't record which use case it belongs to, so it was opened for the current selection. Saving records it.",
+      })
+    }
+    // A fresh start from the opened file: no changes carried over.
+    selectCombination(combo)
+    useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [] })
+    setOpened({ template: combo.template, text: result.text, name: result.file.name })
+    setAuthorSaved({ template: combo.template, file: result.file, text: result.text })
+    setStep(0)
+  }
+
+  const openTemplateBar: ReactNode =
+    advancedMode === 'author' ? (
+      <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void onOpenTemplate()}
+            className="rounded-md border border-slate-300 bg-white px-4 py-1.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+          >
+            Open Template…
+          </button>
+          {openedActive && opened ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white py-0.5 pl-3 pr-1 text-slate-700">
+              Editing <span className="font-semibold">{opened.name}</span>
+              {/* Closing goes back to the use case's own template. */}
+              <button
+                type="button"
+                aria-label={`Close ${opened.name}`}
+                title="Close this template and start from the use case's template"
+                onClick={() => {
+                  setOpened(null)
+                  setOpenMessage(null)
+                  if (opts?.matched) selectCombination(opts.matched)
+                }}
+                className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-red-600"
+              >
+                ×
+              </button>
+            </span>
+          ) : (
+            <span className="text-slate-500">Open a template you saved, or start from a use case below.</span>
+          )}
+        </div>
+        {openMessage && (
+          <p className={'mt-2 text-xs ' + (openMessage.error ? 'text-red-700' : 'text-amber-700')}>{openMessage.text}</p>
+        )}
+      </div>
+    ) : null
+
   const exportYaml = () => {
     if (!composed || !deltaYaml) return
     const blob = new Blob([deltaYaml], { type: 'text/yaml' })
@@ -471,6 +624,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
+      <AdvancedModeSwitch />
+      {authorProblem && (
+        <p className="mx-auto mb-4 max-w-3xl rounded bg-amber-50 p-3 text-sm text-amber-800">{authorProblem}</p>
+      )}
+
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
         {STEPS.map((label, i) => (
@@ -524,6 +682,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         {step === 0 && (
           <TargetStep
             opts={opts}
+            header={openTemplateBar}
+            skuLabel={skuLabelFor(manifest, selection.vertical)}
+            platformFirst={cascadeOrder(manifest, selection.vertical)[1] === 'platform'}
             selection={selection}
             setSel={setSel}
             imageName={imageName}
@@ -539,6 +700,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             templateRepos={lastTemplateRepos}
             templateOnlyRepos={lastTemplateOnlyRepos}
             overlay={overlay}
+            authoring={authoring}
           />
         )}
 
@@ -546,16 +708,49 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
         {step === 3 && (
           <div>
-            <h2 className="mb-1 text-lg font-bold text-[#00285a]">Review Image Configuration</h2>
+            <h2 className="mb-1 text-lg font-bold text-[#00285a]">
+              {authoring ? 'Review Template' : 'Review Image Configuration'}
+            </h2>
             <p className="mb-5 text-sm text-slate-500">
-              Review what this combination will compose. The template below is
-              only what you changed, as a delta extending the pre-authored
-              template it is based on.
+              {authoring
+                ? 'This is the whole template with your changes. Save it to your machine, or Save As a new file.'
+                : 'Review what this combination will compose. The template below is only what you changed, as a delta extending the pre-authored template it is based on.'}
             </p>
             {error && (
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
             )}
-            {complete && composed ? (
+            {authoring && complete && composed && authorEdit ? (
+              'error' in authorEdit ? (
+                <div className="rounded bg-red-50 p-3 text-sm text-red-700">
+                  Could not apply your changes to the template: {authorEdit.error}
+                </div>
+              ) : (
+                <>
+                  <AuthorReview
+                    templateName={composed.template}
+                    text={authorEdit.text}
+                    original={authorEdit.baseline}
+                    removed={removedPackages}
+                    saved={authorSaved?.template === composed.template ? authorSaved : null}
+                    onSaved={(s) => setAuthorSaved({ template: composed.template, ...s })}
+                  />
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={onComposeClick}
+                      disabled={busy || buildInProgress}
+                      title="Build an image from the template above"
+                      className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+                    </button>
+                    {buildInProgress && (
+                      <span className="text-sm text-amber-600">additional concurrent builds are currently restricted</span>
+                    )}
+                  </div>
+                </>
+              )
+            ) : complete && composed ? (
               <>
                 {/* Section 1: Review Image Configuration — the same summary shape
                     the Basic tab shows, so both panes agree on what will compose. */}
@@ -697,12 +892,19 @@ const REQUIRED = <span className="text-red-600"> *</span>
 // Basic tab), plus the editable Image Name override.
 function TargetStep({
   opts,
+  header,
+  skuLabel,
+  platformFirst,
   selection,
   setSel,
   imageName,
   setImageName,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
+  // Shown above the selection, such as Author mode's Open Template.
+  header?: ReactNode
+  skuLabel: string
+  platformFirst: boolean
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
@@ -712,10 +914,12 @@ function TargetStep({
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed. Fields marked{' '}
+        Select a Use Case to load the default configuration. The remaining
+        selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
+
+      {header}
 
       <Select
         label="Use Case"
@@ -725,24 +929,14 @@ function TargetStep({
         options={opts.verticals}
         onChange={(v) => setSel('vertical', v)}
       />
-      <Select
-        label="SKU"
-        // SKU is optional where the manifest offers none for this use case.
-        labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-        placeholder="-- Select SKU --"
-        value={selection.sku}
-        options={opts.skus}
-        disabled={!selection.vertical}
-        onChange={(v) => setSel('sku', v)}
-      />
-      <Select
-        label="Platform"
-        labelSuffix={REQUIRED}
-        placeholder="-- Select Platform --"
-        value={selection.platform}
-        options={opts.platforms}
-        disabled={!selection.sku && opts.skus.length > 0}
-        onChange={(v) => setSel('platform', v)}
+      <SkuPlatformSelects
+        skus={opts.skus}
+        platforms={opts.platforms}
+        selection={selection}
+        setSel={setSel}
+        skuLabel={skuLabel}
+        platformFirst={platformFirst}
+        required={REQUIRED}
       />
       <Select
         label="Operating System"

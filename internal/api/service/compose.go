@@ -26,6 +26,12 @@ type Selection struct {
 	OS        string
 	ImageType string
 
+	// TemplateYAML is a template the user opened in Author mode, used in place
+	// of the matched template's own file. Empty means use the matched file.
+	// Lookup-neutral: the selection still picks the curated template, which
+	// the opened one is written beside so its relative paths resolve alike.
+	TemplateYAML string
+
 	// ImageName overrides the matched template's image.name. Empty means
 	// "not overridden".
 	ImageName string
@@ -450,6 +456,10 @@ type ComposeResult struct {
 	// OEPInstaller says whether the resolved template downloads OEP Installer
 	// files, so a caller can ask for a GitHub token for the build.
 	OEPInstaller OEPInstallerInfo
+	// TemplateYAML is the matched template file exactly as written, comments
+	// included, for Author mode to edit. Set only when the authoring
+	// capability is granted.
+	TemplateYAML string
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -527,10 +537,22 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		sel.NewUsers = created
 	}
 
+	// parentTmpl is what a generated delta extends: the matched template, or
+	// the template the user opened, written beside it.
+	parentTmpl := tmpl
+	if sel.TemplateYAML != "" {
+		opened, openedTmpl, cleanup, oerr := s.openTemplate(tmpl, path, sel.TemplateYAML)
+		if oerr != nil {
+			return nil, oerr
+		}
+		defer cleanup()
+		path, parentTmpl = opened, openedTmpl
+	}
+
 	resolvePath := path
 	var deltaYAML string
 	if sel.hasOverrides() {
-		deltaPath, data, cleanup, derr := s.deltaForOverride(tmpl, path, sel)
+		deltaPath, data, cleanup, derr := s.deltaForOverride(parentTmpl, path, sel)
 		if derr != nil {
 			return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID", derr.Error())
 		}
@@ -573,6 +595,14 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		OEPInstaller: s.oepInstallerInfo(merged),
 	}
 	s.setTemplateRepos(res, sel.OS, merged.PackageRepositories)
+	if s.cfg.Authoring {
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil, newError(http.StatusInternalServerError, "TEMPLATE_STAT_FAILED",
+				fmt.Sprintf("reading matched template file: %v", rerr))
+		}
+		res.TemplateYAML = string(raw)
+	}
 
 	// With overrides in play, resolve the curated parent a second time so the
 	// caller can show the baseline beside the delta and attribute the difference

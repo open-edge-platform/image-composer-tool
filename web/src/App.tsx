@@ -23,6 +23,7 @@ const tabOfEntry = (state: unknown): Tab => {
 
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
+  const setCapabilities = useStore((s) => s.setCapabilities)
   const [state, setState] = useState<LoadState>('loading')
   const [error, setError] = useState<string | null>(null)
 
@@ -51,6 +52,15 @@ export default function App() {
   }, [setManifest])
 
   useEffect(load, [load])
+
+  // Capabilities only add features, so a failed fetch (an older server, say)
+  // leaves them all off rather than blocking the app.
+  useEffect(() => {
+    api
+      .getSession()
+      .then((s) => setCapabilities(s.capabilities))
+      .catch(() => {})
+  }, [setCapabilities])
 
   // The address alone opens the guide: every way in is a #guide/ link. Each
   // history entry outside the guide records the tab it shows, so Back always

@@ -64,7 +64,8 @@ func newTestServer(t *testing.T) (*Server, string) {
 }
 
 // newTestServerWithICT is newTestServer with a caller-supplied fake ICT script.
-func newTestServerWithICT(t *testing.T, ictScript string) (*Server, string) {
+// Each option adjusts the server Config before the server is built.
+func newTestServerWithICT(t *testing.T, ictScript string, opts ...func(*Config)) (*Server, string) {
 	t.Helper()
 	tdir := t.TempDir()
 	for _, name := range []string{"robotics.yml", "retail.yml"} {
@@ -76,7 +77,8 @@ func newTestServerWithICT(t *testing.T, ictScript string) (*Server, string) {
   - {vertical: robotics, sku: amr, platform: wcl, os: ubuntu24, imageType: iso, template: robotics.yml}
   - {vertical: retail, sku: dv, platform: arl, os: debian13, imageType: iso, template: retail.yml}
 verticals:
-  - {id: robotics, displayName: Robotics}
+  - {id: robotics, displayName: Robotics, skuLabel: Robot Kit}
+  - {id: retail, displayName: Retail}
 platforms:
   - {id: wcl, displayName: WCL}
 targets:
@@ -90,12 +92,16 @@ targets:
 	if err := os.WriteFile(ictBin, []byte(ictScript), 0o755); err != nil {
 		t.Fatalf("write fake ICT: %v", err)
 	}
-	srv, err := New(Config{
+	cfg := Config{
 		TemplatesDir: tdir,
 		ICTBinary:    ictBin,
 		WorkDir:      t.TempDir(),
 		ManifestPath: mpath,
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -147,6 +153,30 @@ func TestHandleGetManifest(t *testing.T) {
 	// Wire-format check: optional sku present, required camelCase fields.
 	if m.Combinations[0].Sku == nil || *m.Combinations[0].Sku != "amr" {
 		t.Errorf("combination sku not serialized: %+v", m.Combinations[0])
+	}
+	// skuLabel is carried when a use case sets it and omitted when it doesn't,
+	// so the UI falls back to "SKU".
+	if l := m.Verticals[0].SkuLabel; l == nil || *l != "Robot Kit" {
+		t.Errorf("vertical skuLabel = %v, want Robot Kit", l)
+	}
+	if strings.Contains(rr.Body.String(), `"skuLabel":""`) || m.Verticals[1].SkuLabel != nil {
+		t.Errorf("unset skuLabel should be omitted: %s", rr.Body)
+	}
+}
+
+// --- session ---
+
+func TestHandleGetSession(t *testing.T) {
+	for _, authoring := range []bool{false, true} {
+		s, _ := newTestServerWithICT(t, fakeICT, func(c *Config) { c.Authoring = authoring })
+		rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/session", nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rr.Code)
+		}
+		want := fmt.Sprintf(`{"capabilities":{"authoring":%t}}`, authoring)
+		if got := strings.TrimSpace(rr.Body.String()); got != want {
+			t.Errorf("authoring=%t: body = %s, want %s", authoring, got, want)
+		}
 	}
 }
 

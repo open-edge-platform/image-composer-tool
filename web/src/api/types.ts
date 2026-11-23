@@ -12,6 +12,26 @@ export interface Option {
   displayName: string
 }
 
+// What the current user may do. The UI shows a feature only when its
+// capability is true.
+export interface Capabilities {
+  // The Advanced tab may offer Author mode, which edits a whole template.
+  authoring: boolean
+}
+
+export interface Session {
+  capabilities: Capabilities
+}
+
+// A use case. skuLabel renames the SKU dropdown for a use case whose second
+// choice is something else, such as a kernel version.
+export interface Vertical extends Option {
+  skuLabel?: string
+  // Ask for the platform before the SKU, for a use case whose SKU choices
+  // depend on the platform (such as kernel versions).
+  platformFirst?: boolean
+}
+
 export interface Target {
   id: string
   displayName: string
@@ -34,7 +54,7 @@ export interface Combination {
 
 export interface Manifest {
   combinations: Combination[]
-  verticals: Option[]
+  verticals: Vertical[]
   skus: Option[]
   platforms: Option[]
   targets: Target[]
@@ -47,6 +67,9 @@ export interface ComposeRequest {
   os: string
   kernel?: string
   imageType: string
+  // A template opened in Author mode, used in place of the matched template's
+  // own file. Omitted means use the matched file.
+  templateYaml?: string
   // Advanced-mode override for the matched template's image.name. Omitted (not
   // just empty) means "not overridden" — the backend resolves the curated
   // template directly rather than generating an override delta for it.
@@ -179,6 +202,9 @@ export interface ComposeResponse {
   // baseline can be shown beside the delta that modifies it. Absent when there
   // are no overrides, because `yaml` already is the base.
   baseYaml?: string
+  // The matched template file exactly as written, comments included, for
+  // Author mode to edit. Sent only when the session grants authoring.
+  templateYaml?: string
   // The matched template's own package list, before this request's overrides
   // are applied. Present even when the request carries no overrides, so the
   // Packages step can show "already included" packages alongside whatever

@@ -202,9 +202,10 @@ const advanced: GuideTopic = {
           </li>
           <li>Tick a package, or pick a version, to add it.</li>
           <li>
-            Everything you added or changed shows in the <Ui>Selected</Ui> panel on the right, under{' '}
-            <Ui>You are adding</Ui>. Packages the image already has show ticked in the{' '}
-            <Ui>Repositories</Ui> tab.
+            Everything you changed shows in the <Ui>Changes</Ui> panel on the right, under{' '}
+            <Ui>Added</Ui>, <Ui>Modified</Ui> (a template package given another version) and, in Author
+            mode, <Ui>Removed</Ui>. <Ui>Reset to template defaults</Ui> undoes them all. Packages the image
+            already has show ticked in the <Ui>Repositories</Ui> tab.
           </li>
         </Steps>
         <Tip>

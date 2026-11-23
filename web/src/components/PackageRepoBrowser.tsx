@@ -4,7 +4,7 @@ import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 import { ensureBaseVersions, type BaseLock } from '../lib/baseLock'
-import type { VersionResolver } from '../lib/useVersionResolver'
+import { buildResolution, type VersionResolver } from '../lib/useVersionResolver'
 import {
   MAX_SELECTED_PACKAGES,
   pinSources,
@@ -18,6 +18,17 @@ import {
 const PAGE_SIZE = 100
 
 // Names the template pins that "Update to latest version" left alone, and why.
+// resolvesElsewhereNotice says which unpinned template packages "Update to
+// latest version" left alone because a build takes them from another
+// repository: pinning them to the browsed repo's version would change that.
+function resolvesElsewhereNotice(names: string[], repoLabelFor: (id: string) => string, from: Map<string, string>): string | null {
+  if (names.length === 0) return null
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : ''
+  const repos = [...new Set(names.map((n) => from.get(n) ?? ''))].filter(Boolean).map(repoLabelFor)
+  const where = repos.length === 1 ? repos[0] : 'other repositories'
+  return `Kept ${names.slice(0, 5).join(', ')}${more} unpinned: a build installs ${names.length === 1 ? 'it' : 'them'} from ${where}, not this repository.`
+}
+
 function unverifiableNotice(names: string[], repoLabel: string): string | null {
   if (names.length === 0) return null
   const more = names.length > 5 ? ` and ${names.length - 5} more` : ''
@@ -36,7 +47,7 @@ interface PackageRepoBrowserProps {
   repos: PackageRepo[]
   os: string
   baseLock: BaseLock
-  // Shared with the Selected rail and the search dropdown (lifted in
+  // Shared with the Changes rail and the search dropdown (lifted in
   // PackagesStep.tsx) so a floating pick resolves to the same version/repo
   // no matter which surface shows it.
   resolver: VersionResolver
@@ -44,6 +55,9 @@ interface PackageRepoBrowserProps {
   // Edge Pack's — see templateLockedRepos in lib/edgepack.ts). Treated the
   // same as a base repo: checked and unable to be unchecked.
   lockedRepoIds?: Set<string>
+  // Author mode: the template is edited directly, so its own packages can be
+  // removed (see PackageRow's removable).
+  authoring?: boolean
 }
 
 const noLockedRepos = new Set<string>()
@@ -61,6 +75,7 @@ export function PackageRepoBrowser({
   baseLock,
   resolver,
   lockedRepoIds = noLockedRepos,
+  authoring = false,
 }: PackageRepoBrowserProps) {
   const enabledRepos = useStore((s) => s.enabledRepos)
 
@@ -129,6 +144,7 @@ export function PackageRepoBrowser({
           lockedRepoIds={lockedRepoIds}
           frequentOnly={frequentOnly}
           onBrowseRepo={setSelectedRepoId}
+          authoring={authoring}
         />
       </div>
     </div>
@@ -222,6 +238,7 @@ function MergedPane({
   lockedRepoIds,
   frequentOnly,
   onBrowseRepo,
+  authoring,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
@@ -233,6 +250,7 @@ function MergedPane({
   frequentOnly: boolean
   // Switches the Repository dropdown, to go and browse another repository.
   onBrowseRepo: (repoId: string) => void
+  authoring: boolean
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -278,7 +296,7 @@ function MergedPane({
   const [templateLookupFailed, setTemplateLookupFailed] = useState<string | null>(null)
   const templateNamesKey = baseLock.concreteNames.join(',')
   const addedPackages = useStore((s) => s.addedPackages)
-  // Packages under "You are adding" picked from the browsed repo. Looked up
+  // Packages under "Added" or "Modified" picked from the browsed repo. Looked up
   // with the template's names, so "Show only selected" can offer every
   // version the repo has for them too, not just the one picked.
   const browsedAddedNames = addedPackages.filter((p) => p.repo === selectedRepo?.id).map((p) => p.name)
@@ -327,11 +345,16 @@ function MergedPane({
 
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
+  const removedPackages = useStore((s) => s.removedPackages)
+  const setPackageRemoved = useStore((s) => s.setPackageRemoved)
   const setPackages = useStore((s) => s.setPackages)
   const removePackages = useStore((s) => s.removePackages)
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   const enabledRepoIds = repos.filter(isEnabled).map((r) => r.id)
+  // Each repo's priority, for working out where a package resolves (see
+  // buildResolution).
+  const priorities = Object.fromEntries(repos.filter((r) => r.priority != null).map((r) => [r.id, r.priority!]))
   const {
     liveResolved,
     resolvingNames,
@@ -363,7 +386,7 @@ function MergedPane({
   // YAML records it. The repo a package was picked from stays enabled even if
   // the newest version lives elsewhere: releasing it would change the repo
   // scope the versions were just looked up in. The matched template's own
-  // packages are pinned too, as overrides added under "You are adding" (see
+  // packages are pinned too, as overrides added under "Added" or "Modified" (see
   // planTemplateUpdates for which ones).
   //
   // Nothing changes unless the answer is complete: with a repo unreadable,
@@ -380,14 +403,36 @@ function MergedPane({
     const repoId = selectedRepo?.id
     if (!repoId) return
     const dispatched = addedPackages.filter((p) => p.repo === repoId)
-    const dispatchedTemplate = lockedRows.map((r) => r.name).filter((name) => !elsewhere.includes(name))
+    // A template package removed in Author mode stays removed.
+    const candidates = lockedRows
+      .map((r) => r.name)
+      .filter((name) => !elsewhere.includes(name) && !resolvesElsewhere.includes(name) && !removedHere.includes(name))
+    const floating = candidates.filter((name) => baseLock.info(name).currentIsFloating)
     const templateKey = templateNamesKey
     setPinning(true)
     setPinNotice(null)
     // The newest version in the browsed repo, so every pin this sets is one
-    // of the chips on screen.
-    lookupNewest([...dispatched.map((p) => p.name), ...dispatchedTemplate], [repoId])
-      .then(({ found, complete, unavailableRepos, stale }) => {
+    // of the chips on screen. Alongside, where each unpinned template package
+    // resolves across every repo in use: one a build takes from another repo
+    // is left unpinned, since pinning it here would change where it comes from.
+    Promise.all([
+      lookupNewest([...dispatched.map((p) => p.name), ...candidates], [repoId]),
+      floating.length > 0 ? lookupNewest(floating) : null,
+    ])
+      .then(([{ found, complete, unavailableRepos, stale }, across]) => {
+        const resolvedFrom = new Map<string, string>()
+        if (across) {
+          if (!across.complete || across.stale) {
+            setPinNotice("Couldn't tell where the template's unpinned packages come from, so nothing was updated. Try again.")
+            return
+          }
+          for (const name of floating) {
+            const hit = across.found[name]
+            if (hit) resolvedFrom.set(name, buildResolution(hit, priorities).repository)
+          }
+        }
+        const keptUnpinned = floating.filter((name) => (resolvedFrom.get(name) ?? repoId) !== repoId)
+        const dispatchedTemplate = candidates.filter((name) => !keptUnpinned.includes(name))
         if (stale || latestBrowsedRepo.current !== repoId) {
           setPinNotice(
             'The target, checked repositories or browsed repository changed while checking, so nothing was updated. Try again.',
@@ -406,7 +451,7 @@ function MergedPane({
         const pins = current
           .filter((p) => dispatched.includes(p) && found[p.name])
           .map((p) => ({ ...p, version: found[p.name].version, repo: found[p.name].repository }))
-        const templatePins = planTemplatePins(dispatchedTemplate, templateKey, current, found)
+        const templatePins = planTemplatePins(dispatchedTemplate, templateKey, current, found, keptUnpinned, resolvedFrom)
         const all = [...pins, ...templatePins]
         if (all.length > 0) {
           setPackages(all)
@@ -426,7 +471,11 @@ function MergedPane({
     templateKey: string,
     current: AddedPackage[],
     found: Record<string, PackageSearchResult>,
+    keptUnpinned: string[],
+    resolvedFrom: Map<string, string>,
   ): AddedPackage[] => {
+    const keptNotice = resolvesElsewhereNotice(keptUnpinned, repoLabelFor, resolvedFrom)
+    setPinNotice(keptNotice)
     if (names.length === 0) return []
     if (latestTemplateKey.current !== templateKey) {
       setPinNotice("The matched template changed while checking, so its packages weren't updated. Try again.")
@@ -445,7 +494,8 @@ function MergedPane({
       )
       return []
     }
-    setPinNotice(unverifiableNotice(plan.unverifiable, repoLabelFor(selectedRepo?.id ?? '')))
+    const notices = [keptNotice, unverifiableNotice(plan.unverifiable, repoLabelFor(selectedRepo?.id ?? ''))].filter(Boolean)
+    setPinNotice(notices.length > 0 ? notices.join(' ') : null)
     return plan.pins
   }
   // What the pane is actually fetched against — only the one repository
@@ -592,7 +642,23 @@ function MergedPane({
   // the other repos the build reads (an unchecked one may publish the same
   // build, but a build never takes it from there).
   const elsewhere = pinnedElsewhere(lockedRows, baseLock)
-  const pinCount = selectedRows.length - elsewhere.length
+  // Template packages removed in Author mode: listed (to put back) but never
+  // updated.
+  const removedHere = authoring ? lockedRows.map((r) => r.name).filter((name) => removedPackages.includes(name)) : []
+  // Unpinned template packages a build takes from another repo, as far as the
+  // live cache knows: not counted, and not updated, here.
+  const resolvesElsewhere = lockedRows
+    .map((r) => r.name)
+    .filter((name) => {
+      const repo = liveResolved[name]?.repository
+      return (
+        !removedHere.includes(name) &&
+        baseLock.info(name).currentIsFloating &&
+        repo !== undefined &&
+        repo !== selectedRepo?.id
+      )
+    })
+  const pinCount = selectedRows.length - elsewhere.length - removedHere.length - resolvesElsewhere.length
   const elsewhereOthers = enabledRepoIds.filter((id) => id !== selectedRepo?.id)
   const elsewhereKey = `${os}|${selectedRepo?.id}|${elsewhere.join(',')}|${elsewhereOthers.join(',')}`
   const [elsewhereSources, setElsewhereSources] = useState<{ key: string; sources: Map<string, string[]> } | null>(
@@ -642,6 +708,31 @@ function MergedPane({
     if (selectedOnly) return
     ensureBaseVersions(baseLock, displayRows.map((h) => h.name))
   }, [displayRows, baseLock, selectedOnly])
+
+  // What an unpinned template package actually resolves to, and from where,
+  // across every repo in use and by the build's own rule (priority first, then
+  // newest). The default-repo guess above is only a stand-in until this lands:
+  // a higher-priority repo, or a newer version at the same priority, wins.
+  // One lookup per batch of newly shown rows; it fills the shared cache.
+  const asked = useRef(new Set<string>())
+  const scopeKey = `${os}|${enabledRepoIds.join(',')}`
+  const askedScope = useRef(scopeKey)
+  if (askedScope.current !== scopeKey) {
+    askedScope.current = scopeKey
+    asked.current = new Set()
+  }
+  const unresolvedTemplateKey = displayRows
+    .map((h) => h.name)
+    .filter((name) => baseLock.info(name).locked && baseLock.info(name).currentIsFloating)
+    .filter((name) => !(name in liveResolved) && !asked.current.has(name))
+    .join(',')
+  useEffect(() => {
+    if (!unresolvedTemplateKey) return
+    const names = unresolvedTemplateKey.split(',')
+    names.forEach((name) => asked.current.add(name))
+    void lookupNewest(names)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key stands in for the names
+  }, [unresolvedTemplateKey])
 
   // Every row in the review list that's still just "Latest" — what the bulk
   // button resolves, and how it reports its own count/label. versions is
@@ -829,15 +920,13 @@ function MergedPane({
               // checked, so it never consults the live-resolver cache —
               // that cache is keyed only by name and can carry a stale
               // answer from an unrelated floating pick of the same name.
-              // Only a floating entry's default-repo-only currentVersion is
-              // worth replacing with the fresher, cross-repo live result —
-              // never done in the review list, where an unpinned row
-              // deliberately starts at "Latest" rather than a default-repo
-              // guess (see the ensureBaseVersions effect above).
-              const currentVersion =
-                lock.currentIsFloating && !selectedOnly
-                  ? (liveResolved[h.name]?.version ?? lock.currentVersion)
-                  : lock.currentVersion
+              // A floating entry shows what it resolves to across the repos
+              // in use (fetched by the effect above). Until that lands the
+              // repository list falls back to the default-repo guess; the
+              // review list shows nothing rather than a guess.
+              const currentVersion = lock.currentIsFloating
+                ? (liveResolved[h.name]?.version ?? (selectedOnly ? undefined : lock.currentVersion))
+                : lock.currentVersion
               return (
                 <PackageRow
                   key={h.name}
@@ -848,6 +937,17 @@ function MergedPane({
                   repoLabelFor={repoLabelFor}
                   selection={addedPackages.find((p) => p.name === h.name)}
                   locked={lock.locked}
+                  removable={authoring && lock.locked}
+                  removed={authoring && lock.locked && removedPackages.includes(h.name)}
+                  onRevert={
+                    authoring && lock.locked
+                      ? () =>
+                          removePackage(h.name, {
+                            releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, [h.name], isProtectedRepo),
+                            protectedRepos: lockedRepoIds,
+                          })
+                      : undefined
+                  }
                   currentVersion={currentVersion}
                   currentIsFloating={lock.currentIsFloating}
                   pinnedFrom={pinnedFromFor(h.name)}
@@ -856,6 +956,12 @@ function MergedPane({
                   resolvedVersion={liveResolved[h.name]?.version}
                   resolvedRepo={liveResolved[h.name]?.repository}
                   onToggle={(checked) => {
+                    // Author mode: a template package is removed from the
+                    // template, or put back, rather than added or dropped.
+                    if (authoring && lock.locked) {
+                      setPackageRemoved(h.name, !checked)
+                      return
+                    }
                     if (checked) {
                       setPackage({ name: h.name, version: '', repo: h.repository })
                       // Picked from whichever repo was being browsed, but
@@ -879,6 +985,7 @@ function MergedPane({
                     })
                   }}
                   onChooseVersion={(v) => {
+                    if (authoring) setPackageRemoved(h.name, false)
                     const previous = addedPackages.find((p) => p.name === h.name)
                     const opts =
                       previous && previous.repo !== v.repository

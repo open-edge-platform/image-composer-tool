@@ -8,6 +8,18 @@
 
 - **Added**: `image-composer-tool ai` works with OpenAI-compatible services such as Intel's GNAI. Set `ai.openai.base_url` in `image-composer-tool.yml`, or `OPENAI_BASE_URL`, to the service URL including `/v1` (for GNAI, `https://gnai.intel.com/api/providers/openai/v1`). The embedding cache records the service URL and the vector size the service returns, so switching services re-indexes.
 - **Fixed**: `image-composer-tool ai` now reads the `ai:` section of `image-composer-tool.yml` (provider, models, timeouts, cache directory and scoring weights). It was parsed but ignored, so only `--provider` and `--templates-dir` took effect; they still override the file. The sample file's Ollama chat model is now `llama3.1:8b`, the default the guide tells you to pull. `--cache-stats` and `--clear-cache` no longer need an API key.
+- **Fixed**: in the Web UI Advanced tab's Packages step, an unpinned template
+  package showed the version the Ubuntu base repository publishes, with no
+  repository named, even when a build installs another one. For example, the
+  NVL BKC template's `libnss-libvirt` read 12.0.0-1ubuntu5.6 while a build
+  installs 12.0.0-1ubuntu5.7~ppa… from the PPA, a newer version at the same
+  priority. It now shows what a build installs, worked out across every
+  repository in use by the build's rule (highest priority first, then the
+  newest version), with **via** and the repository when that isn't the one
+  being browsed. **Update to latest version** now leaves such a package
+  unpinned when a build takes it from another repository, since pinning it to
+  the browsed repository's version would change where it comes from, and says
+  so; it is not counted on the button either.
 - **Added**: Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. The `Ubuntu 26.04 Host` workflow runs on every pull request and merge, plus weekly, on a 26.04 runner: it runs the host-sensitive unit tests and builds the minimal raw image of Ubuntu 26.04, Ubuntu 24.04, Debian 13 and eLxr 12. It was previously experimental and did not run on pull requests. `scripts/install-ict.sh` and the Debian package install test already cover 26.04.
 - **Added**: `scripts/install-ict.sh` installs the ICT Debian package and the host tools a build uses on Ubuntu and Debian. `--tag TAG` downloads the package and `SHA256SUMS` from the GitHub release of the tag and verifies the checksum before installing; `--deb FILE` installs a package you already have. `--tag` also accepts a package named `image-composer-tool_<version>_amd64.deb`, and `ICT_GITHUB_REPOSITORY=OWNER/REPO` downloads from another repository's release.
 - **Added**: `build --replace-additional-file FINAL=FILE` replaces the host file of the `systemConfig.additionalFiles` entry installed at `FINAL` for one build, so an input that changes per build (for example a vendor tarball) can be supplied on the command line without editing the template. It does not add files: it fails if no entry has that `final` path or `FILE` is not an existing regular file. Repeatable.
@@ -17,6 +29,55 @@
   bypass dependency integrity, protected boot packages, or removal policy.
   Unpinned packages and dependencies are not automatically selected for
   downgrade; RPM overlay builds are not supported end-to-end.
+- The Web UI's Advanced tab can offer an **Author** mode next to **Customize**.
+  It is off by default; turn it on with `image-composer-tool serve
+  --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose. The UI
+  asks the new `GET /api/v1/session` endpoint whether it is allowed. When it
+  is, Advanced starts in Author mode.
+- **Author mode edits the template itself.** Template packages can be removed
+  (uncheck them in the repository browser), given another version, or
+  unpinned (choose the selected version chip again; choosing the template's
+  own pin chip puts the pin back). **Update to latest version** leaves removed
+  packages removed. New packages, the image name and the disk layout go into
+  the template too. The Review step shows the whole edited template, with **Save Template** and
+  **Save As…** to keep it on your machine. Only the lines you changed differ
+  from the original; comments and formatting stay as written. Chrome and Edge
+  save in place; other browsers download a copy. Templates that use `extends`
+  can't be edited in Author mode yet, and building an edited template comes
+  next.
+- **Changed**: the Advanced tab's **Selected** panel is now **Changes**. It
+  lists how your packages differ from the template under **Added**,
+  **Modified** (a template package given another version, shown as
+  *old → new*) and, in Author mode, **Removed**. Each can be undone on its
+  own. **Clear** is now **Reset to template defaults**, styled like the Disk
+  step's, and also puts back removed packages.
+- **Open Template…** in the Web UI's Author mode reopens a template you saved,
+  so you can keep editing it. Saving a template now records the curated
+  template it was based on in a new optional `metadata.basedOn` field; opening
+  the file reads it back and selects the matching use case, platform and OS.
+  The opened file is used in place of the use case's own template (in the
+  Packages, Disk and Review steps and the **Changes** panel), and **Save**
+  writes back to it. A template without `basedOn` opens for the current
+  selection. `POST /templates/compose` accepts the opened template as
+  `templateYaml` when authoring is allowed.
+- **Compose Image** in the Web UI's Author mode builds the edited template
+  itself: everything you changed, including removed packages, is in what gets
+  built. The logins dialog works as in Customize, adding its logins on top of
+  the template. `POST /builds` accepts the template as `compose.templateYaml`;
+  the server writes it beside the template it is based on for the build, so
+  relative paths resolve the same way, and removes it when the build is over.
+  The build's history entry shows its use case as usual, and Retry rebuilds the
+  same edited template.
+- The Web UI's Basic tab offers two Best Known Configuration (BKC) use cases:
+  **Platform Enablement - Upstream BKC** and **Platform Enablement - Ubuntu LTS
+  BKC**. They ask for the platform first, then a **Mainline Kernel Version**
+  or an **HWE Kernel Version** in place of a SKU. Upstream BKC 7.3 builds the
+  Nova Lake Ubuntu 26.04 overlay image with the Intel 7.3 kernel, which was the
+  Upstream BKC SKU under Platform Enablement. The
+  other kernel versions, and the Ubuntu LTS BKC use case, are listed but grayed
+  out until their templates exist. Two new optional manifest fields on a use
+  case drive this: `skuLabel` names its SKU dropdown, and `platformFirst` asks
+  for the platform before it.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time

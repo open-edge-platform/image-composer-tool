@@ -23,7 +23,7 @@ func testManifest() *Manifest {
 			{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso", Template: "robotics.yml"},
 			{Vertical: "retail", SKU: "dv", Platform: "arl", OS: "debian13", ImageType: "iso", Template: "retail.yml"},
 		},
-		Verticals: []Option{{ID: "robotics", DisplayName: "Robotics"}, {ID: "retail", DisplayName: "Retail Edge"}},
+		Verticals: []Vertical{{ID: "robotics", DisplayName: "Robotics", SKULabel: "Robot Kit"}, {ID: "retail", DisplayName: "Retail Edge"}},
 		SKUs:      []Option{{ID: "amr", DisplayName: "AMR"}, {ID: "dv", DisplayName: "Desktop Virtualization"}},
 		Platforms: []Option{{ID: "wcl", DisplayName: "WCL"}, {ID: "arl", DisplayName: "ARL"}},
 		Targets:   []Target{{ID: "ubuntu24", DisplayName: "Ubuntu 24.04", OS: "ubuntu", Arch: "x86_64"}},
@@ -121,6 +121,38 @@ func TestEmbeddedManifestUnavailableCombinations(t *testing.T) {
 		if !targetIDs[c.OS] {
 			t.Errorf("combination OS %q has no label in targets", c.OS)
 		}
+	}
+}
+
+func TestEmbeddedManifestBKCKernelVersions(t *testing.T) {
+	// The BKC use cases offer a kernel version where other use cases offer a
+	// SKU: the version is the sku id, and the use case's skuLabel renames the
+	// dropdown.
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest embedded: %v", err)
+	}
+	labels := map[string]string{}
+	for _, v := range m.Verticals {
+		labels[v.ID] = v.SKULabel
+		if v.PlatformFirst != (v.SKULabel != "") {
+			t.Errorf("vertical %q platformFirst = %t, want it set exactly on the BKC use cases", v.ID, v.PlatformFirst)
+		}
+	}
+	for id, want := range map[string]string{
+		"upstream-bkc":        "Mainline Kernel Version",
+		"ubuntu-lts-bkc":      "HWE Kernel Version",
+		"platform-enablement": "",
+	} {
+		if got := labels[id]; got != want {
+			t.Errorf("vertical %q skuLabel = %q, want %q", id, got, want)
+		}
+	}
+	if got := m.findTemplate("upstream-bkc", "mainline-7.3", "nvl", "ubuntu26", "raw"); got != "ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml" {
+		t.Errorf("mainline 7.3 template = %q, want the NVL overlay", got)
+	}
+	if got := m.findTemplate("upstream-bkc", "mainline-7.0.14", "nvl", "ubuntu26", "raw"); got != "" {
+		t.Errorf("planned mainline 7.0.14 resolved to %q, want empty", got)
 	}
 }
 
@@ -604,7 +636,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 	wd := t.TempDir()
 
 	// compose path -> manifest lookup
-	path, name, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	path, name, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 	}}, wd)
 	if err != nil || name != "robotics.yml" || !strings.HasSuffix(path, "robotics.yml") {
@@ -612,7 +644,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 	}
 
 	// yaml path -> writes template.yml into the work dir
-	path, name, _, err = s.resolveBuildTemplate(&BuildRequest{YAML: "image:\n  name: x\n"}, wd)
+	path, name, _, _, err = s.resolveBuildTemplate(&BuildRequest{YAML: "image:\n  name: x\n"}, wd)
 	if err != nil || name != "template.yml" {
 		t.Fatalf("yaml resolve = %q %q %v", path, name, err)
 	}
@@ -621,12 +653,12 @@ func TestResolveBuildTemplate(t *testing.T) {
 	}
 
 	// neither -> error
-	if _, _, _, err := s.resolveBuildTemplate(&BuildRequest{}, wd); err == nil {
+	if _, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{}, wd); err == nil {
 		t.Fatal("expected error when neither compose nor yaml provided")
 	}
 	// both -> error. The contract says exactly one, so an ambiguous request is
 	// rejected rather than silently resolved in favour of one of the two.
-	_, _, _, err = s.resolveBuildTemplate(&BuildRequest{
+	_, _, _, _, err = s.resolveBuildTemplate(&BuildRequest{
 		YAML:    "image:\n  name: x\n",
 		Compose: &Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"},
 	}, wd)
@@ -637,7 +669,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 		t.Errorf("both-fields err = %v, want errBadBuildRequest (400)", err)
 	}
 	// no match -> error
-	if _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	if _, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso",
 	}}, wd); err == nil {
 		t.Fatal("expected error for unmatched combination")
