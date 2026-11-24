@@ -4,11 +4,16 @@ import { api } from '../api/client'
 import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
 import { SkuPlatformSelects } from './SkuPlatformSelects'
+import { BaseImageField } from './BaseImageField'
+import { baseImageProblem } from '../lib/baseImage'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 
 // Marks a dropdown the Compose button stays disabled without, matching Advanced.
+// The base image is typed, so it is sent after a pause, not per keystroke.
+const BASE_IMAGE_DEBOUNCE_MS = 500
+
 const REQUIRED = <span className="text-red-600"> *</span>
 
 interface BasicPageProps {
@@ -57,6 +62,28 @@ export function BasicPage({
 
   const complete = !!opts?.matched
 
+  // An overlay template's base image, shared with the Advanced tab. Sent once
+  // edited, after a typing pause, so the summary can say whether the server
+  // has it.
+  const baseImage = useStore((s) => s.baseImage)
+  const baseImageEdited = useStore((s) => s.baseImageEdited)
+  const seedBaseImage = useStore((s) => s.seedBaseImage)
+  const [debouncedBaseImage, setDebouncedBaseImage] = useState(baseImage)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBaseImage(baseImage), BASE_IMAGE_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [baseImage])
+  const baseImageOverride = baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined
+  const [askBaseImage, setAskBaseImage] = useState(false)
+
+  // A different template asks for different accounts, so anything typed for
+  // the previous one is dropped rather than silently sent with the new build.
+  useEffect(() => {
+    setCredentials([])
+    setNewUsers([])
+    setOEPInstallerToken('')
+  }, [selection])
+
   // Auto-fetch the configuration summary whenever the selection is complete, so
   // it always reflects the current dropdowns (no manual "review" step). Guard
   // against out-of-order responses with a cancel flag.
@@ -66,18 +93,14 @@ export function BasicPage({
       setLoadingSummary(false)
       return
     }
-    // A different template asks for different accounts, so anything typed for
-    // the previous one is dropped rather than silently sent with the new build.
-    setCredentials([])
-    setNewUsers([])
-    setOEPInstallerToken('')
     let cancelled = false
     setLoadingSummary(true)
     api
-      .compose(selection)
+      .compose({ ...selection, baseImage: baseImageOverride })
       .then((r) => {
         if (cancelled) return
         setReview(r)
+        seedBaseImage(r.summary.baseImage ?? '')
         // A successful compose supersedes any earlier compose failure; without
         // this the banner from a transient error sat above a valid summary until
         // the user happened to touch a dropdown.
@@ -92,7 +115,8 @@ export function BasicPage({
     return () => {
       cancelled = true
     }
-  }, [active, complete, selection])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seedBaseImage is a stable store action
+  }, [active, complete, selection, baseImageOverride])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
   const skuLabel = skuLabelFor(manifest, selection.vertical)
@@ -105,13 +129,23 @@ export function BasicPage({
   const credentialsReady =
     credentialsComplete(requirements, credentials) && newUsersValid(newUsers, requirements)
 
+  // What's wrong with an overlay template's base image; null when a build can
+  // use it, or the template has none.
+  const baseImageIssue = review?.summary.baseImage
+    ? baseImageProblem(
+        baseImage,
+        !!review.summary.baseImageMissing && review.summary.baseImage === baseImage.trim(),
+      )
+    : null
+
   const onBuild = async () => {
-    if (!complete || !credentialsReady) return
+    if (!complete || !credentialsReady || baseImageIssue) return
     try {
       setBusy(true)
       setError(null)
       const req = {
         ...selection,
+        baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
         users: newUsers.length > 0 ? newUsers : undefined,
       }
@@ -146,7 +180,11 @@ export function BasicPage({
   // Composing always goes through the dialog: besides any missing logins, it is
   // where accounts are added, which a template with nothing to ask for still
   // needs to offer.
-  const onComposeClick = () => setCredentialsOpen(true)
+  // A base image still wrong at Compose time is asked for in the dialog too.
+  const onComposeClick = () => {
+    setAskBaseImage(!!baseImageIssue)
+    setCredentialsOpen(true)
+  }
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
@@ -204,6 +242,7 @@ export function BasicPage({
             )}
             {/* Image Type (raw/iso) is auto-selected from the manifest for the
                 chosen combination and not shown in Basic mode. */}
+            {review?.summary.baseImage && <BaseImageField issue={baseImageIssue} id="basic-base-image" />}
           </div>
 
           {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
@@ -211,7 +250,7 @@ export function BasicPage({
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!complete || !review || loadingSummary || busy || buildInProgress || !!review.summary.baseImageMissing}
+              disabled={!complete || !review || loadingSummary || busy || buildInProgress}
               onClick={onComposeClick}
             >
               {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
@@ -264,14 +303,6 @@ export function BasicPage({
                   ))}
                 </tbody>
               </table>
-              {/* An overlay template whose base image isn't on the server can't
-                  build; say so here rather than after the build starts. */}
-              {review.summary.baseImageMissing && (
-                <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800" role="alert">
-                  The base image {review.summary.baseImage} isn't on the server, so this image can't be composed yet.
-                  Set the base image on the Advanced tab's Disk step.
-                </p>
-              )}
             </div>
           </div>
         )}
@@ -298,6 +329,8 @@ export function BasicPage({
         oepInstallerToken={oepInstallerToken}
         onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
+        askBaseImage={askBaseImage}
+        baseImageIssue={baseImageIssue}
         busy={busy}
         buildInProgress={buildInProgress}
         error={error}

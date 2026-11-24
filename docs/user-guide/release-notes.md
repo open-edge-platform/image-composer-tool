@@ -7,11 +7,13 @@
 **New**:
 
 - The Web UI's Advanced tab handles templates built on a base image (overlay
-  templates) better. The Disk step shows a **Base Image** field for them only:
-  the path of the installed RAW image on the server, seeded from the template.
-  It says when the path is empty, not absolute, still the template's
-  `/path/to/…` placeholder, or not found on the server, and **Compose Image**
-  is blocked until it is fixed; the Basic tab warns the same way. A changed
+  templates) better. For them only, a **Base Image** field appears under the
+  selection on the Basic tab and the Advanced Target step: the path of the
+  installed RAW image on the server, seeded from the template. It says when
+  the path is empty, not absolute, or not on the server (naming the template's
+  `/path/to/…` placeholder when that's the one), and while it is wrong the
+  Compose dialog asks for it too and won't compose. The Disk step no longer
+  warns that an overlay defines no partitions. A changed
   path is sent as the new `baseImage` compose and build field, and the build
   server refuses any overlay build whose base image it can't find, instead of
   failing partway in. The partition table stays as the base image has it. The
