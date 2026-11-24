@@ -6,7 +6,7 @@
 // which turn DKMS on, are selected. Overlay mode has to be known even when the
 // overridden compose fails because of exactly those packages.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdvancedPage } from './AdvancedPage'
 import { useStore } from '../store'
@@ -98,29 +98,28 @@ describe('AdvancedPage for an overlay template', () => {
     expect(screen.queryByText('Partition Table')).toBeNull()
   })
 
-  it('blocks Compose until the base image is a path the server has, then sends it', async () => {
+  it('asks for the base image under the selection, and again in the Compose dialog while it is wrong', async () => {
     useStore.setState({ addedPackages: [] })
     render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
-    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false), { timeout: 5000 })
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
-    // Seeded with the template's placeholder, which the step flags.
-    const input = (await screen.findByLabelText(/Base Image/, {}, { timeout: 5000 })) as HTMLInputElement
-    expect(input.value).toBe('/path/to/ubuntu-26.04-base.raw')
-    expect(screen.getByRole('alert').textContent).toMatch(/placeholder/)
+    // On the Target step, seeded with the template's placeholder, which the
+    // server reports missing.
+    const input = (await screen.findByLabelText(/Base Image/)) as HTMLInputElement
+    await waitFor(() => expect(input.value).toBe('/path/to/ubuntu-26.04-base.raw'))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/placeholder/)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
-    expect(await screen.findByText('Fix the base image on the Disk step before composing.')).toBeTruthy()
 
-    // A real path goes to the server as an override.
-    fireEvent.click(screen.getByRole('button', { name: /Disk/ }))
-    fireEvent.change(await screen.findByLabelText(/Base Image/), { target: { value: '/images/base.raw' } })
+    // The dialog asks for it too, and won't compose until it's right.
+    const dialog = await screen.findByRole('dialog')
+    const compose = () => within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Compose Image' })
+    expect(compose().disabled).toBe(true)
+    fireEvent.change(within(dialog).getByLabelText(/Base Image/), { target: { value: '/images/base.raw' } })
     await waitFor(() =>
-      expect(mockApi.compose).toHaveBeenLastCalledWith(expect.objectContaining({ baseImage: '/images/base.raw' })),
-      { timeout: 5000 },
+      expect(mockApi.compose).toHaveBeenCalledWith(expect.objectContaining({ baseImage: '/images/base.raw' })),
     )
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull(), { timeout: 5000 })
+    await waitFor(() => expect(compose().disabled).toBe(false))
   })
 })

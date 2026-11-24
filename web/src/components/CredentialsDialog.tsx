@@ -3,6 +3,7 @@ import type { CredentialInput, CredentialRequirement, NewUserInput, OEPInstaller
 import { CredentialsStep, missingCredentials } from './CredentialsStep'
 import { Input } from './Input'
 import { NewUsersSection, newUserIssues } from './NewUsersSection'
+import { BaseImageField } from './BaseImageField'
 
 interface CredentialsDialogProps {
   open: boolean
@@ -19,6 +20,10 @@ interface CredentialsDialogProps {
   oepInstallerToken?: string
   onOEPInstallerTokenChange?: (token: string) => void
   credentialsReady: boolean
+  // Ask for an overlay template's base image here too, when it was still wrong
+  // as Compose was pressed; baseImageIssue is what is wrong with it now.
+  askBaseImage?: boolean
+  baseImageIssue?: string | null
   busy: boolean
   buildInProgress: boolean
   error: string | null
@@ -37,6 +42,8 @@ export function CredentialsDialog({
   oepInstallerToken,
   onOEPInstallerTokenChange,
   credentialsReady,
+  askBaseImage = false,
+  baseImageIssue = null,
   busy,
   buildInProgress,
   error,
@@ -115,6 +122,7 @@ export function CredentialsDialog({
         tabIndex={-1}
         className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl"
       >
+        {askBaseImage && <BaseImageField issue={baseImageIssue} id="dialog-base-image" />}
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 id="credentials-dialog-title" className="text-lg font-semibold text-[#00285a]">
@@ -192,7 +200,7 @@ export function CredentialsDialog({
           <button
             type="button"
             className="rounded-md bg-[#0071c5] px-4 py-2 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!credentialsReady || busy || buildInProgress}
+            disabled={!credentialsReady || !!baseImageIssue || busy || buildInProgress}
             onClick={onCompose}
           >
             {busy ? 'Starting…' : 'Compose Image'}
