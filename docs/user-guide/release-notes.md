@@ -6,6 +6,11 @@
 
 **New**:
 
+- **Undo** and **Redo** at the top of the Web UI's Advanced tab take back the
+  last change to packages, repositories, the disk layout, the image name or
+  the base image, and put it back. One step each way; changes made in quick
+  succession (typing a name, **Reset to template defaults**) count as one.
+  Choosing another template clears both.
 - The Web UI's Advanced tab handles templates built on a base image (overlay
   templates) better. For them only, a **Base Image** field appears under the
   selection on the Basic tab and the Advanced Target step: the path of the
