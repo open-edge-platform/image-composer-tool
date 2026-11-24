@@ -18,8 +18,8 @@ export interface AuthorEdits {
   removed: string[]
   // Set only when the user edited it.
   imageName?: string
-  // An overlay template's base image (baseline.source.path), set only when
-  // the user edited it.
+  // An overlay template's base image, set only when the user edited it: a
+  // path (baseline.source.path) or an https URL (baseline.source.url).
   baseImage?: string
   // The complete disk block, set only when the user edited it.
   disk?: Record<string, unknown>
@@ -143,9 +143,25 @@ function splices(text: string, doc: Document, edits: AuthorEdits): Splice[] | nu
   }
 
   if (edits.baseImage !== undefined) {
-    const node = doc.getIn(['baseline', 'source', 'path'], true)
-    if (!isScalar(node) || !node.range) return null
-    out.push({ start: node.range[0], end: node.range[1], text: scalarText(node, edits.baseImage) })
+    // A source sets exactly one of path or url, so going from one to the other
+    // rewrites that key's line rather than adding a second.
+    const isURL = edits.baseImage.includes('://')
+    const src = doc.getIn(['baseline', 'source'], true)
+    if (!isMap(src)) return null
+    const pairOf = (key: string) => src.items.find((p) => isScalar(p.key) && p.key.value === key)
+    const want = pairOf(isURL ? 'url' : 'path')
+    const other = pairOf(isURL ? 'path' : 'url')
+    if (want && !other && isScalar(want.value) && want.value.range) {
+      out.push({ start: want.value.range[0], end: want.value.range[1], text: scalarText(want.value, edits.baseImage) })
+    } else if (!want && other && isScalar(other.key) && other.key.range && isScalar(other.value) && other.value.range) {
+      out.push({
+        start: other.key.range[0],
+        end: other.value.range[1],
+        text: `${isURL ? 'url' : 'path'}: ${scalarText(other.value, edits.baseImage)}`,
+      })
+    } else {
+      return null
+    }
   }
 
   if (edits.disk !== undefined) {
@@ -251,7 +267,11 @@ function applyViaDocument(doc: Document, edits: AuthorEdits): string {
     }
   }
   if (edits.imageName !== undefined) doc.setIn(['image', 'name'], edits.imageName)
-  if (edits.baseImage !== undefined) doc.setIn(['baseline', 'source', 'path'], edits.baseImage)
+  if (edits.baseImage !== undefined) {
+    const isURL = edits.baseImage.includes('://')
+    doc.setIn(['baseline', 'source', isURL ? 'url' : 'path'], edits.baseImage)
+    doc.deleteIn(['baseline', 'source', isURL ? 'path' : 'url'])
+  }
   if (edits.disk !== undefined) doc.set('disk', doc.createNode(edits.disk))
   if (edits.basedOn !== undefined) doc.setIn(['metadata', 'basedOn'], edits.basedOn)
   return doc.toString({ lineWidth: 0 })
