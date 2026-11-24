@@ -1243,9 +1243,10 @@ components:
         baseImage:
           type: string
           description: |
-            Overrides an overlay template's base image (baseline.source.path)
-            with this absolute path on the server. Omitted or empty means "not
-            overridden". Rejected for a template not built on a base image.
+            Overrides an overlay template's base image: an absolute path on the
+            server (baseline.source.path) or an https URL the build downloads
+            (baseline.source.url). Omitted or empty means "not overridden".
+            Rejected for a template not built on a base image.
         imageName:
           type: string
           description: |

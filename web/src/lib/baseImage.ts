@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // An overlay template builds on a base image: baseline.source.path, a RAW
-// image on the server that runs the build. baseImageProblem says what's wrong
+// image on the server that runs the build, or baseline.source.url, an https
+// URL the build downloads. baseImageProblem says what's wrong
 // with the path on screen, or returns null when a build can use it.
 // missingOnServer is the server's answer for this path; until it has one, the
 // path is taken as found.
@@ -13,8 +14,13 @@ const PLACEHOLDER = '/path/to/'
 export function baseImageProblem(path: string, missingOnServer: boolean): string | null {
   const p = path.trim()
   if (!p) return 'Enter the path of the base image on the server.'
-  if (/^https?:\/\//.test(p)) return null
-  if (!p.startsWith('/')) return 'Use an absolute path on the server, such as /images/ubuntu-26.04-base.raw.'
+  // A URL is downloaded at build time, over https only, as the build requires.
+  if (p.includes('://')) {
+    return /^https:\/\/[^/\s]+/.test(p) ? null : 'A URL must use https and name a host, such as https://images.example.com/base.raw.'
+  }
+  if (!p.startsWith('/')) {
+    return 'Use an absolute path on the server, such as /images/ubuntu-26.04-base.raw, or an https URL.'
+  }
   // Whether the server has the file decides: a deployment may well mount the
   // image at the placeholder path itself.
   if (!missingOnServer) return null
