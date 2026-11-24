@@ -182,4 +182,13 @@ describe('baseImage', () => {
     const out = applyAuthorEdits(nvl, { ...none, baseImage: '/images/ubuntu-26.04-base.raw' })
     expect(out).toBe(nvl.replace('path: /path/to/ubuntu-26.04-base.raw', 'path: /images/ubuntu-26.04-base.raw'))
   })
+
+  it('swaps the path for an https URL, and back, on the same line', () => {
+    const url = 'https://images.example.com/ubuntu-26.04-base.raw'
+    const out = applyAuthorEdits(nvl, { ...none, baseImage: url })
+    expect(out).toBe(nvl.replace('path: /path/to/ubuntu-26.04-base.raw', `url: ${url}`))
+    expect(applyAuthorEdits(out, { ...none, baseImage: '/images/base.raw' })).toBe(
+      nvl.replace('path: /path/to/ubuntu-26.04-base.raw', 'path: /images/base.raw'),
+    )
+  })
 })
