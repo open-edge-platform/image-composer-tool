@@ -138,6 +138,15 @@ interface AppState {
   setPackageRemoved: (name: string, removed: boolean) => void
   clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
+  // One step of undo and redo over the user's edits (see EDIT_KEYS). Each
+  // holds the edits as they were; null when there is nothing to undo or redo.
+  undoSnapshot: EditSnapshot | null
+  redoSnapshot: EditSnapshot | null
+  // When the last edit was made, so edits in quick succession (typing, Ask
+  // AI applying several, Reset) undo as one.
+  lastEditAt: number
+  undo: () => void
+  redo: () => void
   // Gaining the authoring capability starts in Author mode (the user can still
   // switch); losing it drops back to Customize.
   setCapabilities: (c: Capabilities) => void
@@ -186,148 +195,165 @@ const emptySelection: Selection = {
   imageType: '',
 }
 
-export const useStore = create<AppState>((set) => ({
-  manifest: null,
-  capabilities: { authoring: false },
-  advancedMode: 'customize',
-  selection: emptySelection,
-  imageName: '',
-  imageNameEdited: false,
-  enabledRepos: [],
-  addedPackages: [],
-  disk: null,
-  diskEdited: false,
-  diskSeed: null,
-  removedPackages: [],
-  setPackageRemoved: (name, removed) =>
-    set((state) => ({
-      removedPackages: removed
-        ? [...new Set([...state.removedPackages, name])]
-        : state.removedPackages.filter((n) => n !== name),
-      // A removed package has no version of its own any more.
-      addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
-    })),
-  clearRemovedPackages: () => set({ removedPackages: [] }),
-  setManifest: (m) => set({ manifest: m }),
-  setCapabilities: (c) =>
-    set((state) => ({
-      capabilities: c,
-      advancedMode: !c.authoring ? 'customize' : state.capabilities.authoring ? state.advancedMode : 'author',
-    })),
-  setAdvancedMode: (mode) =>
-    set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
-  setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
-  baseImage: '',
-  baseImageEdited: false,
-  setBaseImage: (value) => set({ baseImage: value, baseImageEdited: true }),
-  seedBaseImage: (value) => set((state) => (state.baseImageEdited ? {} : { baseImage: value })),
-  seedImageName: (value) =>
-    set((state) => (state.imageNameEdited ? {} : { imageName: value })),
-  setRepoEnabled: (repo, on) =>
-    set((state) => ({
-      enabledRepos: on
-        ? state.enabledRepos.includes(repo)
-          ? state.enabledRepos
-          : [...state.enabledRepos, repo]
-        : state.enabledRepos.filter((r) => r !== repo),
-      ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
-    })),
-  // Re-pinning to a different repo can leave the one it just left with
-  // nothing depending on it anymore — dropped the same way disabling that
-  // repo manually would already drop this package, just from the other
-  // side of the relationship. A repo the user enabled by hand with nothing
-  // added from it yet is never touched: this only fires as a consequence of
-  // a package actually moving away from a repo, never as an ambient sweep.
-  setPackage: (p, opts) =>
-    set((state) => {
-      const previous = state.addedPackages.find((x) => x.name === p.name)
-      const addedPackages = [...state.addedPackages.filter((x) => x.name !== p.name), p]
-      if (opts?.releaseRepo === false) return { addedPackages }
-      return {
-        addedPackages,
-        enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages, opts?.protectedRepos),
-      }
-    }),
-  removePackage: (name, opts) =>
-    set((state) => {
-      const removed = state.addedPackages.find((p) => p.name === name)
-      const addedPackages = state.addedPackages.filter((p) => p.name !== name)
-      if (opts?.releaseRepo === false) return { addedPackages }
-      return {
-        addedPackages,
-        enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages, opts?.protectedRepos),
-      }
-    }),
-  setPackages: (pkgs) =>
-    set((state) => {
-      const names = new Set(pkgs.map((p) => p.name))
-      // A bulk add ("Select all") only ever grows the set, so nothing it
-      // replaces can be left without a repo to drop.
-      return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
-    }),
-  removePackages: (names, opts) =>
-    set((state) => {
-      const drop = new Set(names)
-      const addedPackages = state.addedPackages.filter((p) => !drop.has(p.name))
-      if (opts?.releaseRepo === false) return { addedPackages }
-      const removedRepos = new Set(
-        state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
-      )
-      const stillNeeded = new Set(addedPackages.map((p) => p.repo))
-      const protectedRepos = opts?.protectedRepos
-      return {
-        addedPackages,
-        enabledRepos: state.enabledRepos.filter(
-          (r) => !removedRepos.has(r) || stillNeeded.has(r) || protectedRepos?.has(r),
-        ),
-      }
-    }),
-  clearPackages: (protectedRepos) =>
-    set((state) => {
-      const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
-      return {
-        addedPackages: [],
-        enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r) || protectedRepos?.has(r)),
-      }
-    }),
-  setDisk: (value) => set({ disk: value, diskEdited: true }),
-  seedDisk: (value) =>
-    // A compose that resolves to a template with no disk block leaves whatever
-    // is on screen alone rather than blanking the step. The seed is recorded
-    // even when the user has edited, so Reset always has a target.
-    set((state) =>
-      value === null ? {} : state.diskEdited ? { diskSeed: value } : { disk: value, diskSeed: value },
-    ),
-  resetDisk: () => set((state) => ({ disk: state.diskSeed, diskEdited: false })),
-  setField: (key, value) =>
-    set((state) => {
-      const selection = { ...state.selection, [key]: value }
-      // Reset downstream fields when an upstream one changes, so the cascade
-      // never leaves an invalid combination selected. See cascadeOrder.
-      const order = cascadeOrder(state.manifest, selection.vertical)
-      for (const field of order.slice(order.indexOf(key) + 1)) {
-        selection[field] = ''
-      }
-      // Auto-fill each downstream dimension with its first available option, so
-      // selecting a vertical immediately populates a valid default combination
-      // the user can tweak, rather than forcing a click through every dropdown.
-      if (state.manifest) {
-        autoFillCascade(state.manifest, selection)
-      }
-      return selectionChanged(state, selection)
-    }),
-  selectCombination: (c) =>
-    set((state) =>
-      selectionChanged(state, {
-        vertical: c.vertical,
-        sku: c.sku ?? '',
-        platform: c.platform,
-        os: c.os,
-        kernel: c.kernel ?? '',
-        imageType: c.imageType,
+export const useStore = create<AppState>((set) => {
+  // An edit the user can undo: records where it started, unless it follows
+  // another edit closely enough to count as the same change.
+  const setEdit = (fn: (state: AppState) => Partial<AppState>) =>
+    set((state) => ({ ...fn(state), ...undoPoint(state) }))
+  return {
+    manifest: null,
+    capabilities: { authoring: false },
+    advancedMode: 'customize',
+    selection: emptySelection,
+    imageName: '',
+    imageNameEdited: false,
+    enabledRepos: [],
+    addedPackages: [],
+    disk: null,
+    diskEdited: false,
+    diskSeed: null,
+    removedPackages: [],
+    setPackageRemoved: (name, removed) =>
+      setEdit((state) => ({
+        removedPackages: removed
+          ? [...new Set([...state.removedPackages, name])]
+          : state.removedPackages.filter((n) => n !== name),
+        // A removed package has no version of its own any more.
+        addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
+      })),
+    clearRemovedPackages: () => setEdit(() => ({ removedPackages: [] })),
+    undoSnapshot: null,
+    redoSnapshot: null,
+    lastEditAt: 0,
+    undo: () =>
+      set((state) =>
+        state.undoSnapshot ? { ...state.undoSnapshot, undoSnapshot: null, redoSnapshot: snapshotEdits(state), lastEditAt: 0 } : {},
+      ),
+    redo: () =>
+      set((state) =>
+        state.redoSnapshot ? { ...state.redoSnapshot, redoSnapshot: null, undoSnapshot: snapshotEdits(state), lastEditAt: 0 } : {},
+      ),
+    setManifest: (m) => set({ manifest: m }),
+    setCapabilities: (c) =>
+      set((state) => ({
+        capabilities: c,
+        advancedMode: !c.authoring ? 'customize' : state.capabilities.authoring ? state.advancedMode : 'author',
+      })),
+    setAdvancedMode: (mode) =>
+      set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
+    setImageName: (value) => setEdit(() => ({ imageName: value, imageNameEdited: true })),
+    baseImage: '',
+    baseImageEdited: false,
+    setBaseImage: (value) => setEdit(() => ({ baseImage: value, baseImageEdited: true })),
+    seedBaseImage: (value) => set((state) => (state.baseImageEdited ? {} : { baseImage: value })),
+    seedImageName: (value) =>
+      set((state) => (state.imageNameEdited ? {} : { imageName: value })),
+    setRepoEnabled: (repo, on) =>
+      setEdit((state) => ({
+        enabledRepos: on
+          ? state.enabledRepos.includes(repo)
+            ? state.enabledRepos
+            : [...state.enabledRepos, repo]
+          : state.enabledRepos.filter((r) => r !== repo),
+        ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
+      })),
+    // Re-pinning to a different repo can leave the one it just left with
+    // nothing depending on it anymore — dropped the same way disabling that
+    // repo manually would already drop this package, just from the other
+    // side of the relationship. A repo the user enabled by hand with nothing
+    // added from it yet is never touched: this only fires as a consequence of
+    // a package actually moving away from a repo, never as an ambient sweep.
+    setPackage: (p, opts) =>
+      setEdit((state) => {
+        const previous = state.addedPackages.find((x) => x.name === p.name)
+        const addedPackages = [...state.addedPackages.filter((x) => x.name !== p.name), p]
+        if (opts?.releaseRepo === false) return { addedPackages }
+        return {
+          addedPackages,
+          enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages, opts?.protectedRepos),
+        }
       }),
-    ),
-}))
+    removePackage: (name, opts) =>
+      setEdit((state) => {
+        const removed = state.addedPackages.find((p) => p.name === name)
+        const addedPackages = state.addedPackages.filter((p) => p.name !== name)
+        if (opts?.releaseRepo === false) return { addedPackages }
+        return {
+          addedPackages,
+          enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages, opts?.protectedRepos),
+        }
+      }),
+    setPackages: (pkgs) =>
+      setEdit((state) => {
+        const names = new Set(pkgs.map((p) => p.name))
+        // A bulk add ("Select all") only ever grows the set, so nothing it
+        // replaces can be left without a repo to drop.
+        return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
+      }),
+    removePackages: (names, opts) =>
+      setEdit((state) => {
+        const drop = new Set(names)
+        const addedPackages = state.addedPackages.filter((p) => !drop.has(p.name))
+        if (opts?.releaseRepo === false) return { addedPackages }
+        const removedRepos = new Set(
+          state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
+        )
+        const stillNeeded = new Set(addedPackages.map((p) => p.repo))
+        const protectedRepos = opts?.protectedRepos
+        return {
+          addedPackages,
+          enabledRepos: state.enabledRepos.filter(
+            (r) => !removedRepos.has(r) || stillNeeded.has(r) || protectedRepos?.has(r),
+          ),
+        }
+      }),
+    clearPackages: (protectedRepos) =>
+      setEdit((state) => {
+        const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
+        return {
+          addedPackages: [],
+          enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r) || protectedRepos?.has(r)),
+        }
+      }),
+    setDisk: (value) => setEdit(() => ({ disk: value, diskEdited: true })),
+    seedDisk: (value) =>
+      // A compose that resolves to a template with no disk block leaves whatever
+      // is on screen alone rather than blanking the step. The seed is recorded
+      // even when the user has edited, so Reset always has a target.
+      set((state) =>
+        value === null ? {} : state.diskEdited ? { diskSeed: value } : { disk: value, diskSeed: value },
+      ),
+    resetDisk: () => setEdit((state) => ({ disk: state.diskSeed, diskEdited: false })),
+    setField: (key, value) =>
+      set((state) => {
+        const selection = { ...state.selection, [key]: value }
+        // Reset downstream fields when an upstream one changes, so the cascade
+        // never leaves an invalid combination selected. See cascadeOrder.
+        const order = cascadeOrder(state.manifest, selection.vertical)
+        for (const field of order.slice(order.indexOf(key) + 1)) {
+          selection[field] = ''
+        }
+        // Auto-fill each downstream dimension with its first available option, so
+        // selecting a vertical immediately populates a valid default combination
+        // the user can tweak, rather than forcing a click through every dropdown.
+        if (state.manifest) {
+          autoFillCascade(state.manifest, selection)
+        }
+        return selectionChanged(state, selection)
+      }),
+    selectCombination: (c) =>
+      set((state) =>
+        selectionChanged(state, {
+          vertical: c.vertical,
+          sku: c.sku ?? '',
+          platform: c.platform,
+          os: c.os,
+          kernel: c.kernel ?? '',
+          imageType: c.imageType,
+        }),
+      ),
+  }
+})
 
 // selectionChanged is the state after the selection becomes `selection`.
 function selectionChanged(state: AppState, selection: Selection): Partial<AppState> {
@@ -356,6 +382,9 @@ function selectionChanged(state: AppState, selection: Selection): Partial<AppSta
     imageNameEdited: false,
     baseImage: '',
     baseImageEdited: false,
+    // Edits for the previous template mean nothing for this one.
+    undoSnapshot: null,
+    redoSnapshot: null,
     disk: null,
     diskEdited: false,
     diskSeed: null,
@@ -363,6 +392,36 @@ function selectionChanged(state: AppState, selection: Selection): Partial<AppSta
     removedPackages: [],
     ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
   }
+}
+
+// The state the user edits, which undo and redo restore.
+const EDIT_KEYS = [
+  'addedPackages',
+  'removedPackages',
+  'enabledRepos',
+  'disk',
+  'diskEdited',
+  'imageName',
+  'imageNameEdited',
+  'baseImage',
+  'baseImageEdited',
+] as const
+export type EditSnapshot = Pick<AppState, (typeof EDIT_KEYS)[number]>
+
+// Edits this close together undo as one.
+const EDIT_COALESCE_MS = 1000
+
+function snapshotEdits(state: AppState): EditSnapshot {
+  return Object.fromEntries(EDIT_KEYS.map((k) => [k, state[k]])) as EditSnapshot
+}
+
+// undoPoint is the undo bookkeeping for an edit about to be applied to state:
+// the edits as they are now become what Undo restores, unless the previous
+// edit was moments ago, when this one joins it. Redo is gone either way.
+function undoPoint(state: AppState): Partial<AppState> {
+  const now = Date.now()
+  const joins = state.undoSnapshot !== null && now - state.lastEditAt < EDIT_COALESCE_MS
+  return { undoSnapshot: joins ? state.undoSnapshot : snapshotEdits(state), redoSnapshot: null, lastEditAt: now }
 }
 
 // releaseIfOrphaned drops `changed`'s previous repo from enabledRepos when
