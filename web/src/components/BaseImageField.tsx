@@ -20,7 +20,7 @@ export function BaseImageField({ issue, id = 'base-image' }: { issue: string | n
         className={
           'w-full rounded-md border px-3 py-2 font-mono text-sm ' + (issue ? 'border-red-400 bg-red-50' : 'border-slate-300')
         }
-        placeholder="/images/ubuntu-26.04-base.raw"
+        placeholder="/images/ubuntu-26.04-base.raw or https://…"
         value={baseImage}
         onChange={(e) => setBaseImage(e.target.value)}
       />
@@ -30,7 +30,8 @@ export function BaseImageField({ issue, id = 'base-image' }: { issue: string | n
         </p>
       ) : (
         <p className="mt-1 text-xs text-slate-400">
-          This template builds on an installed image. Give its path on the server that runs the build.
+          This template builds on an installed image: its path on the server that runs the build, or an https URL to
+          download it from.
         </p>
       )}
     </div>

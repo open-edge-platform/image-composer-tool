@@ -77,23 +77,29 @@ func ValidatePackages(packages []string) error {
 	return nil
 }
 
-// packageName returns the package-name part of an entry, dropping a
-// `name_version` pin's version. A version begins with a digit (an epoch is
-// numeric too), so a suffix that doesn't is part of the name itself —
-// createrepo_c is one package, not createrepo pinned to version "c".
-//
-// Used only to match entries by package name; nothing here rewrites what the
-// user chose.
 // ValidateBaseImage checks a base image override: an absolute path on the
-// server. Empty means "not overridden".
-func ValidateBaseImage(path string) error {
-	if path == "" {
+// server, or an https URL the build downloads, checked as the build checks
+// baseline.source. Empty means "not overridden".
+func ValidateBaseImage(image string) error {
+	if image == "" {
 		return nil
 	}
-	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\n\r") || filepath.Clean(path) != path {
-		return fmt.Errorf("base image %q must be an absolute path on the server, such as /images/ubuntu-26.04.raw", path)
+	if strings.ContainsAny(image, "\n\r") {
+		return fmt.Errorf("base image %q must be a single line", image)
+	}
+	if isBaseImageURL(image) {
+		return (&config.BaselineSource{URL: image}).Validate()
+	}
+	if !filepath.IsAbs(image) || filepath.Clean(image) != image {
+		return fmt.Errorf("base image %q must be an absolute path on the server, such as /images/ubuntu-26.04-base.raw, or an https URL", image)
 	}
 	return nil
+}
+
+// isBaseImageURL reports whether a base image is a URL (baseline.source.url)
+// rather than a local path (baseline.source.path): anything with a scheme.
+func isBaseImageURL(image string) bool {
+	return strings.Contains(image, "://")
 }
 
 // isFile reports whether path is a regular file the server can see.
@@ -102,6 +108,13 @@ func isFile(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// packageName returns the package-name part of an entry, dropping a
+// `name_version` pin's version. A version begins with a digit (an epoch is
+// numeric too), so a suffix that doesn't is part of the name itself —
+// createrepo_c is one package, not createrepo pinned to version "c".
+//
+// Used only to match entries by package name; nothing here rewrites what the
+// user chose.
 func packageName(entry string) string {
 	i := strings.Index(entry, "_")
 	if i <= 0 || i == len(entry)-1 {
@@ -263,7 +276,12 @@ func buildDeltaWithBaseline(parentTemplate string, parentImage config.ImageInfo,
 		if parentBaseline.Source != nil {
 			src = *parentBaseline.Source
 		}
-		src.Path, src.URL = sel.BaseImage, ""
+		// A source sets exactly one of path or url.
+		if isBaseImageURL(sel.BaseImage) {
+			src.Path, src.URL = "", sel.BaseImage
+		} else {
+			src.Path, src.URL = sel.BaseImage, ""
+		}
 		b.Source = &src
 		d.Baseline = &b
 	}
