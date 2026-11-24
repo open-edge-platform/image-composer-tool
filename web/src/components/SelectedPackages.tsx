@@ -37,6 +37,10 @@ const noResolver: VersionResolver = {
 
 const noLockedRepos = new Set<string>()
 
+// Package names and versions have no spaces to break at, and the rail is
+// narrow, so they wrap wherever they must rather than being cut off.
+const WRAP = '[overflow-wrap:anywhere]'
+
 // SelectedPackages is the right rail, "Changes": how the user's packages
 // differ from the matched template. Added packages are grouped by the
 // repository they came from; Modified lists template packages given another
@@ -148,33 +152,32 @@ export function SelectedPackages({
                     {labelFor(repoId)}
                   </div>
                   {groups.get(repoId)!.map((p) => (
-                    <div key={p.name} className="flex items-center justify-between gap-2 px-3 py-1">
-                      <span
-                        className="min-w-0 flex-1 truncate text-[12px] text-[#0071c5]"
-                        title={p.name}
-                      >
-                        {p.name}
-                      </span>
-                      {p.version === '' ? (
-                        liveResolved[p.name] ? (
-                          <VersionBadge
-                            version={liveResolved[p.name].version}
-                            floating
-                            title={`currently resolves to ${liveResolved[p.name].version} from ${labelFor(liveResolved[p.name].repository)} (unpinned)`}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => resolveVersion(p.name)}
-                            disabled={resolvingNames.has(p.name)}
-                            className="shrink-0 text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
-                          >
-                            {resolvingNames.has(p.name) ? 'Resolving…' : 'Resolve'}
-                          </button>
-                        )
-                      ) : (
-                        <VersionBadge version={p.version} floating={false} title={`pinned to ${p.version} from ${labelFor(p.repo)}`} />
-                      )}
+                    <div key={p.name} className="flex items-start gap-2 px-3 py-1">
+                      <div className="min-w-0 flex-1">
+                        <span className={`block text-[12px] text-[#0071c5] ${WRAP}`}>{p.name}</span>
+                        <div className="mt-0.5">
+                          {p.version === '' ? (
+                            liveResolved[p.name] ? (
+                              <VersionBadge
+                                version={liveResolved[p.name].version}
+                                floating
+                                title={`currently resolves to ${liveResolved[p.name].version} from ${labelFor(liveResolved[p.name].repository)} (unpinned)`}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => resolveVersion(p.name)}
+                                disabled={resolvingNames.has(p.name)}
+                                className="shrink-0 text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
+                              >
+                                {resolvingNames.has(p.name) ? 'Resolving…' : 'Resolve'}
+                              </button>
+                            )
+                          ) : (
+                            <VersionBadge version={p.version} floating={false} title={`pinned to ${p.version} from ${labelFor(p.repo)}`} />
+                          )}
+                        </div>
+                      </div>
                       <button
                         type="button"
                         onClick={() => undo(p.name)}
@@ -194,7 +197,7 @@ export function SelectedPackages({
               {modified.map((p) => (
                 <Item key={p.name} name={p.name} onUndo={() => undo(p.name)} undoLabel={`Undo change to ${p.name}`}>
                   <span
-                    className="shrink-0 font-mono text-[10px] text-slate-500"
+                    className={`font-mono text-[10px] text-slate-500 ${WRAP}`}
                     title={`Template: ${templateVersion(p.name)} · Yours: ${p.version || 'unpinned'}`}
                   >
                     {templateVersion(p.name)} → <span className="font-semibold text-[#0071c5]">{p.version || 'unpinned'}</span>
@@ -246,14 +249,13 @@ function Item({
   children?: ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 px-3 py-1">
-      <span
-        className={'min-w-0 flex-1 truncate text-[12px] ' + (struck ? 'text-slate-500 line-through' : 'text-[#0071c5]')}
-        title={name}
-      >
-        {name}
-      </span>
-      {children}
+    <div className="flex items-start gap-2 px-3 py-1">
+      <div className="min-w-0 flex-1">
+        <span className={`block text-[12px] ${WRAP} ` + (struck ? 'text-slate-500 line-through' : 'text-[#0071c5]')}>
+          {name}
+        </span>
+        {children && <div className="mt-0.5">{children}</div>}
+      </div>
       <button
         type="button"
         onClick={onUndo}
@@ -274,11 +276,11 @@ function Item({
 // mono version number in a pill.
 function VersionBadge({ version, floating, title }: { version: string; floating: boolean; title: string }) {
   return (
-    <span className="flex shrink-0 items-center gap-1">
+    <span className="flex flex-wrap items-center gap-1">
       {floating && <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">unpinned</span>}
       <span
         className={
-          'rounded-full px-1.5 py-0.5 font-mono text-[10px] font-medium ' +
+          `rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium ${WRAP} ` +
           (floating ? 'border border-dashed border-[#0071c5] text-[#0071c5]' : 'bg-[#e6f2fa] text-[#0071c5]')
         }
         title={title}
