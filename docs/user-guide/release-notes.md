@@ -90,16 +90,18 @@
   relative paths resolve the same way, and removes it when the build is over.
   The build's history entry shows its use case as usual, and Retry rebuilds the
   same edited template.
-- The Web UI's Basic tab offers two Best Known Configuration (BKC) use cases:
-  **Platform Enablement - Upstream BKC** and **Platform Enablement - Ubuntu LTS
-  BKC**. They ask for the platform first, then a **Mainline Kernel Version**
-  or an **HWE Kernel Version** in place of a SKU. Upstream BKC 7.3 builds the
-  Nova Lake Ubuntu 26.04 overlay image with the Intel 7.3 kernel, which was the
-  Upstream BKC SKU under Platform Enablement. The
-  other kernel versions, and the Ubuntu LTS BKC use case, are listed but grayed
-  out until their templates exist. Two new optional manifest fields on a use
-  case drive this: `skuLabel` names its SKU dropdown, and `platformFirst` asks
-  for the platform before it.
+- The Web UI's **Platform Enablement** use case names its second dropdown
+  **BKC Type**: **Base Platform Minimal Desktop**, **Base Platform Minimal
+  Server**, **Upstream BKC** and **Ubuntu LTS BKC** (grayed out until its
+  templates exist). Upstream BKC then asks for a **Mainline Kernel Version** and
+  Ubuntu LTS BKC for an **HWE Kernel Version**, after the platform and OS.
+  Upstream BKC 7.3 builds the Nova Lake Ubuntu 26.04 overlay image with the
+  Intel 7.3 kernel; 7.0.14, 7.1.13 and 7.2.11 are listed but grayed out. In the
+  manifest, a combination's new optional `kernel` picks among combinations that
+  differ only by kernel (and the server now matches on it), a SKU's
+  `kernelLabel` names that dropdown, `kernels` gives the versions their display
+  names, and a use case's `skuLabel` names its SKU dropdown. Use cases can also
+  set `platformFirst` to ask for the platform before the SKU.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time
