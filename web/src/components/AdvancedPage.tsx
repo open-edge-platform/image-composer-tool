@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, encodePackage, skuLabelFor } from '../store'
 import { AdvancedModeSwitch } from './AdvancedModeSwitch'
+import { UndoRedo } from './UndoRedo'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -520,6 +521,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <AdvancedModeSwitch />
+
+      <div className="mb-2 flex justify-end">
+        <UndoRedo />
+      </div>
 
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
