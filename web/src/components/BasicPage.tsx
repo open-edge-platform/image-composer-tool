@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadeOrder, cascadingOptions, skuLabelFor } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, skuLabelFor } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
@@ -231,9 +231,9 @@ export function BasicPage({
                 (e.g. standard vs real-time) for the current selection. */}
             {opts.kernels.length > 0 && (
               <Select
-                label="Kernel"
+                label={kernelLabelFor(manifest, selection.sku)}
                 labelSuffix={REQUIRED}
-                placeholder="-- Select Kernel --"
+                placeholder={`-- Select ${kernelLabelFor(manifest, selection.sku)} --`}
                 value={selection.kernel}
                 options={opts.kernels}
                 disabled={!selection.os}

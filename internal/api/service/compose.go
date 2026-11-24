@@ -26,6 +26,9 @@ type Selection struct {
 	Platform  string
 	OS        string
 	ImageType string
+	// Kernel picks among combinations that differ only by kernel (see
+	// Combination.Kernel). Empty when the selection offers none.
+	Kernel string
 
 	// BaseImage overrides an overlay template's baseline.source.path: the
 	// baseline image, as a path on the server. Empty means "not overridden".
@@ -351,6 +354,9 @@ type ComposeSummary struct {
 	PartitionTable string
 	Hostname       string
 
+	// The selection's kernel, when it offers one (see Combination.Kernel).
+	Kernel string `json:",omitempty"`
+
 	// Overlay-mode only: the baseline image the packages are layered onto.
 	BaseImage string
 	// BaseImageMissing is true when BaseImage is a local path that isn't a
@@ -496,7 +502,7 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	}
 
-	tmpl := s.manifest.findTemplate(sel.Vertical, sel.SKU, sel.Platform, sel.OS, sel.ImageType)
+	tmpl := s.manifest.findTemplate(sel.Vertical, sel.SKU, sel.Platform, sel.OS, sel.Kernel, sel.ImageType)
 	if tmpl == "" {
 		return nil, newError(http.StatusBadRequest, "NO_MATCH",
 			"no template maps to the selected combination")
@@ -700,6 +706,7 @@ func buildComposeSummary(sel Selection, merged *config.ImageTemplate) ComposeSum
 		Platform:  sel.Platform,
 		OS:        sel.OS,
 		ImageType: sel.ImageType,
+		Kernel:    sel.Kernel,
 
 		ImageName:      merged.Image.Name,
 		ImageVersion:   merged.Image.Version,

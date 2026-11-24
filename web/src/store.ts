@@ -400,6 +400,12 @@ export function labelFor(options: { id: string; displayName: string }[], id: str
   return options.find((o) => o.id === id)?.displayName ?? id
 }
 
+// The label of the kernel dropdown under a SKU: the SKU's own kernelLabel
+// (e.g. "Mainline Kernel Version"), or "Kernel".
+export function kernelLabelFor(manifest: Manifest | null, sku: string): string {
+  return manifest?.skus.find((s) => s.id === sku)?.kernelLabel || 'Kernel'
+}
+
 // cascadeOrder is the order the selection dropdowns cascade in: vertical → sku →
 // platform → os → kernel → imageType, or with platform before sku for a use
 // case that sets platformFirst. Each field's options depend on the ones before
@@ -506,7 +512,11 @@ export function cascadingOptions(
     platform: selection.platform,
     os: selection.os,
   })
-  const kernelLabels: Record<string, string> = { standard: 'Standard', rt: 'Real-Time' }
+  const kernelLabels: Record<string, string> = {
+    standard: 'Standard',
+    rt: 'Real-Time',
+    ...Object.fromEntries((manifest.kernels ?? []).map((k) => [k.id, k.displayName])),
+  }
   const kernels = kernelIds.map(({ id, available }) => ({
     id,
     label: kernelLabels[id] ?? id,

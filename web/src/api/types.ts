@@ -44,20 +44,28 @@ export interface Combination {
   sku?: string
   platform: string
   os: string
-  // Optional kernel variant (e.g. "standard" | "rt"). Present only when a
-  // vertical/platform/OS offers a real-time template variant; the UI gates the
-  // kernel selector on its presence rather than hardcoding RT support.
+  // Optional kernel choice: a variant ("standard" | "rt") or a version (a BKC
+  // type's kernel versions). Present only where the selection offers one; the
+  // UI shows the kernel selector only then.
   kernel?: string
   imageType: string
   template: string
 }
 
+// A SKU. kernelLabel names the kernel dropdown its combinations offer, such
+// as "Mainline Kernel Version".
+export interface Sku extends Option {
+  kernelLabel?: string
+}
+
 export interface Manifest {
   combinations: Combination[]
   verticals: Vertical[]
-  skus: Option[]
+  skus: Sku[]
   platforms: Option[]
   targets: Target[]
+  // Display names for the kernel ids combinations use.
+  kernels?: Option[]
 }
 
 export interface ComposeRequest {
@@ -148,6 +156,8 @@ export interface ComposeSummary {
   platform: string
   os: string
   imageType: string
+  // The selection's kernel, when it offers one.
+  kernel?: string
   // Template-derived
   imageName: string
   imageVersion: string

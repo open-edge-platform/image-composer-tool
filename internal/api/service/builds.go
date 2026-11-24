@@ -955,7 +955,7 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		return "", "", nil, fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
 	}
 	c := req.Compose
-	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
+	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.Kernel, c.ImageType)
 	if tmpl == "" {
 		return "", "", nil, fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
 	}
