@@ -19,12 +19,23 @@ var manifestFS embed.FS
 
 // Combination maps one UI selection to a pre-authored template file.
 type Combination struct {
-	Vertical  string `json:"vertical"`
-	SKU       string `json:"sku,omitempty"`
-	Platform  string `json:"platform"`
-	OS        string `json:"os"`
+	Vertical string `json:"vertical"`
+	SKU      string `json:"sku,omitempty"`
+	Platform string `json:"platform"`
+	OS       string `json:"os"`
+	// Kernel picks among combinations that differ only by kernel, such as the
+	// kernel versions of a BKC type. Empty for a combination that offers none.
+	Kernel    string `json:"kernel,omitempty"`
 	ImageType string `json:"imageType"`
 	Template  string `json:"template"`
+}
+
+// SKU is a SKU option. KernelLabel names the kernel dropdown its combinations
+// offer, such as "Mainline Kernel Version"; empty means "Kernel".
+type SKU struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	KernelLabel string `json:"kernelLabel,omitempty"`
 }
 
 // Option is a generic {id, displayName} pair used for dropdown labels.
@@ -55,9 +66,12 @@ type Target struct {
 type Manifest struct {
 	Combinations []Combination `json:"combinations"`
 	Verticals    []Vertical    `json:"verticals"`
-	SKUs         []Option      `json:"skus"`
+	SKUs         []SKU         `json:"skus"`
 	Platforms    []Option      `json:"platforms"`
 	Targets      []Target      `json:"targets"`
+	// Kernels labels the kernel ids combinations use. Optional: an id with no
+	// entry is shown as is.
+	Kernels []Option `json:"kernels,omitempty"`
 }
 
 // Manifest returns the loaded configuration manifest.
@@ -124,16 +138,17 @@ func loadManifest(path string) (*Manifest, error) {
 	return &m, nil
 }
 
-// findTemplate returns the template filename for a given selection, or "" if no
+// findTemplate returns the template filename for a given selection (the
+// kernel matched exactly, empty for a combination that offers none), or "" if no
 // matching combination exists. When sku is empty it acts as a wildcard, but only
 // resolves if the match is unambiguous — multiple combinations differing only by
 // SKU return "" rather than an order-dependent guess.
-func (m *Manifest) findTemplate(vertical, sku, platform, os, imageType string) string {
+func (m *Manifest) findTemplate(vertical, sku, platform, os, kernel, imageType string) string {
 	var match string
 	found := 0
 	for _, c := range m.Combinations {
 		if c.Vertical == vertical && c.Platform == platform &&
-			c.OS == os && c.ImageType == imageType &&
+			c.OS == os && c.Kernel == kernel && c.ImageType == imageType &&
 			(sku == "" || c.SKU == sku) {
 			if sku != "" {
 				return c.Template // exact SKU match is always unambiguous

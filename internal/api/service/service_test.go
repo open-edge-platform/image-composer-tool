@@ -24,7 +24,7 @@ func testManifest() *Manifest {
 			{Vertical: "retail", SKU: "dv", Platform: "arl", OS: "debian13", ImageType: "iso", Template: "retail.yml"},
 		},
 		Verticals: []Vertical{{ID: "robotics", DisplayName: "Robotics", SKULabel: "Robot Kit"}, {ID: "retail", DisplayName: "Retail Edge"}},
-		SKUs:      []Option{{ID: "amr", DisplayName: "AMR"}, {ID: "dv", DisplayName: "Desktop Virtualization"}},
+		SKUs:      []SKU{{ID: "amr", DisplayName: "AMR"}, {ID: "dv", DisplayName: "Desktop Virtualization"}},
 		Platforms: []Option{{ID: "wcl", DisplayName: "WCL"}, {ID: "arl", DisplayName: "ARL"}},
 		Targets:   []Target{{ID: "ubuntu24", DisplayName: "Ubuntu 24.04", OS: "ubuntu", Arch: "x86_64"}},
 	}
@@ -87,7 +87,7 @@ func TestEmbeddedManifestUnavailableCombinations(t *testing.T) {
 	for _, c := range m.Combinations {
 		if c.Template == "" {
 			unavailable++
-			if got := m.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType); got != "" {
+			if got := m.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.Kernel, c.ImageType); got != "" {
 				t.Errorf("unavailable combo %+v resolved to %q, want empty", c, got)
 			}
 			continue
@@ -125,34 +125,49 @@ func TestEmbeddedManifestUnavailableCombinations(t *testing.T) {
 }
 
 func TestEmbeddedManifestBKCKernelVersions(t *testing.T) {
-	// The BKC use cases offer a kernel version where other use cases offer a
-	// SKU: the version is the sku id, and the use case's skuLabel renames the
-	// dropdown.
+	// The BKC types are SKUs of Platform Enablement, whose second dropdown is
+	// named "BKC Type"; each offers kernel versions, under the dropdown its
+	// kernelLabel names.
 	m, err := loadManifest("")
 	if err != nil {
 		t.Fatalf("loadManifest embedded: %v", err)
 	}
-	labels := map[string]string{}
 	for _, v := range m.Verticals {
-		labels[v.ID] = v.SKULabel
-		if v.PlatformFirst != (v.SKULabel != "") {
-			t.Errorf("vertical %q platformFirst = %t, want it set exactly on the BKC use cases", v.ID, v.PlatformFirst)
+		if v.ID == "platform-enablement" && v.SKULabel != "BKC Type" {
+			t.Errorf("platform-enablement skuLabel = %q, want BKC Type", v.SKULabel)
 		}
+		if v.PlatformFirst {
+			t.Errorf("vertical %q asks for the platform first; none should now", v.ID)
+		}
+	}
+	kernelLabels := map[string]string{}
+	for _, s := range m.SKUs {
+		kernelLabels[s.ID] = s.KernelLabel
 	}
 	for id, want := range map[string]string{
-		"upstream-bkc":        "Mainline Kernel Version",
-		"ubuntu-lts-bkc":      "HWE Kernel Version",
-		"platform-enablement": "",
+		"upstream-bkc":   "Mainline Kernel Version",
+		"ubuntu-lts-bkc": "HWE Kernel Version",
+		"edgepack":       "",
 	} {
-		if got := labels[id]; got != want {
-			t.Errorf("vertical %q skuLabel = %q, want %q", id, got, want)
+		if got := kernelLabels[id]; got != want {
+			t.Errorf("sku %q kernelLabel = %q, want %q", id, got, want)
 		}
 	}
-	if got := m.findTemplate("upstream-bkc", "mainline-7.3", "nvl", "ubuntu26", "raw"); got != "ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml" {
-		t.Errorf("mainline 7.3 template = %q, want the NVL overlay", got)
+	if got := m.findTemplate("platform-enablement", "upstream-bkc", "nvl", "ubuntu26", "mainline-7.3", "raw"); got != "ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml" {
+		t.Errorf("Upstream BKC 7.3 template = %q, want the NVL overlay", got)
 	}
-	if got := m.findTemplate("upstream-bkc", "mainline-7.0.14", "nvl", "ubuntu26", "raw"); got != "" {
-		t.Errorf("planned mainline 7.0.14 resolved to %q, want empty", got)
+	if got := m.findTemplate("platform-enablement", "upstream-bkc", "nvl", "ubuntu26", "mainline-7.0.14", "raw"); got != "" {
+		t.Errorf("planned Upstream BKC 7.0.14 resolved to %q, want empty", got)
+	}
+	// Every kernel a combination uses has a display name.
+	names := map[string]bool{}
+	for _, k := range m.Kernels {
+		names[k.ID] = true
+	}
+	for _, c := range m.Combinations {
+		if c.Kernel != "" && !names[c.Kernel] {
+			t.Errorf("kernel %q has no label under kernels", c.Kernel)
+		}
 	}
 }
 
@@ -177,15 +192,15 @@ func TestLoadManifestFromFileAndError(t *testing.T) {
 
 func TestFindTemplate(t *testing.T) {
 	m := testManifest()
-	if got := m.findTemplate("robotics", "amr", "wcl", "ubuntu24", "iso"); got != "robotics.yml" {
+	if got := m.findTemplate("robotics", "amr", "wcl", "ubuntu24", "", "iso"); got != "robotics.yml" {
 		t.Errorf("exact match = %q, want robotics.yml", got)
 	}
 	// SKU empty in request matches regardless of combination SKU.
-	if got := m.findTemplate("robotics", "", "wcl", "ubuntu24", "iso"); got != "robotics.yml" {
+	if got := m.findTemplate("robotics", "", "wcl", "ubuntu24", "", "iso"); got != "robotics.yml" {
 		t.Errorf("empty-sku match = %q, want robotics.yml", got)
 	}
 	// No match.
-	if got := m.findTemplate("robotics", "amr", "ptl", "ubuntu24", "iso"); got != "" {
+	if got := m.findTemplate("robotics", "amr", "ptl", "ubuntu24", "", "iso"); got != "" {
 		t.Errorf("no-match = %q, want empty", got)
 	}
 }
@@ -197,11 +212,11 @@ func TestFindTemplateAmbiguousSKU(t *testing.T) {
 		{Vertical: "v", SKU: "a", Platform: "p", OS: "o", ImageType: "raw", Template: "a.yml"},
 		{Vertical: "v", SKU: "b", Platform: "p", OS: "o", ImageType: "raw", Template: "b.yml"},
 	}}
-	if got := m.findTemplate("v", "", "p", "o", "raw"); got != "" {
+	if got := m.findTemplate("v", "", "p", "o", "", "raw"); got != "" {
 		t.Errorf("ambiguous no-SKU match = %q, want empty", got)
 	}
 	// With the SKU specified it resolves unambiguously.
-	if got := m.findTemplate("v", "b", "p", "o", "raw"); got != "b.yml" {
+	if got := m.findTemplate("v", "b", "p", "o", "", "raw"); got != "b.yml" {
 		t.Errorf("explicit-SKU match = %q, want b.yml", got)
 	}
 }
@@ -213,7 +228,7 @@ func TestFindTemplateUnavailableCombination(t *testing.T) {
 	m := &Manifest{Combinations: []Combination{
 		{Vertical: "fed-aero", SKU: "drone-image-bkc", Platform: "ptl", OS: "ubuntu26-server", ImageType: "raw", Template: ""},
 	}}
-	if got := m.findTemplate("fed-aero", "drone-image-bkc", "ptl", "ubuntu26-server", "raw"); got != "" {
+	if got := m.findTemplate("fed-aero", "drone-image-bkc", "ptl", "ubuntu26-server", "", "raw"); got != "" {
 		t.Errorf("unavailable combo = %q, want empty", got)
 	}
 }

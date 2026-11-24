@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useStore, cascadeOrder, cascadingOptions, encodePackage, skuLabelFor } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, encodePackage, skuLabelFor } from '../store'
 import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import type { Selection } from '../store'
 import { api } from '../api/client'
@@ -163,7 +163,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         [skuLabelFor(manifest, selection.vertical), opts.skus.length > 0 && !selection.sku],
         ['Platform', !selection.platform],
         ['Operating System', !selection.os],
-        ['Kernel', opts.kernels.length > 0 && !selection.kernel],
+        [kernelLabelFor(manifest, selection.sku), opts.kernels.length > 0 && !selection.kernel],
         ['Image Name', !imageName.trim()],
       ] as [string, boolean][]).filter(([, missing]) => missing).map(([label]) => label)
     : []
@@ -901,6 +901,7 @@ function TargetStep({
   // Undefined for any other template, which has no base image.
   baseImageIssue?: string | null
 }) {
+  const manifest = useStore((s) => s.manifest)
   return (
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
@@ -940,9 +941,9 @@ function TargetStep({
       />
       {opts.kernels.length > 0 && (
         <Select
-          label="Kernel"
+          label={kernelLabelFor(manifest, selection.sku)}
           labelSuffix={REQUIRED}
-          placeholder="-- Select Kernel --"
+          placeholder={`-- Select ${kernelLabelFor(manifest, selection.sku)} --`}
           value={selection.kernel}
           options={opts.kernels}
           disabled={!selection.os}

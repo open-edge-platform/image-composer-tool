@@ -958,7 +958,7 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if c.TemplateYAML != "" {
 		return "", "", nil, fmt.Errorf("%w: building an opened template is not supported yet", errBadBuildRequest)
 	}
-	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
+	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.Kernel, c.ImageType)
 	if tmpl == "" {
 		return "", "", nil, fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
 	}
