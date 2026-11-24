@@ -596,7 +596,8 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
   // Not an error — the builder can produce an image without an explicit
   // artifact list (ISO templates carry none) — but worth saying out loud when
   // the user is looking at a step that offers the control.
-  if (model.partitions.length === 0) {
+  // An overlay keeps the base image's partitions, so it defines none here.
+  if (model.partitions.length === 0 && !ctx.overlay) {
     warnings.push('No partitions are defined.')
   }
 

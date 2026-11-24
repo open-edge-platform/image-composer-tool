@@ -18,6 +18,7 @@ import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
+import { BaseImageField } from './BaseImageField'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
@@ -431,7 +432,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         !!composed?.summary.baseImageMissing && composed.summary.baseImage === baseImage.trim(),
       )
     : null
-  const BASE_IMAGE_ERROR = 'Fix the base image on the Disk step before composing.'
+  const BASE_IMAGE_ERROR = 'Set the base image on the Target step before composing.'
 
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
@@ -487,15 +488,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
   }
 
+  // A base image still wrong at Compose time is asked for in the dialog, next
+  // to the logins, rather than sending the user back to fix it.
+  const [askBaseImage, setAskBaseImage] = useState(false)
   const onComposeClick = () => {
     if (diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
       return
     }
-    if (baseImageIssue) {
-      setError(BASE_IMAGE_ERROR)
-      return
-    }
+    setAskBaseImage(!!baseImageIssue)
     if (overlayPackages.length > 0) {
       setError(OVERLAY_PACKAGES_ERROR)
       return
@@ -723,6 +724,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             setSel={setSel}
             imageName={imageName}
             setImageName={setImageName}
+            baseImageIssue={overlay ? baseImageIssue : undefined}
           />
         )}
 
@@ -738,7 +740,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           />
         )}
 
-        {step === 2 && <DiskStep overlay={overlay} baseImageIssue={baseImageIssue} />}
+        {step === 2 && <DiskStep overlay={overlay} />}
 
         {step === 3 && (
           <div>
@@ -858,6 +860,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         oepInstallerToken={oepInstallerToken}
         onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
+        askBaseImage={askBaseImage}
+        baseImageIssue={baseImageIssue}
         busy={busy}
         buildInProgress={buildInProgress}
         error={error}
@@ -882,6 +886,7 @@ function TargetStep({
   setSel,
   imageName,
   setImageName,
+  baseImageIssue,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
   // Shown above the selection, such as Author mode's Open Template.
@@ -892,6 +897,9 @@ function TargetStep({
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
   setImageName: (v: string) => void
+  // For an overlay template: what's wrong with its base image, or null.
+  // Undefined for any other template, which has no base image.
+  baseImageIssue?: string | null
 }) {
   return (
     <div>
@@ -960,6 +968,11 @@ function TargetStep({
         Defaults to the matched template's image name; once you edit it, your name
         is kept.
       </p>
+      {baseImageIssue !== undefined && (
+        <div className="mt-4">
+          <BaseImageField issue={baseImageIssue} />
+        </div>
+      )}
     </div>
   )
 }
