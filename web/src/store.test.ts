@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore, orphanedRepos, confirmRepoRelease } from './store'
 import { parseDiskFromYaml } from './lib/disk'
 import { minimalPtlPvRaw, roboticsJazzyIso } from './lib/fixtures'
@@ -285,5 +285,61 @@ describe('removed template packages', () => {
     useStore.getState().setPackageRemoved('vim', true)
     useStore.getState().setField('platform', 'ptl')
     expect(useStore.getState().removedPackages).toEqual([])
+  })
+})
+
+describe('undo and redo', () => {
+  const pkg = (name: string) => ({ name, version: '', repo: 'base' })
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    useStore.setState({ addedPackages: [], enabledRepos: [], imageName: 'base', imageNameEdited: false, undoSnapshot: null, redoSnapshot: null, lastEditAt: 0 })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('undoes the last change, and redoes it', () => {
+    useStore.getState().setPackage(pkg('vim'))
+    vi.setSystemTime(5000)
+    useStore.getState().setPackage(pkg('htop'))
+    useStore.getState().undo()
+    expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['vim'])
+    // One step only.
+    expect(useStore.getState().undoSnapshot).toBeNull()
+    useStore.getState().redo()
+    expect(useStore.getState().addedPackages.map((p) => p.name)).toEqual(['vim', 'htop'])
+    expect(useStore.getState().redoSnapshot).toBeNull()
+  })
+
+  it('undoes edits made in quick succession as one, such as typing a name', () => {
+    for (const [i, v] of ['m', 'my', 'my-img'].entries()) {
+      vi.setSystemTime(i * 200)
+      useStore.getState().setImageName(v)
+    }
+    useStore.getState().undo()
+    expect(useStore.getState()).toMatchObject({ imageName: 'base', imageNameEdited: false })
+  })
+
+  it('drops the redo once a new change is made', () => {
+    useStore.getState().setPackage(pkg('vim'))
+    useStore.getState().undo()
+    vi.setSystemTime(5000)
+    useStore.getState().setPackage(pkg('htop'))
+    expect(useStore.getState().redoSnapshot).toBeNull()
+  })
+
+  it('undoes removing a template package', () => {
+    useStore.setState({ removedPackages: [] })
+    useStore.getState().setPackageRemoved('vim', true)
+    useStore.getState().undo()
+    expect(useStore.getState().removedPackages).toEqual([])
+    useStore.getState().redo()
+    expect(useStore.getState().removedPackages).toEqual(['vim'])
+  })
+
+  it('forgets both when the template changes', () => {
+    useStore.getState().setPackage(pkg('vim'))
+    useStore.getState().setField('platform', 'ptl')
+    expect(useStore.getState().undoSnapshot).toBeNull()
+    expect(useStore.getState().redoSnapshot).toBeNull()
   })
 })
