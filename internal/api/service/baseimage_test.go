@@ -94,3 +94,28 @@ func TestBuildRefusesAMissingBaseImage(t *testing.T) {
 	}
 	assertNoLeakedDeltas(t, s.cfg.TemplatesDir)
 }
+
+func TestComposeTakesAnHTTPSBaseImageURL(t *testing.T) {
+	s := overlayService(t, "/path/to/ubuntu-26.04-base.raw")
+	sel := roboticsRaw
+	sel.BaseImage = "https://images.example.com/ubuntu-26.04-base.raw"
+	res, err := s.Compose(sel)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	// Written as baseline.source.url, the template's path dropped.
+	if !strings.Contains(res.DeltaYAML, "url: "+sel.BaseImage) || strings.Contains(res.DeltaYAML, "/path/to/") {
+		t.Errorf("delta doesn't swap the path for the URL:\n%s", res.DeltaYAML)
+	}
+	// A URL is downloaded at build time, so it isn't reported missing.
+	if res.Summary.BaseImage != sel.BaseImage || res.Summary.BaseImageMissing {
+		t.Errorf("summary base image = %q missing=%t", res.Summary.BaseImage, res.Summary.BaseImageMissing)
+	}
+
+	// The build's rules: https only, with a host.
+	for _, bad := range []string{"http://images.example.com/base.raw", "https://"} {
+		sel.BaseImage = bad
+		_, err := s.Compose(sel)
+		requireBadRequest(t, err)
+	}
+}
