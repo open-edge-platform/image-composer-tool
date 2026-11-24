@@ -11,8 +11,9 @@
 - The Web UI's Advanced tab handles templates built on a base image (overlay
   templates) better. For them only, a **Base Image** field appears under the
   selection on the Basic tab and the Advanced Target step: the path of the
-  installed RAW image on the server, seeded from the template. It says when
-  the path is empty, not absolute, or not on the server (naming the template's
+  installed RAW image on the server, or an https URL the build downloads,
+  seeded from the template. It says when the path is empty, not absolute, or
+  not on the server, or the URL isn't https (naming the template's
   `/path/to/…` placeholder when that's the one), and while it is wrong the
   Compose dialog asks for it too and won't compose. The Disk step no longer
   warns that an overlay defines no partitions. A changed
