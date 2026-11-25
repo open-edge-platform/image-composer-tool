@@ -6,7 +6,7 @@
 
 **New**:
 
-- **Undo last change** and **Redo**, beside **Back** at the bottom of the Web
+- **Undo last change** and **Redo**, at the top right of the step box in the Web
   UI's Advanced tab, take back the last change to packages, repositories, the
   disk layout, the image name or the base image, and put it back. One step
   each way; changes made in quick succession (typing a name, **Reset to
