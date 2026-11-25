@@ -125,8 +125,6 @@ systemConfig:
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
-    # intel-edge-base-realtime is the alternative base profile but is currently
-    # disabled for all OS variants upstream, so it is intentionally omitted here.
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra

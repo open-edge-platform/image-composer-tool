@@ -72,10 +72,11 @@ disk:
       end: "0"
       fsType: linux-swap
 
-# EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release; resolute here). Only one repository is needed: NPU, IPU and
-# edge-compute-essentials enablement is carried by intel-edge-base-standard
-# itself, so no separate NPU package or prerequisite repository is required.
+# EdgePack packages come from the Edge Pack repository (suite name follows
+# the host Ubuntu release; resolute here), pinned above the Ubuntu archive so apt
+# prefers its packages. The Intel graphics PPA snapshot supplies the GPU/compute
+# runtime (intel-gsc, intel-opencl-icd, intel-ocloc, intel-metrics-discovery,
+# libze*) that intel-edge-compute-extra and intel-edge-npu depend on.
 packageRepositories:
   # Firefox as a real .deb. Ubuntu's archive only ships a transitional
   # "firefox" package that installs the snap on first run, and the snap is
@@ -83,10 +84,10 @@ packageRepositories:
   # missing. Take Firefox from Mozilla's official APT repository and pin it
   # for the firefox package only.
   #
-  # Not the Mozilla Team PPA: its InRelease is signed with an rsa1024 key
-  # that Ubuntu 26.04's apt rejects, so the PPA left on the image makes every
-  # later `apt-get update` fail (which stopped the OEP Installer at its first
-  # apt step on first boot). Mozilla's key is RSA 2048, which 26.04 accepts.
+  # Not the Mozilla Team PPA: its InRelease is signed with an rsa1024 key.
+  # Ubuntu 26.04's apt already rejects that (minimum is rsa2048) and 24.04's
+  # apt lists rsa2048 as its next minimum, so the PPA left on the image would
+  # break `apt-get update`. Mozilla's key is RSA 2048.
   - codename: "mozilla"
     url: "https://packages.mozilla.org/apt"
     pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
@@ -95,15 +96,27 @@ packageRepositories:
     allowPackages:
       - firefox
 
-  # EdgePack base/add-on packages, public signed repository.
+  # Edge Pack 2026.3 external repository
+  # (https://github.com/open-edge-platform/edge-pack, release 2026.3). Signed with
+  # the Intel Software Development Products key, fingerprint
+  # E9BF0AFC46D6E8B7DA5882F1BAC6F0C353D04109.
   - codename: "resolute"
     url: "https://apt.repos.intel.com/edgepack"
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "stable"
+    priority: 1001
+
+  # Intel graphics PPA, pinned to a snapshot (prerequisite repository).
+  - codename: "resolute"
+    url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f"
+    component: "main"
 
 systemConfig:
+  # Live installer kernel pinned to the same version as the target kernel below;
+  # keep the two in step (see initrd/ for why).
   initramfs:
-    template: default-initrd-unattended-x86_64.yml
+    template: ../initrd/ubuntu26-x86_64-unattended-kernel-42.yml
 
   hostname: edgepack
 
@@ -135,12 +148,22 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    # ── EdgePack: mandatory base (core graphics/media + NPU/IPU + platform-enablement DKMS drivers) ──
+    # edge-gfx-dkms builds a host tool (xe_gen_wa_oob) and needs libc headers, but
+    # only depends on dkms. ICT installs packages in list order, so install
+    # libc6-dev before intel-edge-base-standard.
+    - libc6-dev
+    # ── EdgePack: mandatory base (core graphics/media + NPU + GPU compute + platform-enablement DKMS drivers) ──
+    # Also installs intel-edge-npu, intel-edge-compute-extra and edge-rapl-dkms (new in 2026.3).
     - intel-edge-base-standard
     # ── EdgePack: optional add-ons, shown enabled here for demonstration ──
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
+    - intel-edge-tsn # Time-sensitive networking (from the Edge Pack repo)
+    # IPU camera stack (also installs intel-mipi-gmsl-dkms, new in 2026.3): PTL only
+    # (not supported on WCL). Not part of intel-edge-base-standard because its
+    # install prompts interactively.
+    - intel-edge-ipu # Intel IPU enablement (from the Edge Pack repo)
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
@@ -178,6 +201,8 @@ systemConfig:
     - acpica-tools
     - lsscsi
     - i2c-tools
+    - thermald # Intel Dynamic Thermal Management daemon (thermald.service)
+    - upower # UPower D-Bus service; intel_lpmd segfaults at startup without org.freedesktop.UPower
     # Required for Docker's bridge/NAT networking — install-docker.sh
     # (first-boot provisioning) drops static Docker binaries with no apt
     # dependency resolution, so dockerd needs iptables present already.
@@ -201,16 +226,17 @@ systemConfig:
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
-    # Pinned to 7.0.0-38. edge-gfx-dkms 7.0 builds against these headers:
+    # Pinned to 7.0.0-42 (newer than the -31/-30 Edge Pack 2026.3 was validated
+    # with on Ubuntu 24.04/26.04). edge-gfx-dkms 7.0 builds against these headers:
     # its Makefile greps the installed intel_vsec.h to detect whether the
     # kernel's intel_vsec API takes a struct pci_dev or a struct device,
-    # and defines XE_VSEC_DEVICE_API for xe_vsec.c accordingly (verified
-    # against the real 7.0.0-38 headers). Installing exact package names
+    # and defines XE_VSEC_DEVICE_API for xe_vsec.c accordingly (checked
+    # against the 7.0.0-38 headers). Installing exact package names
     # still keeps a newer kernel from being pulled in, which DKMS could
     # fail to build for if a future kernel changes the API again.
     packages:
-      - linux-image-7.0.0-38-generic
-      - linux-headers-7.0.0-38-generic
+      - linux-image-7.0.0-42-generic
+      - linux-headers-7.0.0-42-generic
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
   # transitively. ICT builds them explicitly with `-k <target-kernel>` (never
@@ -271,6 +297,12 @@ systemConfig:
         final: /usr/local/sbin/platform-bootstrap.sh
         stage: first-boot
         order: 10
+
+  # Force NetworkManager as the active netplan renderer so nmcli accurately
+  # reports interface state; see 01-network-manager-all.yaml itself for why.
+  additionalFiles:
+    - local: additionalfiles/base-platform/01-network-manager-all.yaml
+      final: /etc/netplan/01-network-manager-all.yaml
 
   # Developer source archives and other artifacts are copied with additionalFiles.
   # additionalFiles:
