@@ -152,6 +152,8 @@ interface AppState {
   // Customize.
   setCapabilities: (c: Capabilities) => void
   setField: (key: keyof Selection, value: string) => void
+  // Selects a whole combination at once, as opening a saved template does.
+  selectCombination: (c: Combination) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
   // An overlay template's base image (baseline.source.path), seeded from the
@@ -332,44 +334,60 @@ export const useStore = create<AppState>((set) => {
         if (state.manifest) {
           autoFillCascade(state.manifest, selection)
         }
-        // Any selection change resolves to a (possibly) different template, so let
-        // the image name re-track the new default until edited again.
-        //
-        // Enabled repos and added packages are dropped only when the target OS
-        // actually changes, because repo ids (and the packages resolved from
-        // them) are scoped to a target — keeping them would leave an ubuntu24
-        // repo/package enabled under a Debian target. Unlike imageName, which
-        // re-seeds itself from the next compose response, there is no server-side
-        // default to fall back to, so empty is the only sane value. Comparing the
-        // post-cascade os (autoFillCascade above may refill it with the same
-        // value) means a SKU or platform tweak within one OS keeps the user's
-        // toggles.
-        //
-        // The disk layout is dropped on *any* selection change, unlike repos and
-        // packages: it is not a user pick scoped to a target, it is a copy of the
-        // matched template's own partition table, and a SKU or platform tweak can
-        // resolve to a different template. It is cleared outright rather than just
-        // unflagged, because leaving the previous template's partitions on screen
-        // until the next compose lands would show a layout that no longer applies.
-        const osChanged = selection.os !== state.selection.os
-        return {
-          selection,
-          imageNameEdited: false,
-          baseImage: '',
-          baseImageEdited: false,
-          // Edits for the previous template mean nothing for this one.
-          undoSnapshot: null,
-          redoSnapshot: null,
-          disk: null,
-          diskEdited: false,
-          diskSeed: null,
-          // Removals name the previous template's packages.
-          removedPackages: [],
-          ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
-        }
+        return selectionChanged(state, selection)
       }),
+    selectCombination: (c) =>
+      set((state) =>
+        selectionChanged(state, {
+          vertical: c.vertical,
+          sku: c.sku ?? '',
+          platform: c.platform,
+          os: c.os,
+          kernel: c.kernel ?? '',
+          imageType: c.imageType,
+        }),
+      ),
   }
 })
+
+// selectionChanged is the state after the selection becomes `selection`.
+function selectionChanged(state: AppState, selection: Selection): Partial<AppState> {
+  // Any selection change resolves to a (possibly) different template, so let
+  // the image name re-track the new default until edited again.
+  //
+  // Enabled repos and added packages are dropped only when the target OS
+  // actually changes, because repo ids (and the packages resolved from
+  // them) are scoped to a target — keeping them would leave an ubuntu24
+  // repo/package enabled under a Debian target. Unlike imageName, which
+  // re-seeds itself from the next compose response, there is no server-side
+  // default to fall back to, so empty is the only sane value. Comparing the
+  // post-cascade os (setField's autoFillCascade may refill it with the same
+  // value) means a SKU or platform tweak within one OS keeps the user's
+  // toggles.
+  //
+  // The disk layout is dropped on *any* selection change, unlike repos and
+  // packages: it is not a user pick scoped to a target, it is a copy of the
+  // matched template's own partition table, and a SKU or platform tweak can
+  // resolve to a different template. It is cleared outright rather than just
+  // unflagged, because leaving the previous template's partitions on screen
+  // until the next compose lands would show a layout that no longer applies.
+  const osChanged = selection.os !== state.selection.os
+  return {
+    selection,
+    imageNameEdited: false,
+    baseImage: '',
+    baseImageEdited: false,
+    // Edits for the previous template mean nothing for this one.
+    undoSnapshot: null,
+    redoSnapshot: null,
+    disk: null,
+    diskEdited: false,
+    diskSeed: null,
+    // Removals name the previous template's packages.
+    removedPackages: [],
+    ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
+  }
+}
 
 // The state the user edits, which undo and redo restore.
 const EDIT_KEYS = [

@@ -28,6 +28,9 @@ workspace/
 # child's own directory) and removed once resolved/built. Should never be
 # committed if one is ever left behind by a crashed server.
 image-templates/.ict-adv-*.yml
+# Templates opened in the web UI's Author mode, written beside the template
+# they are based on while a compose runs.
+image-templates/**/.ict-open-*.yml
 
 # GitHub token for docker-compose.yml's oep_installer_token secret
 /oep-installer-token

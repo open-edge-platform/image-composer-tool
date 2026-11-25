@@ -6,6 +6,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -412,6 +413,33 @@ func hasErrorIssue(issues []validate.Issue) bool {
 		}
 	}
 	return false
+}
+
+// openTemplate writes a template the user opened in Author mode beside the
+// matched one (tmpl, at path), so relative paths in it resolve as they do for
+// the matched template. It returns the written file's path, its name relative
+// to TemplatesDir (what a delta extends), and a cleanup func that removes it.
+func (s *Service) openTemplate(tmpl, path, text string) (string, string, func(), error) {
+	if !s.cfg.Authoring {
+		return "", "", nil, newError(http.StatusForbidden, "FORBIDDEN",
+			"opening a template needs the authoring capability")
+	}
+	var top map[string]any
+	if err := yaml.Unmarshal([]byte(text), &top); err != nil {
+		return "", "", nil, newError(http.StatusBadRequest, "BAD_REQUEST",
+			"the opened template is not valid YAML: "+err.Error())
+	}
+	if _, ok := top["extends"]; ok {
+		return "", "", nil, newError(http.StatusBadRequest, "BAD_REQUEST",
+			"the opened template uses extends, which Author mode doesn't support yet")
+	}
+	name := ".ict-open-" + uuid.NewString() + ".yml"
+	full := filepath.Join(filepath.Dir(path), name)
+	if err := os.WriteFile(full, []byte(text), 0o600); err != nil {
+		return "", "", nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID",
+			fmt.Sprintf("writing the opened template: %v", err))
+	}
+	return full, filepath.ToSlash(filepath.Join(filepath.Dir(tmpl), name)), func() { _ = os.Remove(full) }, nil
 }
 
 // writeDelta writes a generated delta into TemplatesDir under a server-chosen

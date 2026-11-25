@@ -75,6 +75,15 @@
   *old → new*) and, in Author mode, **Removed**. Each can be undone on its
   own. **Clear** is now **Reset to template defaults**, styled like the Disk
   step's, and also puts back removed packages.
+- **Open Template…** in the Web UI's Author mode reopens a template you saved,
+  so you can keep editing it. Saving a template now records the curated
+  template it was based on in a new optional `metadata.basedOn` field; opening
+  the file reads it back and selects the matching use case, platform and OS.
+  The opened file is used in place of the use case's own template (in the
+  Packages, Disk and Review steps and the **Changes** panel), and **Save**
+  writes back to it. A template without `basedOn` opens for the current
+  selection. `POST /templates/compose` accepts the opened template as
+  `templateYaml` when authoring is allowed; builds don't accept it yet.
 - The Web UI's **Platform Enablement** use case names its second dropdown
   **BKC Type**: **Base Platform Minimal Desktop**, **Base Platform Minimal
   Server**, **Upstream BKC** and **Ubuntu LTS BKC** (grayed out until its

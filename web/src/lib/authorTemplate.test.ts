@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest'
-import { applyAuthorEdits, authoringProblem, packageEntryName } from './authorTemplate'
+import { applyAuthorEdits, authoringProblem, basedOnOf, packageEntryName } from './authorTemplate'
 
 // The NVL BKC starter template as shipped, and a trimmed copy of the robotics
 // template's package list (comments, pins and a glob).
@@ -174,6 +174,37 @@ describe('authoringProblem', () => {
     expect(authoringProblem(nvl)).toBeNull()
     expect(authoringProblem('extends: base.yml\nimage:\n  name: x\n')).toMatch(/extends another one/)
     expect(authoringProblem(undefined)).toMatch(/did not send/)
+  })
+})
+
+describe('basedOn', () => {
+  const based = 'ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml'
+
+  it('adds metadata.basedOn to an existing metadata block, and reads it back', () => {
+    const out = applyAuthorEdits(nvl, { ...none, basedOn: based })
+    expect(basedOnOf(out)).toBe(based)
+    // One added line, nothing else touched.
+    expect(out.split('\n').length).toBe(nvl.split('\n').length + 1)
+    expect(out).toContain(`    - raw\n  basedOn: ${based}\n`)
+    // Saving again leaves it as it is.
+    expect(applyAuthorEdits(out, { ...none, basedOn: based })).toBe(out)
+  })
+
+  it('updates a different basedOn in place', () => {
+    const out = applyAuthorEdits(applyAuthorEdits(nvl, { ...none, basedOn: 'old.yml' }), { ...none, basedOn: based })
+    expect(basedOnOf(out)).toBe(based)
+    expect(out).not.toContain('old.yml')
+  })
+
+  it('starts a metadata block when the template has none', () => {
+    const t = '# Header comment\nimage:\n  name: x\n'
+    expect(applyAuthorEdits(t, { ...none, basedOn: based })).toBe(
+      `# Header comment\nmetadata:\n  basedOn: ${based}\n\nimage:\n  name: x\n`,
+    )
+  })
+
+  it('reads nothing from a template without it', () => {
+    expect(basedOnOf(nvl)).toBeUndefined()
   })
 })
 

@@ -59,6 +59,9 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.ImageName != nil {
 		sel.ImageName = *r.ImageName
 	}
+	if r.TemplateYaml != nil {
+		sel.TemplateYAML = *r.TemplateYaml
+	}
 	if r.BaseImage != nil {
 		sel.BaseImage = *r.BaseImage
 	}

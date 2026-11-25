@@ -75,6 +75,9 @@ export interface ComposeRequest {
   os: string
   kernel?: string
   imageType: string
+  // A template opened in Author mode, used in place of the matched template's
+  // own file. Omitted means use the matched file.
+  templateYaml?: string
   // Overrides an overlay template's base image (baseline.source.path), as an
   // absolute path on the server. Omitted means "not overridden".
   baseImage?: string
