@@ -467,6 +467,10 @@ type ComposeResult struct {
 	// OEPInstaller says whether the resolved template downloads OEP Installer
 	// files, so a caller can ask for a GitHub token for the build.
 	OEPInstaller OEPInstallerInfo
+	// TemplateYAML is the matched template file exactly as written, comments
+	// included, for Author mode to edit. Set only when the authoring
+	// capability is granted.
+	TemplateYAML string
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -596,6 +600,14 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		OEPInstaller: s.oepInstallerInfo(merged),
 	}
 	s.setTemplateRepos(res, sel.OS, merged.PackageRepositories)
+	if s.cfg.Authoring {
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil, newError(http.StatusInternalServerError, "TEMPLATE_STAT_FAILED",
+				fmt.Sprintf("reading matched template file: %v", rerr))
+		}
+		res.TemplateYAML = string(raw)
+	}
 
 	// With overrides in play, resolve the curated parent a second time so the
 	// caller can show the baseline beside the delta and attribute the difference

@@ -3,7 +3,7 @@
 
 import { useStore } from '../store'
 
-// UndoRedo undoes the last change to packages, repositories, the disk, the
+// UndoRedo undoes the last change to packages (removals included), repositories, the disk, the
 // image name or the base image, and redoes it. One step each way: changes
 // made in quick succession (typing a name, Reset) count as one.
 export function UndoRedo() {

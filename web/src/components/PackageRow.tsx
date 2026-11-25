@@ -22,12 +22,22 @@ interface PackageRowProps {
   // Renders a repository ID as its display name, for the "via ..." line and
   // the chip tooltips.
   repoLabelFor: (repoId: string) => string
-  // True for a package the matched template already ships. The checkbox
-  // stays checked+disabled either way — the extends merge unions package
+  // True for a package the matched template already ships. Outside Author
+  // mode (see removable) the checkbox stays checked+disabled either way — the extends merge unions package
   // lists, so unchecking it could never actually remove it — but version
   // chips stay live: picking a different one is a real, meaningful override
   // on top of what the template already includes, not a no-op.
   locked?: boolean
+  // Author mode, where the template itself is edited: a locked row's checkbox
+  // is live, and unchecking it removes the package from the template.
+  removable?: boolean
+  // A template package removed in Author mode. It shows as an unchecked row
+  // marked Removed; checking it again puts it back.
+  removed?: boolean
+  // Drops the user's version change on a template package, so the template's
+  // own entry applies again. Defaults to onToggle(false), which does the same
+  // outside Author mode; in Author mode unchecking removes the package instead.
+  onRevert?: () => void
   // The version already in effect from the template itself, when knowable
   // (see BaseLock in lib/baseLock.ts). Its matching chip renders disabled
   // rather than selectable, since picking it again wouldn't change anything.
@@ -49,7 +59,7 @@ interface PackageRowProps {
   // Switches the browsed repository, so "via" can link to the repository a
   // version comes from. Unset where there's nothing to switch.
   onBrowseRepo?: (repoId: string) => void
-  // Offered only by the Selected rail, for a row that's unpinned (a
+  // Offered only by the Changes rail, for a row that's unpinned (a
   // locked-but-floating template entry, or a floating user pick) and hasn't
   // been checked against the currently-checked repos yet. Fires a real
   // lookup so the row can show what it actually resolves to today instead
@@ -89,7 +99,10 @@ export function PackageRow({
   onToggle,
   onChooseVersion,
   repoLabelFor,
-  locked,
+  locked: lockedProp,
+  removable = false,
+  removed = false,
+  onRevert,
   currentVersion,
   currentIsFloating,
   pinnedFrom,
@@ -102,6 +115,8 @@ export function PackageRow({
   disabled = false,
   disabledReason,
 }: PackageRowProps) {
+  // A removed template package reads as a package the template doesn't ship.
+  const locked = !!lockedProp && !removed
   const checked = locked || selection != null
   // Whether the package is pinned, and the version a build would install:
   // the user's own pick first, since it overrides the template, then the
@@ -151,7 +166,7 @@ export function PackageRow({
   // Clicking the chip that's already the current pick removes it via the
   // same path the checkbox uses, rather than re-adding the identical entry
   // (a no-op) and leaving the only way back "not selected" a trip to the
-  // Selected rail. For a locked row this falls back to the template's own
+  // Changes rail. For a locked row this falls back to the template's own
   // (unoverridden) state rather than removing anything real. Latest is
   // repo-agnostic on purpose — it isn't pinned to any one repository's
   // version list, so a version match alone is enough regardless of which
@@ -162,10 +177,15 @@ export function PackageRow({
   // the template's own entry applies again. (Its own pin can't be unpinned
   // from here: an unpinned entry in a delta leaves the template's pin in
   // place.) Removing the package is the checkbox's job.
+  //
+  // Author mode edits the template itself, so there a pinned template package
+  // can be unpinned: choosing the selected chip again leaves it unpinned (or,
+  // where the template already leaves it unpinned, drops the override).
   const chooseVersion = (v: PackageVersion) => {
     const sameAsSelection = selection != null && selection.version === v.version && selection.repo === v.repository
     if (sameAsSelection) {
-      if (locked) onToggle(false)
+      if (locked && removable && !currentIsFloating) onChooseVersion({ version: '', repository: selection.repo })
+      else if (locked) (onRevert ?? (() => onToggle(false)))()
       else onChooseVersion({ version: '', repository: selection.repo })
       return
     }
@@ -187,10 +207,16 @@ export function PackageRow({
       <input
         type="checkbox"
         checked={checked}
-        disabled={locked || disabled}
+        disabled={(locked && !removable) || disabled}
         onChange={(e) => onToggle(e.target.checked)}
         className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
-        title={locked ? "Already included by the matched template — this can't be unchecked" : undefined}
+        title={
+          locked
+            ? removable
+              ? 'In the template. Uncheck it to remove it from the template.'
+              : "Already included by the matched template — this can't be unchecked"
+            : undefined
+        }
       />
       {/* A container, not a viewport, breakpoint: this row is shared by the
           full-width repo browser and narrower surfaces (the search dropdown,
@@ -203,6 +229,14 @@ export function PackageRow({
               <span className={'text-[13px] font-semibold ' + (locked ? 'text-slate-500' : 'text-slate-700')}>
                 {name}
               </span>
+              {removed && (
+                <span
+                  className="rounded bg-red-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-red-700"
+                  title="Removed from the template. Check it to put it back."
+                >
+                  Removed
+                </span>
+              )}
               {tag && (
                 <span className="rounded bg-slate-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   {tag}
@@ -293,7 +327,8 @@ export function PackageRow({
                 : undefined
             }
             overridden={overridden}
-            onRevert={() => onToggle(false)}
+            canUnpin={removable}
+            onRevert={onRevert ?? (() => onToggle(false))}
             resolvesTo={resolvesTo}
             disabled={disabled}
           />
@@ -322,6 +357,7 @@ function VersionChips({
   currentVersion,
   currentIsFloating,
   overridden = false,
+  canUnpin = false,
   onRevert,
   replaces,
   resolvesTo,
@@ -341,6 +377,9 @@ function VersionChips({
   // choice is then no longer redundant: choosing it drops the override
   // (onRevert), so the template's entry applies again.
   overridden?: boolean
+  // Author mode: the template's own pin chip is live, and choosing it unpins
+  // the package.
+  canUnpin?: boolean
   onRevert?: () => void
   // The template's own build, when its pinned version comes from another
   // repository: each chip here would replace it, so says so.
@@ -378,7 +417,7 @@ function VersionChips({
   }
 
   // Nothing to attribute an override to without at least one real repository
-  // — true for an unpinned row the Selected rail hasn't resolved yet
+  // — true for an unpinned row the Changes rail hasn't resolved yet
   // (versions is empty there by design), and would also catch the caller's
   // own empty-versions fallback synthesizing a single entry with a real
   // version but no repository.
@@ -397,7 +436,9 @@ function VersionChips({
         //
         // With an override in place it is the way back to the template's own
         // pin instead, so it drops the override rather than being disabled.
-        const isRedundant = isCurrent && !currentIsFloating && !overridden
+        const templatePin = isCurrent && !currentIsFloating && !overridden
+        const isRedundant = templatePin && !canUnpin
+        const unpinsTemplate = templatePin && canUnpin
         const revertsToTemplate = isCurrent && !currentIsFloating && overridden
         const selectedHere = pinned === v.version && pinnedRepo === v.repository
         return (
@@ -410,6 +451,8 @@ function VersionChips({
                 ? 'Resolve this package to enable picking a version'
                 : selectedHere
                   ? `${v.version} from ${repoLabelFor(v.repository)} — ${overridden ? 'your override; choose it again to drop it' : 'pinned; choose it again to unpin'}`
+                  : unpinsTemplate
+                    ? `${v.version} from ${repoLabelFor(v.repository)} — pinned by the template; choose it again to unpin`
                   : isRedundant
                 ? `${v.version} from ${repoLabelFor(v.repository)} — already pinned by the template`
                 : revertsToTemplate
@@ -427,14 +470,18 @@ function VersionChips({
                 onRevert?.()
                 return
               }
+              if (unpinsTemplate) {
+                onChoose({ version: '', repository: v.repository })
+                return
+              }
               onChoose(v)
             }}
-            aria-pressed={(pinned === v.version && pinnedRepo === v.repository) || isRedundant}
+            aria-pressed={(pinned === v.version && pinnedRepo === v.repository) || templatePin}
             className={chipClass({
               // The template's own pin reads as selected, the same as a pick
               // of the user's; it just isn't clickable, as choosing it changes
               // nothing.
-              active: (pinned === v.version && pinnedRepo === v.repository) || isRedundant,
+              active: (pinned === v.version && pinnedRepo === v.repository) || templatePin,
               disabled,
               dashed:
                 !!resolvesTo &&

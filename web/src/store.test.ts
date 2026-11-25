@@ -265,6 +265,29 @@ describe('confirmRepoRelease', () => {
   })
 })
 
+describe('removed template packages', () => {
+  beforeEach(() => {
+    useStore.setState({ removedPackages: [], addedPackages: [] })
+  })
+
+  it('records a removal, drops any version change, and puts the package back', () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '2', repo: 'base' }] })
+    useStore.getState().setPackageRemoved('vim', true)
+    useStore.getState().setPackageRemoved('vim', true)
+    expect(useStore.getState().removedPackages).toEqual(['vim'])
+    expect(useStore.getState().addedPackages).toEqual([])
+
+    useStore.getState().setPackageRemoved('vim', false)
+    expect(useStore.getState().removedPackages).toEqual([])
+  })
+
+  it('forgets removals when the selection changes', () => {
+    useStore.getState().setPackageRemoved('vim', true)
+    useStore.getState().setField('platform', 'ptl')
+    expect(useStore.getState().removedPackages).toEqual([])
+  })
+})
+
 describe('undo and redo', () => {
   const pkg = (name: string) => ({ name, version: '', repo: 'base' })
   beforeEach(() => {
@@ -302,6 +325,15 @@ describe('undo and redo', () => {
     vi.setSystemTime(5000)
     useStore.getState().setPackage(pkg('htop'))
     expect(useStore.getState().redoSnapshot).toBeNull()
+  })
+
+  it('undoes removing a template package', () => {
+    useStore.setState({ removedPackages: [] })
+    useStore.getState().setPackageRemoved('vim', true)
+    useStore.getState().undo()
+    expect(useStore.getState().removedPackages).toEqual([])
+    useStore.getState().redo()
+    expect(useStore.getState().removedPackages).toEqual(['vim'])
   })
 
   it('forgets both when the template changes', () => {

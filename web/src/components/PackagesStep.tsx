@@ -32,6 +32,9 @@ interface PackagesStepProps {
   // builds, which an overlay cannot run, so the Edge Packs tab is not offered
   // and any Edge Pack package added some other way is flagged.
   overlay?: boolean
+  // Author mode: the template is edited directly, so its own packages can be
+  // removed.
+  authoring?: boolean
 }
 
 // The two browsing surfaces over one selection. Edge Pack groups packages by
@@ -66,6 +69,7 @@ export function PackagesStep({
   templateRepos = [],
   templateOnlyRepos = noRepos,
   overlay = false,
+  authoring = false,
 }: PackagesStepProps) {
   const [catalogRepos, setRepos] = useState<PackageRepo[] | null>(null)
   // The catalog plus the repositories only the matched template declares,
@@ -181,7 +185,7 @@ export function PackagesStep({
   // checked against, regardless of which repo it was picked from or whether
   // it's a new pick or something the matched template already ships
   // unpinned. One instance, shared by both browsing surfaces and the
-  // Selected rail, so every surface reports the same answer for the same
+  // Changes rail, so every surface reports the same answer for the same
   // name instead of each keeping its own cache.
   const enabledRepoIds = (repos ?? [])
     .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id) || lockedRepoIds.has(r.id))
@@ -249,7 +253,7 @@ export function PackagesStep({
                 that genuinely changes. */}
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
-                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} authoring={authoring} />
               ) : overlay ? (
                 <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
                   Edge Packs are not available for an image built on a baseline image: they need
@@ -274,7 +278,14 @@ export function PackagesStep({
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} lockedRepoIds={lockedRepoIds} resolver={resolver} />
+            <SelectedPackages
+              repos={repos}
+              os={os}
+              lockedRepoIds={lockedRepoIds}
+              resolver={resolver}
+              baseLock={baseLock}
+              authoring={authoring}
+            />
           </div>
         </div>
       )}
@@ -615,7 +626,7 @@ function PackageSearch({
     const repoNewlyEnabled = !isEnabled(repo)
     if (repoNewlyEnabled) setRepoEnabled(repo, true)
     // A floating pick's displayed repo is just wherever it was picked from —
-    // kick off the real cross-repo lookup immediately so the Selected rail
+    // kick off the real cross-repo lookup immediately so the Changes rail
     // can show what it actually resolves to rather than a bare "latest". If
     // this pick just enabled its own repo, defer the lookup (see
     // pendingResolveRef above) rather than checking it against a resolver

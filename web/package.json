@@ -14,6 +14,7 @@
     "js-yaml": "^4.3.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "yaml": "^2.9.1",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

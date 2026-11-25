@@ -53,6 +53,28 @@
   There is no switch to the earlier Customize mode, which the tab still uses
   when authoring is off. The UI asks the new `GET /api/v1/session` endpoint
   whether authoring is allowed.
+- **Author mode edits the template itself.** Template packages can be removed
+  (uncheck them in the repository browser), given another version, or
+  unpinned (choose the selected version chip again; choosing the template's
+  own pin chip puts the pin back). **Update to latest version** leaves removed
+  packages removed. New packages, the image name and the disk layout go into
+  the template too. The Review step shows the whole edited template, with **Save Template** and
+  **Save As…** to keep it on your machine. Only the lines you changed differ
+  from the original; comments and formatting stay as written. Chrome and Edge
+  save in place; other browsers download a copy. Templates that use `extends`
+  can't be edited in Author mode yet, and building an edited template comes
+  next.
+- In Author mode the Review step shows the same summary and expandable list
+  of changes as Customize (now including **Packages removed**), with the
+  whole edited template in a section that opens and scrolls, above **Save
+  Template** and **Save As…**. A changed base image is written into the
+  template's `baseline.source.path`.
+- **Changed**: the Advanced tab's **Selected** panel is now **Changes**. It
+  lists how your packages differ from the template under **Added**,
+  **Modified** (a template package given another version, shown as
+  *old → new*) and, in Author mode, **Removed**. Each can be undone on its
+  own. **Clear** is now **Reset to template defaults**, styled like the Disk
+  step's, and also puts back removed packages.
 - The Web UI's **Platform Enablement** use case names its second dropdown
   **BKC Type**: **Base Platform Minimal Desktop**, **Base Platform Minimal
   Server**, **Upstream BKC** and **Ubuntu LTS BKC** (grayed out until its

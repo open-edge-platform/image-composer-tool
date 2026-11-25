@@ -133,6 +133,11 @@ interface AppState {
   // defaults" has something to restore. Without it, resetting would blank the
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
+  // Template packages removed in Author mode, by name. Customize can't remove
+  // anything (its changes are layered on the template), so it ignores these.
+  removedPackages: string[]
+  setPackageRemoved: (name: string, removed: boolean) => void
+  clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
   // One step of undo and redo over the user's edits (see EDIT_KEYS). Each
   // holds the edits as they were; null when there is nothing to undo or redo.
@@ -205,6 +210,16 @@ export const useStore = create<AppState>((set) => {
     disk: null,
     diskEdited: false,
     diskSeed: null,
+    removedPackages: [],
+    setPackageRemoved: (name, removed) =>
+      setEdit((state) => ({
+        removedPackages: removed
+          ? [...new Set([...state.removedPackages, name])]
+          : state.removedPackages.filter((n) => n !== name),
+        // A removed package has no version of its own any more.
+        addedPackages: removed ? state.addedPackages.filter((p) => p.name !== name) : state.addedPackages,
+      })),
+    clearRemovedPackages: () => setEdit(() => ({ removedPackages: [] })),
     undoSnapshot: null,
     redoSnapshot: null,
     lastEditAt: 0,
@@ -348,6 +363,8 @@ export const useStore = create<AppState>((set) => {
           disk: null,
           diskEdited: false,
           diskSeed: null,
+          // Removals name the previous template's packages.
+          removedPackages: [],
           ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
         }
       }),
@@ -357,6 +374,7 @@ export const useStore = create<AppState>((set) => {
 // The state the user edits, which undo and redo restore.
 const EDIT_KEYS = [
   'addedPackages',
+  'removedPackages',
   'enabledRepos',
   'disk',
   'diskEdited',
