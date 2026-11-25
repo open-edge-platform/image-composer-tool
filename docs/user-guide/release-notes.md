@@ -6,9 +6,9 @@
 
 **New**:
 
-- **Undo** and **Redo** at the top of the Web UI's Advanced tab take back the
-  last change to packages, repositories, the disk layout, the image name or
-  the base image, and put it back. One step each way; changes made in quick
+- **Undo last change** and **Redo**, beside **Back** at the bottom of the Web
+  UI's Advanced tab, take back the last change to packages, repositories, the
+  disk layout, the image name or the base image, and put it back. One step each way; changes made in quick
   succession (typing a name, **Reset to template defaults**) count as one.
   Choosing another template clears both.
 - The Web UI's Advanced tab handles templates built on a base image (overlay
@@ -47,11 +47,12 @@
   bypass dependency integrity, protected boot packages, or removal policy.
   Unpinned packages and dependencies are not automatically selected for
   downgrade; RPM overlay builds are not supported end-to-end.
-- The Web UI's Advanced tab can offer an **Author** mode next to **Customize**.
-  It is off by default; turn it on with `image-composer-tool serve
-  --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose. The UI
-  asks the new `GET /api/v1/session` endpoint whether it is allowed. When it
-  is, Advanced starts in Author mode.
+- The Web UI's Advanced tab works in **Author** mode, editing the whole
+  template, when the server allows it: turn it on with `image-composer-tool
+  serve --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose.
+  There is no switch to the earlier Customize mode, which the tab still uses
+  when authoring is off. The UI asks the new `GET /api/v1/session` endpoint
+  whether authoring is allowed.
 - **Author mode edits the template itself.** Template packages can be removed
   (uncheck them in the repository browser), given another version, or
   unpinned (choose the selected version chip again; choosing the template's
