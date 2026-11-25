@@ -357,7 +357,7 @@ func TestConvertImageFile_SupportedImageTypes(t *testing.T) {
 	}{
 		{"vhd", "qemu-img convert -O vpc"},
 		{"vhdx", "qemu-img convert -O vhdx"},
-		{"qcow2", "qemu-img convert -O qcow2 -c -S 4k -p -o cluster_size=2M,lazy_refcounts=on"},
+		{"qcow2", "qemu-img convert -O qcow2 -S 4k -p"},
 		{"vmdk", "qemu-img convert -O vmdk"},
 		{"vdi", "qemu-img convert -O vdi"},
 	}
@@ -870,8 +870,10 @@ func TestSparsifyWithQemuImg(t *testing.T) {
 	}
 }
 
-// TestQcow2OptimizedConversion tests that qcow2 conversion uses optimized parameters
-func TestQcow2OptimizedConversion(t *testing.T) {
+// TestQcow2PlainConversion tests that the qcow2 is written uncompressed with the
+// default cluster size. The BB offline provisioning tool reads the qcow2 with
+// its own reader that cannot decompress clusters, so -c must never come back.
+func TestQcow2PlainConversion(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test-image.raw")
 
@@ -886,7 +888,9 @@ func TestQcow2OptimizedConversion(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	mockCommands := []shell.MockCommand{
-		{Pattern: "qemu-img convert -O qcow2 -c -S 4k -p -o cluster_size=2M,lazy_refcounts=on", Output: "", Error: nil},
+		// Reject compression, a custom cluster size and lazy refcounts first.
+		{Pattern: `qemu-img convert .*( -c |cluster_size|lazy_refcounts)`, Output: "", Error: fmt.Errorf("qcow2 must be plain")},
+		{Pattern: "qemu-img convert -O qcow2 -S 4k -p", Output: "", Error: nil},
 	}
 
 	shell.Default = shell.NewMockExecutor(mockCommands)

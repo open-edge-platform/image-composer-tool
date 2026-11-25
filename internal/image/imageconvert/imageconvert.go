@@ -251,7 +251,12 @@ func convertImageFile(filePath, imageType string) (string, error) {
 	case "vhdx":
 		cmdStr = fmt.Sprintf("qemu-img convert -O vhdx -- %s %s", src, dst)
 	case "qcow2":
-		cmdStr = fmt.Sprintf("qemu-img convert -O qcow2 -c -S 4k -p -o cluster_size=2M,lazy_refcounts=on -- %s %s", src, dst)
+		// Keep the qcow2 plain: no -c (compressed clusters), default cluster size
+		// and no lazy refcounts. Consumers such as the Hybrid Edge Computing
+		// offline provisioning tool (NbdServer / DiskImgDxe.efi) ship their own
+		// qcow2 reader that cannot decompress clusters, so a compressed qcow2
+		// does not boot there even though QEMU reads it fine.
+		cmdStr = fmt.Sprintf("qemu-img convert -O qcow2 -S 4k -p -- %s %s", src, dst)
 	case "vmdk":
 		cmdStr = fmt.Sprintf("qemu-img convert -O vmdk -- %s %s", src, dst)
 	case "vdi":
