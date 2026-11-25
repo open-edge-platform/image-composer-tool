@@ -175,6 +175,10 @@ interface AppState {
   setPackageRemoved: (name: string, removed: boolean) => void
   clearRemovedPackages: () => void
   setManifest: (m: Manifest) => void
+  // The repository the Packages step is browsing, while it is shown; Ask AI
+  // adds a name pattern from it when the request names no repository.
+  browsedRepo: string | null
+  setBrowsedRepo: (id: string | null) => void
   // One step of undo and redo over the user's edits (see EDIT_KEYS). Each
   // holds the edits as they were; null when there is nothing to undo or redo.
   undoSnapshot: EditSnapshot | null
@@ -304,6 +308,8 @@ export const useStore = create<AppState>((set) => {
       set((state) =>
         state.redoSnapshot ? { ...state.redoSnapshot, redoSnapshot: null, undoSnapshot: snapshotEdits(state), lastEditAt: 0 } : {},
       ),
+    browsedRepo: null,
+    setBrowsedRepo: (id) => set({ browsedRepo: id }),
     setManifest: (m) => set({ manifest: m }),
     setCapabilities: (c) =>
       set({ capabilities: c, advancedMode: c.authoring ? 'author' : 'customize' }),

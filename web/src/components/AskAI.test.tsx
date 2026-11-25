@@ -80,6 +80,8 @@ describe('AskAI', () => {
       'systemConfig:\n  packages:\n    - snapd\n',
       'add docker, remove snapd, 32 GiB disk',
       '',
+      // Nothing is being browsed.
+      undefined,
     )
     expect(mockApi.lookupPackages).toHaveBeenCalledWith({
       os: 'ubuntu26',

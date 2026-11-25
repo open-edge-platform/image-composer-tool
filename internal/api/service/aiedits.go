@@ -111,7 +111,7 @@ The user describes changes to the template they are editing. Answer only with th
 - remove: remove the package named in "package".
 - set_version: pin "package" to "version"; an empty "version" unpins it.
 - pin_latest: pin "package" to its newest version; the editor looks the version up. With "package" empty, pin every package that comes from one repository, named in "value" in the user's words (such as "ppa", "intel" or part of its URL).
-- add_matching: add every package whose name matches the pattern in "package", with * and ? as wildcards (such as "gir*" or "libva*"); the editor finds the matching packages. If the user names a repository, put it in "value" in their words; otherwise leave "value" empty. Use this whenever the user asks for packages by a name pattern or prefix instead of naming each one.
+- add_matching: add every package whose name matches the pattern in "package", with * and ? as wildcards (such as "gir*" or "libva*"); the editor finds the matching packages. If the user names a repository, put it in "value" in their words. If they ask for every repository, set "value" to "all". Otherwise leave "value" empty: the editor then uses the repository the user is browsing, if any, or else every repository in use. Use this whenever the user asks for packages by a name pattern or prefix instead of naming each one.
 - set_disk_size: set the disk size to "value", such as "32GiB".
 - set_image_name: set the image name to "value".
 Use real package names for the template's distribution, preferably from its own repositories. Never invent versions.
@@ -128,7 +128,10 @@ If the user asks a question instead of asking for changes, such as what has chan
 //
 // changes is the user's changes so far as plain text, as the Changes rail
 // lists them, so the AI can answer questions about them. It may be empty.
-func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, request, changes string) (*TemplateEditSuggestion, error) {
+//
+// browsing names the repository the user is browsing on the Packages step, or
+// is empty; an add_matching edit with no repository of its own uses it.
+func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, request, changes, browsing string) (*TemplateEditSuggestion, error) {
 	if !s.aiEnabled() {
 		return nil, newError(http.StatusForbidden, "FORBIDDEN", "the AI assistant is not turned on for this server")
 	}
@@ -158,7 +161,7 @@ func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, reques
 	}
 	answer, err := s.cfg.AI.ChatJSON(ctx, []provider.ChatMessage{
 		{Role: "system", Content: templateEditPrompt},
-		{Role: "user", Content: "Template:\n```yaml\n" + redacted + "\n```\n\nChanges so far:\n" + changes + "\n\nRequest: " + request},
+		{Role: "user", Content: "Template:\n```yaml\n" + redacted + "\n```\n\nChanges so far:\n" + changes + browsingLine(browsing) + "\n\nRequest: " + request},
 	}, "template_edits", templateEditSchema)
 	if err != nil {
 		return nil, s.aiError(err)
@@ -170,6 +173,14 @@ func (s *Service) SuggestTemplateEdits(ctx context.Context, templateYAML, reques
 			"the AI service answered in an unexpected format; try again")
 	}
 	return cleanSuggestion(out), nil
+}
+
+// browsingLine tells the AI which repository the user is browsing, if any.
+func browsingLine(browsing string) string {
+	if browsing = strings.TrimSpace(browsing); browsing == "" || strings.ContainsAny(browsing, "\n\r") || len(browsing) > 300 {
+		return ""
+	}
+	return "\n\nRepository the user is browsing: " + browsing
 }
 
 // aiError turns an AI service failure into the error the UI shows.

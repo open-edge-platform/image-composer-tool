@@ -884,6 +884,12 @@ components:
           description: |
             The user's changes so far as plain text, as the Changes rail lists
             them, so a question such as "summarize my changes" can be answered.
+        browsing:
+          type: string
+          maxLength: 300
+          description: |
+            The repository the user is browsing on the Packages step, by name,
+            if any. A pattern edit that names no repository uses it.
 
     TemplateEdit:
       type: object

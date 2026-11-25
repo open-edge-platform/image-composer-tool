@@ -110,6 +110,12 @@ export function PackageRepoBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pickerRepoIdsKey stands in for pickerRepos
   }, [pickerRepoIdsKey, selectedRepoId])
   const selectedRepo = pickerRepos.find((r) => r.id === selectedRepoId)
+  // Ask AI adds a name pattern from the repository browsed here.
+  const setBrowsedRepo = useStore((s) => s.setBrowsedRepo)
+  useEffect(() => {
+    setBrowsedRepo(selectedRepo?.id ?? null)
+    return () => setBrowsedRepo(null)
+  }, [selectedRepo?.id, setBrowsedRepo])
 
   // The curated-subset filter ("Show frequently used"). Its checkbox isn't
   // offered for now, to keep the controls row short, so this stays off; the

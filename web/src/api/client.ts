@@ -55,10 +55,10 @@ export const api = {
   // unchecked; see lib/aiEdits.ts.
   // changes is the user's changes so far as text (see describeChanges), so
   // a question about them can be answered.
-  suggestTemplateEdits: (templateYaml: string, request: string, changes: string) =>
+  suggestTemplateEdits: (templateYaml: string, request: string, changes: string, browsing?: string) =>
     jsonFetch<TemplateEditSuggestion>('/ai/template-edits', {
       method: 'POST',
-      body: JSON.stringify({ templateYaml, request, changes }),
+      body: JSON.stringify({ templateYaml, request, changes, browsing }),
     }),
 
   compose: (req: ComposeRequest) =>

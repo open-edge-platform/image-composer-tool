@@ -232,8 +232,10 @@ appear in the **Changes** rail tagged **AI**, where you can undo them. Nothing
 is saved or built until you do so.
 
 You can also ask for packages by name pattern, such as *add all gir\* packages
-from af01p*. The UI finds the matching packages in the repository you name,
-or in every repository in use, and adds them. A pattern that matches more than
+from af01p*. The UI finds the matching packages in the repository you name;
+if you name none, in the repository you are browsing on the Packages step;
+and if you ask for *all repositories*, or browse none, in every repository in
+use. It then adds them. A pattern that matches more than
 50 packages is reported instead, so name a repository or narrow the pattern.
 
 The server sends the service the template with your changes so far. It

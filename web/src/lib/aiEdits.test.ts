@@ -341,6 +341,16 @@ describe('expandPatternEdits', () => {
     ])
   })
 
+  it('adds from the browsed repository when the pattern names none, and from all on request', async () => {
+    const browsing = { ...ctx(), browsed: 'af01p' }
+    const r = await expandPatternEdits([matching('gir*')], browsing)
+    expect(r.edits.map((e) => e.package)).toEqual(af)
+    // "all" still searches every repository in use: too many here.
+    const all = await expandPatternEdits([matching('gir*', 'all')], browsing)
+    expect(all.edits).toEqual([])
+    expect(all.skipped[0].message).toMatch(/in the repositories in use match/)
+  })
+
   it('leaves other edits as they are', async () => {
     const other: TemplateEdit = { op: 'remove', package: 'vim', version: '', value: '' }
     expect((await expandPatternEdits([other], ctx())).edits).toEqual([other])

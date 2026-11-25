@@ -76,6 +76,15 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
     })
   }
 
+  // The name of the repository the Packages step is browsing, for the AI to
+  // know what "this repository" means. Undefined when none is.
+  const browsingName = async (): Promise<string | undefined> => {
+    const id = useStore.getState().browsedRepo
+    if (!id) return undefined
+    const catalog = await api.listPackageRepos(os).then((r) => r.repos, () => [] as PackageRepo[])
+    return [...catalog, ...templateOnlyRepos].find((r) => r.id === id)?.displayName ?? id
+  }
+
   // Checks edits and applies those that pass. Names are looked up in every
   // repository for the target, so a package from a repository not yet
   // checked can still be picked (and that repository turned on), as picking
@@ -105,6 +114,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
         repos: known,
         checkedRepos: new Set([...known.filter((r) => r.enabledByDefault).map((r) => r.id), ...templateRepos, ...st.enabledRepos]),
         present: (n) => (inTemplate.has(n) && !st.removedPackages.includes(n)) || st.addedPackages.some((p) => p.name === n),
+        browsed: st.browsedRepo,
       })
       edits = expanded.edits
       patternSkipped = expanded.skipped
@@ -185,7 +195,7 @@ export function AskAI({ os, templateText, basePackages, templateRepos, templateO
     setError(null)
     setOutcome(null)
     try {
-      const suggestion = await api.suggestTemplateEdits(templateText, request, await changesSoFar())
+      const suggestion = await api.suggestTemplateEdits(templateText, request, await changesSoFar(), await browsingName())
       const { applied, skipped } = await runEdits(suggestion.edits)
       setOutcome({
         note: suggestion.note,

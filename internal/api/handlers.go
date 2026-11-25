@@ -40,7 +40,11 @@ func (s *Server) SuggestTemplateEdits(w http.ResponseWriter, r *http.Request) {
 	if req.Changes != nil {
 		changes = *req.Changes
 	}
-	res, err := s.svc.SuggestTemplateEdits(r.Context(), req.TemplateYaml, req.Request, changes)
+	browsing := ""
+	if req.Browsing != nil {
+		browsing = *req.Browsing
+	}
+	res, err := s.svc.SuggestTemplateEdits(r.Context(), req.TemplateYaml, req.Request, changes, browsing)
 	if err != nil {
 		writeServiceError(w, err)
 		return

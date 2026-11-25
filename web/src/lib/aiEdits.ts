@@ -138,11 +138,16 @@ export interface PatternSearch {
   checkedRepos: Set<string>
   // Packages the template has (and the user hasn't removed) or the user added.
   present: (name: string) => boolean
+  // The repository the Packages step is browsing, if any: a pattern that
+  // names no repository is added from it.
+  browsed?: string | null
 }
 
 // expandPatternEdits replaces each add_matching edit with an add for every
 // package whose name matches its pattern: in the repository it names, or in
-// every repository in use. What can't be expanded is reported in skipped.
+// every repository in use ("all", or when nothing names or is browsing one).
+// Without a repository of its own, it uses the one the Packages step is
+// browsing. What can't be expanded is reported in skipped.
 export async function expandPatternEdits(
   edits: TemplateEdit[],
   ctx: PatternSearch,
@@ -162,7 +167,11 @@ export async function expandPatternEdits(
     }
     let scope: string[]
     let where: string
-    if (e.value) {
+    const browsed = !e.value ? ctx.repos.find((r) => r.id === ctx.browsed) : undefined
+    if (browsed) {
+      scope = [browsed.id]
+      where = browsed.displayName
+    } else if (e.value && e.value.toLowerCase() !== 'all') {
       const repo = matchRepo(e.value, ctx.repos, ctx.checkedRepos)
       if (Array.isArray(repo)) {
         skipped.push({
