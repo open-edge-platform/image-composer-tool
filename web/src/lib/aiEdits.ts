@@ -79,8 +79,15 @@ export function matchRepo(
   repos: AIEditContext['repos'],
   checked: Set<string>,
 ): AIEditContext['repos'][number] | AIEditContext['repos'] {
-  const tokens = words.toLowerCase().split(/[\s,]+/).filter((t) => t && !['repo', 'repository', 'the'].includes(t))
-  const hay = (r: AIEditContext['repos'][number]) => `${r.id} ${r.displayName} ${r.url}`.toLowerCase()
+  // A URL matches whatever its scheme and trailing slashes: the AI may write a
+  // repository's URL as the template does (https://host/path/) while the
+  // server reports it as https://host/path.
+  const norm = (t: string) => t.toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '')
+  const tokens = words
+    .split(/[\s,]+/)
+    .map(norm)
+    .filter((t) => t && !['repo', 'repository', 'the'].includes(t))
+  const hay = (r: AIEditContext['repos'][number]) => `${r.id} ${r.displayName} ${norm(r.url)}`.toLowerCase()
   let matches = repos.filter((r) => tokens.length > 0 && tokens.every((t) => hay(r).includes(t)))
   if (matches.length > 1) {
     const inUse = matches.filter((r) => checked.has(r.id))

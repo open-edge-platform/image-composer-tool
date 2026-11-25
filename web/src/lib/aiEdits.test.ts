@@ -7,6 +7,7 @@ import {
   describeChanges,
   editPackageNames,
   expandPatternEdits,
+  matchRepo,
   normalizeDiskSize,
   patternMatcher,
   planAIEdits,
@@ -250,6 +251,21 @@ describe('helpers', () => {
   it('editPackageNames lists each package once', () => {
     expect(editPackageNames([edit('add', 'a'), edit('remove', 'a'), edit('set_disk_size', '', '', '1G')], () => ['x'])).toEqual(['a'])
     expect(editPackageNames([edit('pin_latest', '', '', 'ppa')], () => ['x', 'y'])).toEqual(['x', 'y'])
+  })
+})
+
+describe('matchRepo', () => {
+  const af = {
+    id: 'af01p',
+    displayName: 'af01p-png.devtools.intel.com …/resolute/20261023-0019 (resolute)',
+    url: 'https://af01p-png.devtools.intel.com/artifactory/hspe-edge-png-local/ubuntu/resolute/resolute/20261023-0019',
+  }
+  const ubuntu = { id: 'ubuntu-base', displayName: 'Ubuntu 26.04 Base', url: 'http://archive.ubuntu.com/ubuntu' }
+
+  it('matches a repository by its URL, whatever the scheme or trailing slash', () => {
+    for (const words of [`${af.url}/`, af.url, af.url.replace('https://', ''), 'af01p']) {
+      expect(matchRepo(words, [af, ubuntu], new Set())).toBe(af)
+    }
   })
 })
 
