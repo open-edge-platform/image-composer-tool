@@ -564,6 +564,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           (step === 1 ? 'max-w-6xl' : step === 2 ? 'max-w-5xl' : 'max-w-3xl')
         }
       >
+        {/* Top right of the step box, in a row of its own so it never covers
+            the step's own controls (the Packages search, the Disk Reset). */}
+        <div className="-mt-2 mb-3 flex justify-end">
+          <UndoRedo />
+        </div>
         {/* A failed resolve leaves Image Name unseeded, which locks Next behind
             what reads as an unfilled field. Say why, rather than leaving the
             error on a Review step the user cannot reach. */}
@@ -690,17 +695,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
         {/* Back / Next navigation. */}
         <div className="mt-6 flex justify-between border-t border-slate-200 pt-4">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setStep((s) => Math.max(0, s - 1))}
-              disabled={step === 0}
-              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Back
-            </button>
-            <UndoRedo />
-          </div>
+          <button
+            type="button"
+            onClick={() => setStep((s) => Math.max(0, s - 1))}
+            disabled={step === 0}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Back
+          </button>
           {step < STEPS.length - 1 && (
             <div className="flex items-center gap-3">
               {!canLeaveStep && (
