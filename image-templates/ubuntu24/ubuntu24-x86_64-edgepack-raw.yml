@@ -78,6 +78,7 @@ packageRepositories:
     url: "https://apt.repos.intel.com/edgepack"
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "stable"
+    priority: 1001
 
   # NPU prerequisite snapshot repository, required by the base metapackage
   # below: intel-edge-base-standard pulls in the NPU profile, whose client GPU
@@ -85,7 +86,7 @@ packageRepositories:
   # Public Launchpad snapshot; safe to use as-is, but pin/update the snapshot
   # timestamp per EdgePack release notes.
   - codename: "noble"
-    url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z"
+    url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z"
     pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f"
     component: "main"
 
@@ -114,6 +115,10 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
+    # edge-gfx-dkms builds a host tool (xe_gen_wa_oob) and needs libc headers, but
+    # only depends on dkms. ICT installs packages in list order, so install
+    # libc6-dev before intel-edge-base-standard.
+    - libc6-dev
     # ── EdgePack: mandatory base ──
     # Core graphics/media, the platform-enablement DKMS drivers, and the NPU
     # (intel-edge-npu), IPU (intel-edge-ipu) and edge-compute-essentials
@@ -125,6 +130,13 @@ systemConfig:
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
+    - intel-edge-tsn # Time-sensitive networking (from the Edge Pack repo)
+    # IPU camera stack (also installs intel-mipi-gmsl-dkms, new in 2026.3): PTL only
+    # (not supported on WCL). Not part of intel-edge-base-standard because its
+    # install prompts interactively.
+    - intel-edge-ipu # Intel IPU enablement (from the Edge Pack repo)
+    - thermald # Intel Dynamic Thermal Management daemon (thermald.service)
+    - upower # UPower D-Bus service; intel_lpmd segfaults at startup without org.freedesktop.UPower
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
@@ -185,8 +197,8 @@ systemConfig:
     # Pinned EdgePack-validated kernel. DKMS builds the modules above against
     # this exact kernel, both at image build time and again on-target.
     packages:
-      - linux-image-7.0.0-34-generic
-      - linux-headers-7.0.0-34-generic
+      - linux-image-7.0.0-42-generic
+      - linux-headers-7.0.0-42-generic
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
   # transitively. ICT builds them explicitly with `-k <target-kernel>` (never
