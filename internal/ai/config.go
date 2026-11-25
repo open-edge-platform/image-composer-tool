@@ -80,6 +80,10 @@ type OllamaConfig struct {
 
 // OpenAIConfig holds OpenAI-specific configuration.
 type OpenAIConfig struct {
+	// BaseURL is the API root including /v1, for OpenAI-compatible services
+	// such as GNAI. Empty means api.openai.com.
+	BaseURL string `yaml:"base_url"`
+
 	// Model is the chat model for generation
 	Model string `yaml:"model"`
 

@@ -63,12 +63,13 @@ type AIConfig struct {
 type OllamaConfig struct {
 	BaseURL        string `yaml:"base_url,omitempty" json:"base_url,omitempty"`               // Ollama server URL (default: http://localhost:11434)
 	EmbeddingModel string `yaml:"embedding_model,omitempty" json:"embedding_model,omitempty"` // Model for embeddings (default: nomic-embed-text)
-	ChatModel      string `yaml:"chat_model,omitempty" json:"chat_model,omitempty"`           // Model for chat/generation (default: llama3.2)
+	ChatModel      string `yaml:"chat_model,omitempty" json:"chat_model,omitempty"`           // Model for chat/generation (default: llama3.1:8b)
 	Timeout        string `yaml:"timeout,omitempty" json:"timeout,omitempty"`                 // Request timeout (default: 120s)
 }
 
 // OpenAIConfig holds OpenAI-specific AI settings
 type OpenAIConfig struct {
+	BaseURL        string `yaml:"base_url,omitempty" json:"base_url,omitempty"`               // API root including /v1, for OpenAI-compatible services such as GNAI (default: https://api.openai.com/v1)
 	EmbeddingModel string `yaml:"embedding_model,omitempty" json:"embedding_model,omitempty"` // Model for embeddings (default: text-embedding-3-small)
 	ChatModel      string `yaml:"chat_model,omitempty" json:"chat_model,omitempty"`           // Model for chat/generation (default: gpt-4o-mini)
 	Timeout        string `yaml:"timeout,omitempty" json:"timeout,omitempty"`                 // Request timeout (default: 60s)
@@ -77,7 +78,7 @@ type OpenAIConfig struct {
 // AICacheConfig holds embedding cache settings
 type AICacheConfig struct {
 	Enabled bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"` // Enable caching (default: true)
-	Dir     string `yaml:"dir,omitempty" json:"dir,omitempty"`         // Cache directory (default: ./cache/ai-embeddings)
+	Dir     string `yaml:"dir,omitempty" json:"dir,omitempty"`         // Cache directory (default: ./.ai-cache)
 }
 
 // AIScoringConfig holds hybrid scoring weights for template retrieval

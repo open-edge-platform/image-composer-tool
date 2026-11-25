@@ -344,7 +344,7 @@ func TestOpenAIProviderEmbed(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	embedding, err := provider.Embed(context.Background(), "test text")
 	if err != nil {
@@ -375,7 +375,7 @@ func TestOpenAIProviderEmbedError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	_, err := provider.Embed(context.Background(), "test text")
 	if err == nil {
@@ -399,7 +399,7 @@ func TestOpenAIProviderEmbedEmptyResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	_, err := provider.Embed(context.Background(), "test text")
 	if err == nil {
@@ -415,7 +415,7 @@ func TestOpenAIProviderEmbedInvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	_, err := provider.Embed(context.Background(), "test text")
 	if err == nil {
@@ -451,7 +451,7 @@ func TestOpenAIProviderChat(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	messages := []ChatMessage{
 		{Role: "user", Content: "Hello"},
@@ -482,7 +482,7 @@ func TestOpenAIProviderChatError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	messages := []ChatMessage{
 		{Role: "user", Content: "Hello"},
@@ -507,7 +507,7 @@ func TestOpenAIProviderChatEmptyChoices(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	messages := []ChatMessage{
 		{Role: "user", Content: "Hello"},
@@ -527,7 +527,7 @@ func TestOpenAIProviderChatInvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	messages := []ChatMessage{
 		{Role: "user", Content: "Hello"},
@@ -578,7 +578,7 @@ func TestOpenAIProviderContextCancelled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL, 60*time.Second)
+	provider := newOpenAIProviderWithConfig("test-api-key", "text-embedding-3-small", "gpt-4o-mini", server.URL+"/v1", 60*time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

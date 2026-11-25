@@ -721,12 +721,16 @@ image-composer-tool ai [flags] [QUERY]
 
 **Description:**
 
-With Ollama running locally, no configuration is needed. To use OpenAI, set the
-`OPENAI_API_KEY` environment variable **and** pass `--provider openai`. The
-command starts from built-in defaults and applies only `--provider` and
-`--templates-dir`; the `ai:` section of the global configuration file is not
-read, so models, timeouts and cache settings cannot currently be changed. The
-generated template is not built automatically; run
+With Ollama running locally, no configuration is needed. To use OpenAI or an
+OpenAI-compatible service such as GNAI, set the `OPENAI_API_KEY` environment
+variable and either pass `--provider openai` or set `provider: openai` in the
+`ai:` section of the global configuration file. That section also sets the
+service URL (`openai.base_url`, or the `OPENAI_BASE_URL` environment variable),
+models, timeouts and cache directory; `--provider` and `--templates-dir`
+override it. `cache.enabled: false` is not supported: the cache stays on.
+`--cache-stats` and `--clear-cache` need no API key. See
+[AI-Powered Template Generation](../get-started/ai-template-generation.md#configuration).
+The generated template is not built automatically; run
 [`validate`](#validate-command) on it before [`build`](#build-command).
 
 **Example:**
