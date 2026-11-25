@@ -11,15 +11,22 @@ export function UndoRedo() {
   const canRedo = useStore((s) => s.redoSnapshot !== null)
   const undo = useStore((s) => s.undo)
   const redo = useStore((s) => s.redo)
+  // Sized like the Back button beside it in the wizard's bottom bar.
   const button =
-    'flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40'
+    'flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40'
   return (
-    <div className="flex gap-2">
-      <button type="button" className={button} onClick={undo} disabled={!canUndo} title="Undo the last change">
-        <span aria-hidden>↶</span> Undo
+    <div className="flex items-center gap-2 border-l border-slate-200 pl-3">
+      <button type="button" className={button} onClick={undo} disabled={!canUndo} title="Undo your last change">
+        <span aria-hidden className="text-base leading-none">
+          ↶
+        </span>
+        Undo last change
       </button>
-      <button type="button" className={button} onClick={redo} disabled={!canRedo} title="Redo the change just undone">
-        <span aria-hidden>↷</span> Redo
+      <button type="button" className={button} onClick={redo} disabled={!canRedo} title="Redo the change you just undid">
+        <span aria-hidden className="text-base leading-none">
+          ↷
+        </span>
+        Redo
       </button>
     </div>
   )

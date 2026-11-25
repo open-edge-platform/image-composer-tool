@@ -99,9 +99,10 @@ export function confirmRepoRelease(
   )
 }
 
-// Advanced-tab mode. Customize builds the user's changes on top of the
-// selected template; Author edits a whole template. Author is offered only
-// when the server grants the authoring capability.
+// Advanced-tab mode. Author edits a whole template, and is the only mode when
+// the server grants the authoring capability; there is no switch. Without it
+// the tab customizes: it builds the user's changes on top of the selected
+// template.
 export type AdvancedMode = 'customize' | 'author'
 
 interface AppState {
@@ -142,10 +143,9 @@ interface AppState {
   lastEditAt: number
   undo: () => void
   redo: () => void
-  // Gaining the authoring capability starts in Author mode (the user can still
-  // switch); losing it drops back to Customize.
+  // The authoring capability puts the Advanced tab in Author mode; without it,
+  // Customize.
   setCapabilities: (c: Capabilities) => void
-  setAdvancedMode: (mode: AdvancedMode) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
@@ -218,12 +218,7 @@ export const useStore = create<AppState>((set) => {
       ),
     setManifest: (m) => set({ manifest: m }),
     setCapabilities: (c) =>
-      set((state) => ({
-        capabilities: c,
-        advancedMode: !c.authoring ? 'customize' : state.capabilities.authoring ? state.advancedMode : 'author',
-      })),
-    setAdvancedMode: (mode) =>
-      set((state) => ({ advancedMode: mode === 'author' && !state.capabilities.authoring ? 'customize' : mode })),
+      set({ capabilities: c, advancedMode: c.authoring ? 'author' : 'customize' }),
     setImageName: (value) => setEdit(() => ({ imageName: value, imageNameEdited: true })),
     baseImage: '',
     baseImageEdited: false,
