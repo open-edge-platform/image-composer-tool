@@ -88,7 +88,7 @@ func TestComposeRefusesABaseImageItCantUse(t *testing.T) {
 func TestBuildRefusesAMissingBaseImage(t *testing.T) {
 	s := overlayService(t, "/path/to/ubuntu-26.04-base.raw")
 	sel := roboticsRaw
-	if _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, t.TempDir()); err == nil ||
+	if _, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, t.TempDir()); err == nil ||
 		!strings.Contains(err.Error(), "base image /path/to/ubuntu-26.04-base.raw is not on the server") {
 		t.Errorf("build of a template whose base image is missing: err = %v, want it refused", err)
 	}

@@ -83,7 +83,15 @@
   Packages, Disk and Review steps and the **Changes** panel), and **Save**
   writes back to it. A template without `basedOn` opens for the current
   selection. `POST /templates/compose` accepts the opened template as
-  `templateYaml` when authoring is allowed; builds don't accept it yet.
+  `templateYaml` when authoring is allowed.
+- **Compose Image** in the Web UI's Author mode builds the edited template
+  itself: everything you changed, including removed packages, is in what gets
+  built. The logins dialog works as in Customize, adding its logins on top of
+  the template. `POST /builds` accepts the template as `compose.templateYaml`;
+  the server writes it beside the template it is based on for the build, so
+  relative paths resolve the same way, and removes it when the build is over.
+  The build's history entry shows its use case as usual, and Retry rebuilds the
+  same edited template.
 - The Web UI's **Platform Enablement** use case names its second dropdown
   **BKC Type**: **Base Platform Minimal Desktop**, **Base Platform Minimal
   Server**, **Upstream BKC** and **Ubuntu LTS BKC** (grayed out until its

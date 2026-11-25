@@ -635,7 +635,7 @@ func TestResolveBuildTemplateWithPackagesOnly(t *testing.T) {
 	sel.Packages = []string{"htop"}
 	workDir := t.TempDir()
 
-	path, name, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, workDir)
+	path, name, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, workDir)
 	if err != nil {
 		t.Fatalf("resolveBuildTemplate: %v", err)
 	}
@@ -662,7 +662,7 @@ func TestResolveBuildTemplateInvalidPackage(t *testing.T) {
 	sel := ubuntu24Selection()
 	sel.Packages = []string{"../etc/passwd"}
 
-	_, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, t.TempDir())
+	_, _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &sel}, t.TempDir())
 	if err == nil {
 		t.Fatal("resolveBuildTemplate accepted an invalid package name")
 	}

@@ -81,6 +81,10 @@ type build struct {
 	// generated file behind and the download endpoint keeps working after it's
 	// gone. Empty for a build against a curated template directly.
 	DeltaPath string
+	// OpenedPath is the template opened in Author mode that this build runs,
+	// written beside the matched template (see resolveBuildTemplate). Removed
+	// with DeltaPath. Empty for any other build.
+	OpenedPath string
 	// retry captures exactly what this build was resolved from, with any
 	// credential or new-user password already hashed, so RetryBuild can resubmit
 	// the identical request without asking the caller to look up and retype a
@@ -390,13 +394,17 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 
 	// Resolve the template path to build. Client errors (bad input, no match)
 	// return 400; server errors (e.g. writing the inline template) return 500.
-	templatePath, templateName, retry, err := s.resolveBuildTemplate(&req, workDir)
+	templatePath, templateName, retry, openedPath, err := s.resolveBuildTemplate(&req, workDir)
 	if err != nil {
 		s.releaseBuildSlot(id) // no child spawned; free the slot for the next start
 		// A missing login gets its own code: it is the one bad-request cause a
 		// client can act on mechanically, by prompting for a credential and
 		// retrying. Reporting it as NO_MATCH would say the selection matched no
 		// template, which is the opposite of what happened.
+		var apiErr *Error
+		if errors.As(err, &apiErr) {
+			return nil, apiErr
+		}
 		if errors.Is(err, errCredentialRequired) {
 			return nil, newError(http.StatusBadRequest, "CREDENTIALS_REQUIRED", err.Error())
 		}
@@ -423,8 +431,12 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// finish() knows to archive+clean it up. Must mirror resolveBuildTemplate's
 	// own hasOverrides() check: a template resolved without overrides is the
 	// curated file, and finish() must not delete that.
+	//
+	// A template opened in Author mode is a server-written file too: built
+	// directly (no overrides) it is what finish() archives and removes, and
+	// under a delta it is removed alongside it (OpenedPath).
 	var deltaPath string
-	if req.Compose != nil && req.Compose.hasOverrides() {
+	if req.Compose != nil && (req.Compose.hasOverrides() || openedPath != "") {
 		deltaPath = templatePath
 	}
 
@@ -458,6 +470,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		Template:     templateName,
 		TemplatePath: templatePath,
 		DeltaPath:    deltaPath,
+		OpenedPath:   openedPath,
 		Command:      redactedCommand(name, cmdArgs),
 		Summary:      summary,
 		CreatedAt:    createdAt,
@@ -931,40 +944,57 @@ var errCredentialRequired = fmt.Errorf("%w: credential required", errBadBuildReq
 // contract. Both-set is rejected rather than silently preferring one: the two
 // inputs can disagree, and picking a winner would build something the caller
 // didn't unambiguously ask for.
-func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, retry *retryInput, err error) {
+//
+// opened is the path of a template opened in Author mode (Selection.TemplateYAML),
+// written beside the matched template for the build. It is "" otherwise. Like a
+// generated delta, the caller removes it once the build is over.
+func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, retry *retryInput, opened string, err error) {
 	if req.YAML != "" && req.Compose != nil {
-		return "", "", nil, fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
+		return "", "", nil, "", fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
 	}
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
-			return "", "", nil, fmt.Errorf("writing template: %w", werr) // server-side
+			return "", "", nil, "", fmt.Errorf("writing template: %w", werr) // server-side
 		}
 		// A posted template can declare a credential-less sudo account just as a
 		// curated one can, and such a build always fails. Say so now rather than
 		// after the chroot is populated.
 		if verr := s.checkTemplateCredentials(p); verr != nil {
-			return "", "", nil, verr
+			return "", "", nil, "", verr
 		}
 		if verr := checkBaseImage(p); verr != nil {
-			return "", "", nil, verr
+			return "", "", nil, "", verr
 		}
-		return p, "template.yml", &retryInput{YAML: req.YAML}, nil
+		return p, "template.yml", &retryInput{YAML: req.YAML}, opened, nil
 	}
 	if req.Compose == nil {
-		return "", "", nil, fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
+		return "", "", nil, "", fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
 	}
 	c := req.Compose
-	if c.TemplateYAML != "" {
-		return "", "", nil, fmt.Errorf("%w: building an opened template is not supported yet", errBadBuildRequest)
-	}
 	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.Kernel, c.ImageType)
 	if tmpl == "" {
-		return "", "", nil, fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
+		return "", "", nil, "", fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
 	}
 	full, perr := safeTemplatePath(s.cfg.TemplatesDir, tmpl)
 	if perr != nil {
-		return "", "", nil, fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
+		return "", "", nil, "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
+	}
+	// A template opened in Author mode is built in place of the matched one,
+	// written beside it; a delta for any logins then extends it instead.
+	parentTmpl := tmpl
+	if c.TemplateYAML != "" {
+		openedPath, openedTmpl, cleanupOpened, oerr := s.openTemplate(tmpl, full, c.TemplateYAML)
+		if oerr != nil {
+			return "", "", nil, "", oerr // already an *Error: 403 or 400
+		}
+		// Removed again on any failure below; on success the build owns it.
+		defer func() {
+			if err != nil {
+				cleanupOpened()
+			}
+		}()
+		opened, full, parentTmpl = openedPath, openedPath, openedTmpl
 	}
 	if !c.hasOverrides() {
 		// Without a delta the curated template is built as-is, so this is the
@@ -972,27 +1002,27 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		// fails in milliseconds; the build itself would only reach the same
 		// check after the package download, minutes in.
 		if verr := s.checkTemplateCredentials(full); verr != nil {
-			return "", "", nil, verr
+			return "", "", nil, "", verr
 		}
 		if verr := checkBaseImage(full); verr != nil {
-			return "", "", nil, verr
+			return "", "", nil, "", verr
 		}
 		sel := *c
-		return full, tmpl, &retryInput{Compose: &sel}, nil
+		return full, tmpl, &retryInput{Compose: &sel}, opened, nil
 	}
 	// StartBuild can be posted directly, bypassing /templates/compose, so the
 	// overrides must be validated here too rather than trusting a prior compose.
 	if verr := ValidateImageName(c.ImageName); verr != nil {
-		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	if verr := ValidatePackages(c.Packages); verr != nil {
-		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	if verr := ValidateDisk(c.Disk, c.ImageType); verr != nil {
-		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	if verr := ValidateBaseImage(c.BaseImage); verr != nil {
-		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	// Credentials name users and carry a password to hash, and new accounts must
 	// not collide with a user the parent already declares, so both are checked
@@ -1000,15 +1030,15 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if len(c.Credentials) > 0 || len(c.NewUsers) > 0 {
 		parentMerged, perr := config.LoadAndMergeTemplate(full)
 		if perr != nil {
-			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, perr)
+			return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, perr)
 		}
 		hashed, cerr := validateCredentials(c.Credentials, parentMerged)
 		if cerr != nil {
-			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
+			return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
 		}
 		created, uerr := validateNewUsers(c.NewUsers, parentMerged)
 		if uerr != nil {
-			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
+			return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
 		}
 		// Copy rather than mutate: c points at the caller's request, which is
 		// also stored on the build record and would otherwise carry the hash.
@@ -1017,26 +1047,26 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		withHashed.NewUsers = created
 		c = &withHashed
 	}
-	deltaPath, _, cleanup, derr := s.deltaForOverride(tmpl, full, *c)
+	deltaPath, _, cleanup, derr := s.deltaForOverride(parentTmpl, full, *c)
 	if derr != nil {
 		if errors.Is(derr, errBadBaseImage) {
-			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, derr)
+			return "", "", nil, "", fmt.Errorf("%w: %v", errBadBuildRequest, derr)
 		}
-		return "", "", nil, fmt.Errorf("generating override template: %w", derr) // server-side
+		return "", "", nil, "", fmt.Errorf("generating override template: %w", derr) // server-side
 	}
 
 	if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
 		cleanup()
-		return "", "", nil, verr
+		return "", "", nil, "", verr
 	}
 	if verr := checkBaseImage(deltaPath); verr != nil {
 		cleanup()
-		return "", "", nil, verr
+		return "", "", nil, "", verr
 	}
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
 	sel := *c
-	return deltaPath, tmpl, &retryInput{Compose: &sel}, nil
+	return deltaPath, tmpl, &retryInput{Compose: &sel}, opened, nil
 }
 
 // checkBaseImage rejects an overlay build whose baseline image is a local path
@@ -1519,6 +1549,9 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 func (b *build) archiveAndCleanupDelta() {
 	if b.DeltaPath != "" {
 		defer func() { _ = os.Remove(b.DeltaPath) }()
+	}
+	if b.OpenedPath != "" {
+		defer func() { _ = os.Remove(b.OpenedPath) }()
 	}
 	b.archiveMergedTemplate()
 }
