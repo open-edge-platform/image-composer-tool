@@ -38,6 +38,7 @@ func (stubServer) ListBuildArtifacts(http.ResponseWriter, *http.Request, BuildId
 func (stubServer) GetBuildDetails(http.ResponseWriter, *http.Request, BuildId)                 {}
 func (stubServer) CancelBuild(http.ResponseWriter, *http.Request, BuildId)                     {}
 func (stubServer) GetManifest(http.ResponseWriter, *http.Request)                              {}
+func (stubServer) GetSession(http.ResponseWriter, *http.Request)                               {}
 func (stubServer) ComposeTemplate(http.ResponseWriter, *http.Request)                          {}
 func (stubServer) ValidateTemplate(http.ResponseWriter, *http.Request)                         {}
 func (stubServer) ListPackageRepos(http.ResponseWriter, *http.Request, ListPackageReposParams) {}

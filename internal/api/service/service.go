@@ -50,6 +50,10 @@ type Config struct {
 	// EdgePackPath is an optional Edge Pack catalog file; empty uses the
 	// embedded copy.
 	EdgePackPath string
+	// Authoring grants every user the authoring capability: the Advanced tab
+	// offers Author mode, which edits a whole template. Later, a user's role
+	// will grant it instead.
+	Authoring bool
 	// PkgIndex tunes the package-index cache SearchPackages reads through. A
 	// zero value is usable; see pkgindex.Config for its defaults.
 	PkgIndex pkgindex.Config

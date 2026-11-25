@@ -27,6 +27,13 @@ func optStr(s string) *string {
 // optStrs returns nil for an empty slice, else a pointer to it. Omitting rather
 // than emitting `[]` keeps "the server has nothing to say here" distinct from
 // "the server says the list is empty" for clients that check presence.
+func optBool(b bool) *bool {
+	if !b {
+		return nil
+	}
+	return &b
+}
+
 func optStrs(v []string) *[]string {
 	if len(v) == 0 {
 		return nil
@@ -46,8 +53,14 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.Sku != nil {
 		sel.SKU = *r.Sku
 	}
+	if r.Kernel != nil {
+		sel.Kernel = *r.Kernel
+	}
 	if r.ImageName != nil {
 		sel.ImageName = *r.ImageName
+	}
+	if r.BaseImage != nil {
+		sel.BaseImage = *r.BaseImage
 	}
 	if r.Packages != nil {
 		sel.Packages = *r.Packages
@@ -202,8 +215,8 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 func fromManifest(m *service.Manifest) httpapi.Manifest {
 	out := httpapi.Manifest{
 		Combinations: make([]httpapi.Combination, len(m.Combinations)),
-		Verticals:    fromOptions(m.Verticals),
-		Skus:         fromOptions(m.SKUs),
+		Verticals:    fromVerticals(m.Verticals),
+		Skus:         fromSKUs(m.SKUs),
 		Platforms:    fromOptions(m.Platforms),
 		Targets:      make([]httpapi.Target, len(m.Targets)),
 	}
@@ -213,6 +226,7 @@ func fromManifest(m *service.Manifest) httpapi.Manifest {
 			Sku:       optStr(c.SKU),
 			Platform:  c.Platform,
 			Os:        c.OS,
+			Kernel:    optStr(c.Kernel),
 			ImageType: c.ImageType,
 			Template:  c.Template,
 		}
@@ -224,6 +238,10 @@ func fromManifest(m *service.Manifest) httpapi.Manifest {
 			Os:          t.OS,
 			Arch:        t.Arch,
 		}
+	}
+	if len(m.Kernels) > 0 {
+		kernels := fromOptions(m.Kernels)
+		out.Kernels = &kernels
 	}
 	return out
 }
@@ -399,27 +417,48 @@ func fromOptions(opts []service.Option) []httpapi.Option {
 	return out
 }
 
+func fromSKUs(skus []service.SKU) []httpapi.Sku {
+	out := make([]httpapi.Sku, len(skus))
+	for i, s := range skus {
+		out[i] = httpapi.Sku{Id: s.ID, DisplayName: s.DisplayName, KernelLabel: optStr(s.KernelLabel)}
+	}
+	return out
+}
+
+func fromVerticals(vs []service.Vertical) []httpapi.Vertical {
+	out := make([]httpapi.Vertical, len(vs))
+	for i, v := range vs {
+		out[i] = httpapi.Vertical{Id: v.ID, DisplayName: v.DisplayName, SkuLabel: optStr(v.SKULabel)}
+		if v.PlatformFirst {
+			out[i].PlatformFirst = &v.PlatformFirst
+		}
+	}
+	return out
+}
+
 func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 	if s == nil {
 		return nil
 	}
 	return &httpapi.ComposeSummary{
-		Vertical:       s.Vertical,
-		Sku:            s.SKU,
-		Platform:       s.Platform,
-		Os:             s.OS,
-		ImageType:      s.ImageType,
-		ImageName:      s.ImageName,
-		ImageVersion:   s.ImageVersion,
-		Description:    s.Description,
-		Architecture:   s.Architecture,
-		KernelVersion:  s.KernelVersion,
-		PackageCount:   s.PackageCount,
-		DiskSize:       s.DiskSize,
-		PartitionCount: s.PartitionCount,
-		PartitionTable: s.PartitionTable,
-		Hostname:       s.Hostname,
-		BaseImage:      optStr(s.BaseImage),
+		Vertical:         s.Vertical,
+		Sku:              s.SKU,
+		Platform:         s.Platform,
+		Os:               s.OS,
+		Kernel:           optStr(s.Kernel),
+		ImageType:        s.ImageType,
+		ImageName:        s.ImageName,
+		ImageVersion:     s.ImageVersion,
+		Description:      s.Description,
+		Architecture:     s.Architecture,
+		KernelVersion:    s.KernelVersion,
+		PackageCount:     s.PackageCount,
+		DiskSize:         s.DiskSize,
+		PartitionCount:   s.PartitionCount,
+		PartitionTable:   s.PartitionTable,
+		Hostname:         s.Hostname,
+		BaseImage:        optStr(s.BaseImage),
+		BaseImageMissing: optBool(s.BaseImageMissing),
 
 		Advanced: fromAdvancedChanges(s.Advanced),
 	}
@@ -431,6 +470,7 @@ func fromAdvancedChanges(a *service.AdvancedChanges) *httpapi.AdvancedChanges {
 	}
 	out := &httpapi.AdvancedChanges{
 		ImageName:      optStr(a.ImageName),
+		BaseImage:      optStr(a.BaseImage),
 		Packages:       optStrs(a.Packages),
 		Repos:          optStrs(a.Repos),
 		NewUsers:       optStrs(a.NewUsers),

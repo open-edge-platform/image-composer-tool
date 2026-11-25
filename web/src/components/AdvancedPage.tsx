@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, encodePackage, skuLabelFor } from '../store'
+import { UndoRedo } from './UndoRedo'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -13,14 +14,17 @@ import type {
   PackageRepo,
 } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
+import { BaseImageField } from './BaseImageField'
 import { AdvancedChangesCard } from './AdvancedChangesCard'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
+import { baseImageProblem } from '../lib/baseImage'
 import { useBaseLock } from '../lib/baseLock'
 import { overlayIncompatiblePackages, strandedPackages } from '../lib/edgepack'
 
@@ -135,10 +139,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const missingTarget = opts
     ? ([
         ['Use Case', !selection.vertical],
-        ['SKU', opts.skus.length > 0 && !selection.sku],
+        [skuLabelFor(manifest, selection.vertical), opts.skus.length > 0 && !selection.sku],
         ['Platform', !selection.platform],
         ['Operating System', !selection.os],
-        ['Kernel', opts.kernels.length > 0 && !selection.kernel],
+        [kernelLabelFor(manifest, selection.sku), opts.kernels.length > 0 && !selection.kernel],
         ['Image Name', !imageName.trim()],
       ] as [string, boolean][]).filter(([, missing]) => missing).map(([label]) => label)
     : []
@@ -151,6 +155,19 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     const t = setTimeout(() => setDebouncedImageName(imageName), IMAGE_NAME_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [imageName])
+  // The base image is typed too, so it's debounced the same way.
+  const baseImage = useStore((s) => s.baseImage)
+  const baseImageEdited = useStore((s) => s.baseImageEdited)
+  const seedBaseImage = useStore((s) => s.seedBaseImage)
+  const [debouncedBaseImage, setDebouncedBaseImage] = useState(baseImage)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBaseImage(baseImage), IMAGE_NAME_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [baseImage])
+  // Only an edited path is sent. Keyed on this rather than on the debounced
+  // value, so seeding the field from a compose doesn't trigger another compose
+  // (each of which clears the page's error).
+  const baseImageOverride = baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined
 
   // Package picks are encoded once here, and memoised on the encoded strings
   // rather than on addedPackages itself: the store hands back a new array on
@@ -159,10 +176,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Debounced for the same reason the image name is: a credential is typed, and
   // every override compose writes and removes a server-side delta file. The
   // build itself re-reads the live value, so nothing waits on a typing pause.
-  const [debouncedCredentials, setDebouncedCredentials] = useState<CredentialInput[]>([])
+  //
+  // Kept as the JSON text rather than the parsed list, so settling on the same
+  // logins (an empty list on first render, say) doesn't hand the request a new
+  // object and trigger another compose, which would clear the page's error.
   const credentialsKey = useMemo(() => JSON.stringify(credentials), [credentials])
+  const [debouncedCredentialsKey, setDebouncedCredentialsKey] = useState('[]')
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedCredentials(JSON.parse(credentialsKey)), CREDENTIALS_DEBOUNCE_MS)
+    const t = setTimeout(() => setDebouncedCredentialsKey(credentialsKey), CREDENTIALS_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [credentialsKey])
 
@@ -179,12 +200,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Debounced like the credentials, and only once every entry is complete: a
   // half-typed account is rejected by the backend, which would replace the
   // Review pane with an error while the user is still filling the form in.
-  const [debouncedNewUsers, setDebouncedNewUsers] = useState<NewUserInput[]>([])
   const newUsersKey = useMemo(() => JSON.stringify(newUsers), [newUsers])
+  const [debouncedNewUsersKey, setDebouncedNewUsersKey] = useState('[]')
   const newUsersReady = newUsersValid(newUsers, composedRequirements)
   useEffect(() => {
     if (!newUsersReady) return
-    const t = setTimeout(() => setDebouncedNewUsers(JSON.parse(newUsersKey)), CREDENTIALS_DEBOUNCE_MS)
+    const t = setTimeout(() => setDebouncedNewUsersKey(newUsersKey), CREDENTIALS_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [newUsersKey, newUsersReady])
 
@@ -246,20 +267,27 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // has edited it, and only the settled (debounced) value, so an in-progress
   // edit doesn't compose against a half-typed name. Packages and repos need no
   // debounce of their own — each arrives from a discrete click, not a keystroke.
+  // What is actually sent. The request is keyed on these rather than on the
+  // debounced values themselves, so a value that changes without being sent
+  // (the disk layout re-encoded once overlay mode is known, say) doesn't
+  // trigger another compose, each of which clears the page's error.
+  const imageNameOverride = imageNameEdited ? debouncedImageName : undefined
+  const diskOverrideKey = diskEdited ? debouncedDiskKey : ''
   const composeReq: ComposeRequest = useMemo(
     () => ({
       ...selection,
-      imageName: imageNameEdited ? debouncedImageName : undefined,
+      imageName: imageNameOverride,
+      baseImage: baseImageOverride,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
       repos: reposKey ? reposKey.split('\n') : undefined,
-      disk: diskEdited && debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
-      credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
-      users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
+      disk: diskOverrideKey ? JSON.parse(diskOverrideKey) : undefined,
+      credentials: debouncedCredentialsKey !== '[]' ? (JSON.parse(debouncedCredentialsKey) as CredentialInput[]) : undefined,
+      users: debouncedNewUsersKey !== '[]' ? (JSON.parse(debouncedNewUsersKey) as NewUserInput[]) : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
-      debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
+    [selection, imageNameOverride, baseImageOverride, packagesKey, reposKey, diskOverrideKey,
+      debouncedCredentialsKey, debouncedNewUsersKey],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -295,6 +323,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           // resolved YAML because the compose summary only carries aggregates
           // (size/count/table), not the partition list the Disk step edits.
           seedImageName(r.summary.imageName)
+          seedBaseImage(r.summary.baseImage ?? '')
           seedDisk(parseDiskFromYaml(r.yaml))
         }
       })
@@ -373,6 +402,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // account without a login, so stop here rather than letting it fail.
   const credentialsReady = credentialsComplete(requirements, credentials) && newUsersReady
 
+  // What's wrong with an overlay template's base image. The server says
+  // whether the path it last composed is on the server.
+  const baseImageIssue = overlay
+    ? baseImageProblem(
+        baseImage,
+        !!composed?.summary.baseImageMissing && composed.summary.baseImage === baseImage.trim(),
+      )
+    : null
+  const BASE_IMAGE_ERROR = 'Set the base image on the Target step before composing.'
+
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
     // Unlike a compose, a build cannot fall back to the last good layout: it has
@@ -380,6 +419,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     // the server will reject.
     if (diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
+      return
+    }
+    if (baseImageIssue) {
+      setError(BASE_IMAGE_ERROR)
       return
     }
     if (overlayPackages.length > 0) {
@@ -400,6 +443,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       const buildReq: ComposeRequest = {
         ...composeReq,
         imageName: imageNameEdited ? imageName : undefined,
+        baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk, { overlay }) : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
         users: newUsers.length > 0 ? newUsers : undefined,
@@ -422,11 +466,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
   }
 
+  // A base image still wrong at Compose time is asked for in the dialog, next
+  // to the logins, rather than sending the user back to fix it.
+  const [askBaseImage, setAskBaseImage] = useState(false)
   const onComposeClick = () => {
     if (diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
       return
     }
+    setAskBaseImage(!!baseImageIssue)
     if (overlayPackages.length > 0) {
       setError(OVERLAY_PACKAGES_ERROR)
       return
@@ -446,7 +494,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     i < step &&
     (i === 0 ? targetComplete : i === 1 ? packagesChanged : i === 2 ? diskEdited && !diskInvalid : true)
   // Red, ahead of green, for a step whose values will not build.
-  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && diskInvalid)
+  const stepHasIssues = (i: number) => (i === 1 && packagesHaveIssues) || (i === 2 && (diskInvalid || !!baseImageIssue))
   // The wizard does not move past Target with a field missing, nor past Disk
   // while it shows an error — a required field left empty there included.
   const canLeaveStep = targetComplete && !(step === 2 && diskInvalid)
@@ -471,6 +519,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
+
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
         {STEPS.map((label, i) => (
@@ -515,6 +564,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           (step === 1 ? 'max-w-6xl' : step === 2 ? 'max-w-5xl' : 'max-w-3xl')
         }
       >
+        {/* Top right of the step box, in a row of its own so it never covers
+            the step's own controls (the Packages search, the Disk Reset). */}
+        <div className="-mt-2 mb-3 flex justify-end">
+          <UndoRedo />
+        </div>
         {/* A failed resolve leaves Image Name unseeded, which locks Next behind
             what reads as an unfilled field. Say why, rather than leaving the
             error on a Review step the user cannot reach. */}
@@ -524,10 +578,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         {step === 0 && (
           <TargetStep
             opts={opts}
+            skuLabel={skuLabelFor(manifest, selection.vertical)}
+            platformFirst={cascadeOrder(manifest, selection.vertical)[1] === 'platform'}
             selection={selection}
             setSel={setSel}
             imageName={imageName}
             setImageName={setImageName}
+            baseImageIssue={overlay ? baseImageIssue : undefined}
           />
         )}
 
@@ -680,6 +737,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         oepInstallerToken={oepInstallerToken}
         onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
+        askBaseImage={askBaseImage}
+        baseImageIssue={baseImageIssue}
         busy={busy}
         buildInProgress={buildInProgress}
         error={error}
@@ -697,23 +756,32 @@ const REQUIRED = <span className="text-red-600"> *</span>
 // Basic tab), plus the editable Image Name override.
 function TargetStep({
   opts,
+  skuLabel,
+  platformFirst,
   selection,
   setSel,
   imageName,
   setImageName,
+  baseImageIssue,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
+  skuLabel: string
+  platformFirst: boolean
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
   setImageName: (v: string) => void
+  // For an overlay template: what's wrong with its base image, or null.
+  // Undefined for any other template, which has no base image.
+  baseImageIssue?: string | null
 }) {
+  const manifest = useStore((s) => s.manifest)
   return (
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed. Fields marked{' '}
+        Select a Use Case to load the default configuration. The remaining
+        selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
@@ -725,24 +793,14 @@ function TargetStep({
         options={opts.verticals}
         onChange={(v) => setSel('vertical', v)}
       />
-      <Select
-        label="SKU"
-        // SKU is optional where the manifest offers none for this use case.
-        labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-        placeholder="-- Select SKU --"
-        value={selection.sku}
-        options={opts.skus}
-        disabled={!selection.vertical}
-        onChange={(v) => setSel('sku', v)}
-      />
-      <Select
-        label="Platform"
-        labelSuffix={REQUIRED}
-        placeholder="-- Select Platform --"
-        value={selection.platform}
-        options={opts.platforms}
-        disabled={!selection.sku && opts.skus.length > 0}
-        onChange={(v) => setSel('platform', v)}
+      <SkuPlatformSelects
+        skus={opts.skus}
+        platforms={opts.platforms}
+        selection={selection}
+        setSel={setSel}
+        skuLabel={skuLabel}
+        platformFirst={platformFirst}
+        required={REQUIRED}
       />
       <Select
         label="Operating System"
@@ -755,9 +813,9 @@ function TargetStep({
       />
       {opts.kernels.length > 0 && (
         <Select
-          label="Kernel"
+          label={kernelLabelFor(manifest, selection.sku)}
           labelSuffix={REQUIRED}
-          placeholder="-- Select Kernel --"
+          placeholder={`-- Select ${kernelLabelFor(manifest, selection.sku)} --`}
           value={selection.kernel}
           options={opts.kernels}
           disabled={!selection.os}
@@ -783,6 +841,11 @@ function TargetStep({
         Defaults to the matched template's image name; once you edit it, your name
         is kept.
       </p>
+      {baseImageIssue !== undefined && (
+        <div className="mt-4">
+          <BaseImageField issue={baseImageIssue} />
+        </div>
+      )}
     </div>
   )
 }

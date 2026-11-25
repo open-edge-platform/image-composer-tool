@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Manifest, Combination } from './api/types'
+import type { Capabilities, Manifest, Combination } from './api/types'
 import type { DiskModel } from './lib/disk'
 
 // Selection state for the Basic tab.
@@ -99,8 +99,16 @@ export function confirmRepoRelease(
   )
 }
 
+// Advanced-tab mode. Author edits a whole template, and is the only mode when
+// the server grants the authoring capability; there is no switch. Without it
+// the tab customizes: it builds the user's changes on top of the selected
+// template.
+export type AdvancedMode = 'customize' | 'author'
+
 interface AppState {
   manifest: Manifest | null
+  capabilities: Capabilities
+  advancedMode: AdvancedMode
   selection: Selection
   // Advanced-tab override for the image name. Kept out of `Selection` so it never
   // leaks into the compose request body; it seeds from the resolved template's
@@ -126,9 +134,27 @@ interface AppState {
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
   setManifest: (m: Manifest) => void
+  // One step of undo and redo over the user's edits (see EDIT_KEYS). Each
+  // holds the edits as they were; null when there is nothing to undo or redo.
+  undoSnapshot: EditSnapshot | null
+  redoSnapshot: EditSnapshot | null
+  // When the last edit was made, so edits in quick succession (typing, Ask
+  // AI applying several, Reset) undo as one.
+  lastEditAt: number
+  undo: () => void
+  redo: () => void
+  // The authoring capability puts the Advanced tab in Author mode; without it,
+  // Customize.
+  setCapabilities: (c: Capabilities) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
+  // An overlay template's base image (baseline.source.path), seeded from the
+  // resolved template like imageName and kept once the user edits it.
+  baseImage: string
+  baseImageEdited: boolean
+  setBaseImage: (value: string) => void
+  seedBaseImage: (value: string) => void
   // Default image name from the resolved template; ignored once the user edits.
   seedImageName: (value: string) => void
   // Disabling a repo also drops any packages added from it — a disabled repo's
@@ -162,159 +188,200 @@ const emptySelection: Selection = {
   imageType: '',
 }
 
-export const useStore = create<AppState>((set) => ({
-  manifest: null,
-  selection: emptySelection,
-  imageName: '',
-  imageNameEdited: false,
-  enabledRepos: [],
-  addedPackages: [],
-  disk: null,
-  diskEdited: false,
-  diskSeed: null,
-  setManifest: (m) => set({ manifest: m }),
-  setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
-  seedImageName: (value) =>
-    set((state) => (state.imageNameEdited ? {} : { imageName: value })),
-  setRepoEnabled: (repo, on) =>
-    set((state) => ({
-      enabledRepos: on
-        ? state.enabledRepos.includes(repo)
-          ? state.enabledRepos
-          : [...state.enabledRepos, repo]
-        : state.enabledRepos.filter((r) => r !== repo),
-      ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
-    })),
-  // Re-pinning to a different repo can leave the one it just left with
-  // nothing depending on it anymore — dropped the same way disabling that
-  // repo manually would already drop this package, just from the other
-  // side of the relationship. A repo the user enabled by hand with nothing
-  // added from it yet is never touched: this only fires as a consequence of
-  // a package actually moving away from a repo, never as an ambient sweep.
-  setPackage: (p, opts) =>
-    set((state) => {
-      const previous = state.addedPackages.find((x) => x.name === p.name)
-      const addedPackages = [...state.addedPackages.filter((x) => x.name !== p.name), p]
-      if (opts?.releaseRepo === false) return { addedPackages }
-      return {
-        addedPackages,
-        enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages, opts?.protectedRepos),
-      }
-    }),
-  removePackage: (name, opts) =>
-    set((state) => {
-      const removed = state.addedPackages.find((p) => p.name === name)
-      const addedPackages = state.addedPackages.filter((p) => p.name !== name)
-      if (opts?.releaseRepo === false) return { addedPackages }
-      return {
-        addedPackages,
-        enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages, opts?.protectedRepos),
-      }
-    }),
-  setPackages: (pkgs) =>
-    set((state) => {
-      const names = new Set(pkgs.map((p) => p.name))
-      // A bulk add ("Select all") only ever grows the set, so nothing it
-      // replaces can be left without a repo to drop.
-      return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
-    }),
-  removePackages: (names, opts) =>
-    set((state) => {
-      const drop = new Set(names)
-      const addedPackages = state.addedPackages.filter((p) => !drop.has(p.name))
-      if (opts?.releaseRepo === false) return { addedPackages }
-      const removedRepos = new Set(
-        state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
-      )
-      const stillNeeded = new Set(addedPackages.map((p) => p.repo))
-      const protectedRepos = opts?.protectedRepos
-      return {
-        addedPackages,
-        enabledRepos: state.enabledRepos.filter(
-          (r) => !removedRepos.has(r) || stillNeeded.has(r) || protectedRepos?.has(r),
-        ),
-      }
-    }),
-  clearPackages: (protectedRepos) =>
-    set((state) => {
-      const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
-      return {
-        addedPackages: [],
-        enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r) || protectedRepos?.has(r)),
-      }
-    }),
-  setDisk: (value) => set({ disk: value, diskEdited: true }),
-  seedDisk: (value) =>
-    // A compose that resolves to a template with no disk block leaves whatever
-    // is on screen alone rather than blanking the step. The seed is recorded
-    // even when the user has edited, so Reset always has a target.
-    set((state) =>
-      value === null ? {} : state.diskEdited ? { diskSeed: value } : { disk: value, diskSeed: value },
-    ),
-  resetDisk: () => set((state) => ({ disk: state.diskSeed, diskEdited: false })),
-  setField: (key, value) =>
-    set((state) => {
-      const selection = { ...state.selection, [key]: value }
-      // Reset downstream fields when an upstream one changes, so the cascade
-      // never leaves an invalid combination selected.
-      // Cascade order: vertical → sku → platform → os → kernel → imageType.
-      if (key === 'vertical') {
-        selection.sku = ''
-        selection.platform = ''
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'sku') {
-        selection.platform = ''
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'platform') {
-        selection.os = ''
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'os') {
-        selection.kernel = ''
-        selection.imageType = ''
-      } else if (key === 'kernel') {
-        selection.imageType = ''
-      }
-      // Auto-fill each downstream dimension with its first available option, so
-      // selecting a vertical immediately populates a valid default combination
-      // the user can tweak, rather than forcing a click through every dropdown.
-      if (state.manifest) {
-        autoFillCascade(state.manifest, selection)
-      }
-      // Any selection change resolves to a (possibly) different template, so let
-      // the image name re-track the new default until edited again.
-      //
-      // Enabled repos and added packages are dropped only when the target OS
-      // actually changes, because repo ids (and the packages resolved from
-      // them) are scoped to a target — keeping them would leave an ubuntu24
-      // repo/package enabled under a Debian target. Unlike imageName, which
-      // re-seeds itself from the next compose response, there is no server-side
-      // default to fall back to, so empty is the only sane value. Comparing the
-      // post-cascade os (autoFillCascade above may refill it with the same
-      // value) means a SKU or platform tweak within one OS keeps the user's
-      // toggles.
-      //
-      // The disk layout is dropped on *any* selection change, unlike repos and
-      // packages: it is not a user pick scoped to a target, it is a copy of the
-      // matched template's own partition table, and a SKU or platform tweak can
-      // resolve to a different template. It is cleared outright rather than just
-      // unflagged, because leaving the previous template's partitions on screen
-      // until the next compose lands would show a layout that no longer applies.
-      const osChanged = selection.os !== state.selection.os
-      return {
-        selection,
-        imageNameEdited: false,
-        disk: null,
-        diskEdited: false,
-        diskSeed: null,
-        ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
-      }
-    }),
-}))
+export const useStore = create<AppState>((set) => {
+  // An edit the user can undo: records where it started, unless it follows
+  // another edit closely enough to count as the same change.
+  const setEdit = (fn: (state: AppState) => Partial<AppState>) =>
+    set((state) => ({ ...fn(state), ...undoPoint(state) }))
+  return {
+    manifest: null,
+    capabilities: { authoring: false },
+    advancedMode: 'customize',
+    selection: emptySelection,
+    imageName: '',
+    imageNameEdited: false,
+    enabledRepos: [],
+    addedPackages: [],
+    disk: null,
+    diskEdited: false,
+    diskSeed: null,
+    undoSnapshot: null,
+    redoSnapshot: null,
+    lastEditAt: 0,
+    undo: () =>
+      set((state) =>
+        state.undoSnapshot ? { ...state.undoSnapshot, undoSnapshot: null, redoSnapshot: snapshotEdits(state), lastEditAt: 0 } : {},
+      ),
+    redo: () =>
+      set((state) =>
+        state.redoSnapshot ? { ...state.redoSnapshot, redoSnapshot: null, undoSnapshot: snapshotEdits(state), lastEditAt: 0 } : {},
+      ),
+    setManifest: (m) => set({ manifest: m }),
+    setCapabilities: (c) =>
+      set({ capabilities: c, advancedMode: c.authoring ? 'author' : 'customize' }),
+    setImageName: (value) => setEdit(() => ({ imageName: value, imageNameEdited: true })),
+    baseImage: '',
+    baseImageEdited: false,
+    setBaseImage: (value) => setEdit(() => ({ baseImage: value, baseImageEdited: true })),
+    seedBaseImage: (value) => set((state) => (state.baseImageEdited ? {} : { baseImage: value })),
+    seedImageName: (value) =>
+      set((state) => (state.imageNameEdited ? {} : { imageName: value })),
+    setRepoEnabled: (repo, on) =>
+      setEdit((state) => ({
+        enabledRepos: on
+          ? state.enabledRepos.includes(repo)
+            ? state.enabledRepos
+            : [...state.enabledRepos, repo]
+          : state.enabledRepos.filter((r) => r !== repo),
+        ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
+      })),
+    // Re-pinning to a different repo can leave the one it just left with
+    // nothing depending on it anymore — dropped the same way disabling that
+    // repo manually would already drop this package, just from the other
+    // side of the relationship. A repo the user enabled by hand with nothing
+    // added from it yet is never touched: this only fires as a consequence of
+    // a package actually moving away from a repo, never as an ambient sweep.
+    setPackage: (p, opts) =>
+      setEdit((state) => {
+        const previous = state.addedPackages.find((x) => x.name === p.name)
+        const addedPackages = [...state.addedPackages.filter((x) => x.name !== p.name), p]
+        if (opts?.releaseRepo === false) return { addedPackages }
+        return {
+          addedPackages,
+          enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages, opts?.protectedRepos),
+        }
+      }),
+    removePackage: (name, opts) =>
+      setEdit((state) => {
+        const removed = state.addedPackages.find((p) => p.name === name)
+        const addedPackages = state.addedPackages.filter((p) => p.name !== name)
+        if (opts?.releaseRepo === false) return { addedPackages }
+        return {
+          addedPackages,
+          enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages, opts?.protectedRepos),
+        }
+      }),
+    setPackages: (pkgs) =>
+      setEdit((state) => {
+        const names = new Set(pkgs.map((p) => p.name))
+        // A bulk add ("Select all") only ever grows the set, so nothing it
+        // replaces can be left without a repo to drop.
+        return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
+      }),
+    removePackages: (names, opts) =>
+      setEdit((state) => {
+        const drop = new Set(names)
+        const addedPackages = state.addedPackages.filter((p) => !drop.has(p.name))
+        if (opts?.releaseRepo === false) return { addedPackages }
+        const removedRepos = new Set(
+          state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
+        )
+        const stillNeeded = new Set(addedPackages.map((p) => p.repo))
+        const protectedRepos = opts?.protectedRepos
+        return {
+          addedPackages,
+          enabledRepos: state.enabledRepos.filter(
+            (r) => !removedRepos.has(r) || stillNeeded.has(r) || protectedRepos?.has(r),
+          ),
+        }
+      }),
+    clearPackages: (protectedRepos) =>
+      setEdit((state) => {
+        const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
+        return {
+          addedPackages: [],
+          enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r) || protectedRepos?.has(r)),
+        }
+      }),
+    setDisk: (value) => setEdit(() => ({ disk: value, diskEdited: true })),
+    seedDisk: (value) =>
+      // A compose that resolves to a template with no disk block leaves whatever
+      // is on screen alone rather than blanking the step. The seed is recorded
+      // even when the user has edited, so Reset always has a target.
+      set((state) =>
+        value === null ? {} : state.diskEdited ? { diskSeed: value } : { disk: value, diskSeed: value },
+      ),
+    resetDisk: () => setEdit((state) => ({ disk: state.diskSeed, diskEdited: false })),
+    setField: (key, value) =>
+      set((state) => {
+        const selection = { ...state.selection, [key]: value }
+        // Reset downstream fields when an upstream one changes, so the cascade
+        // never leaves an invalid combination selected. See cascadeOrder.
+        const order = cascadeOrder(state.manifest, selection.vertical)
+        for (const field of order.slice(order.indexOf(key) + 1)) {
+          selection[field] = ''
+        }
+        // Auto-fill each downstream dimension with its first available option, so
+        // selecting a vertical immediately populates a valid default combination
+        // the user can tweak, rather than forcing a click through every dropdown.
+        if (state.manifest) {
+          autoFillCascade(state.manifest, selection)
+        }
+        // Any selection change resolves to a (possibly) different template, so let
+        // the image name re-track the new default until edited again.
+        //
+        // Enabled repos and added packages are dropped only when the target OS
+        // actually changes, because repo ids (and the packages resolved from
+        // them) are scoped to a target — keeping them would leave an ubuntu24
+        // repo/package enabled under a Debian target. Unlike imageName, which
+        // re-seeds itself from the next compose response, there is no server-side
+        // default to fall back to, so empty is the only sane value. Comparing the
+        // post-cascade os (autoFillCascade above may refill it with the same
+        // value) means a SKU or platform tweak within one OS keeps the user's
+        // toggles.
+        //
+        // The disk layout is dropped on *any* selection change, unlike repos and
+        // packages: it is not a user pick scoped to a target, it is a copy of the
+        // matched template's own partition table, and a SKU or platform tweak can
+        // resolve to a different template. It is cleared outright rather than just
+        // unflagged, because leaving the previous template's partitions on screen
+        // until the next compose lands would show a layout that no longer applies.
+        const osChanged = selection.os !== state.selection.os
+        return {
+          selection,
+          imageNameEdited: false,
+          baseImage: '',
+          baseImageEdited: false,
+          // Edits for the previous template mean nothing for this one.
+          undoSnapshot: null,
+          redoSnapshot: null,
+          disk: null,
+          diskEdited: false,
+          diskSeed: null,
+          ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
+        }
+      }),
+  }
+})
+
+// The state the user edits, which undo and redo restore.
+const EDIT_KEYS = [
+  'addedPackages',
+  'enabledRepos',
+  'disk',
+  'diskEdited',
+  'imageName',
+  'imageNameEdited',
+  'baseImage',
+  'baseImageEdited',
+] as const
+export type EditSnapshot = Pick<AppState, (typeof EDIT_KEYS)[number]>
+
+// Edits this close together undo as one.
+const EDIT_COALESCE_MS = 1000
+
+function snapshotEdits(state: AppState): EditSnapshot {
+  return Object.fromEntries(EDIT_KEYS.map((k) => [k, state[k]])) as EditSnapshot
+}
+
+// undoPoint is the undo bookkeeping for an edit about to be applied to state:
+// the edits as they are now become what Undo restores, unless the previous
+// edit was moments ago, when this one joins it. Redo is gone either way.
+function undoPoint(state: AppState): Partial<AppState> {
+  const now = Date.now()
+  const joins = state.undoSnapshot !== null && now - state.lastEditAt < EDIT_COALESCE_MS
+  return { undoSnapshot: joins ? state.undoSnapshot : snapshotEdits(state), redoSnapshot: null, lastEditAt: now }
+}
 
 // releaseIfOrphaned drops `changed`'s previous repo from enabledRepos when
 // nothing in `remaining` still references it. `changed` is the entry as it
@@ -339,7 +406,7 @@ function releaseIfOrphaned(
 // first option available for the current upstream choices. Walks the cascade in
 // order so each step sees the defaults picked by the previous one.
 function autoFillCascade(manifest: Manifest, selection: Selection): void {
-  const order: (keyof Selection)[] = ['sku', 'platform', 'os', 'kernel', 'imageType']
+  const order = cascadeOrder(manifest, selection.vertical).slice(1)
   const optsKey: Record<string, keyof ReturnType<typeof cascadingOptions>> = {
     sku: 'skus',
     platform: 'platforms',
@@ -367,6 +434,29 @@ function autoFillCascade(manifest: Manifest, selection: Selection): void {
 // for a value the manifest does not list — an old build's retired SKU, say.
 export function labelFor(options: { id: string; displayName: string }[], id: string): string {
   return options.find((o) => o.id === id)?.displayName ?? id
+}
+
+// The label of the kernel dropdown under a SKU: the SKU's own kernelLabel
+// (e.g. "Mainline Kernel Version"), or "Kernel".
+export function kernelLabelFor(manifest: Manifest | null, sku: string): string {
+  return manifest?.skus.find((s) => s.id === sku)?.kernelLabel || 'Kernel'
+}
+
+// cascadeOrder is the order the selection dropdowns cascade in: vertical → sku →
+// platform → os → kernel → imageType, or with platform before sku for a use
+// case that sets platformFirst. Each field's options depend on the ones before
+// it, and changing a field clears the ones after it.
+export function cascadeOrder(manifest: Manifest | null, vertical: string): (keyof Selection)[] {
+  const platformFirst = manifest?.verticals.find((v) => v.id === vertical)?.platformFirst
+  return platformFirst
+    ? ['vertical', 'platform', 'sku', 'os', 'kernel', 'imageType']
+    : ['vertical', 'sku', 'platform', 'os', 'kernel', 'imageType']
+}
+
+// The label of the SKU dropdown under a use case: the use case's own skuLabel
+// (e.g. "Mainline Kernel Version"), or "SKU".
+export function skuLabelFor(manifest: Manifest | null, vertical: string): string {
+  return manifest?.verticals.find((v) => v.id === vertical)?.skuLabel || 'SKU'
 }
 
 // Distinct ids present in combinations, optionally filtered by prior selections.
@@ -425,12 +515,19 @@ export function cascadingOptions(
     }))
 
   const verticals = map(distinct(c, 'vertical', {}), manifest.verticals)
+  const platformFirst = cascadeOrder(manifest, selection.vertical)[1] === 'platform'
   const skus = map(
-    distinct(c, 'sku', { vertical: selection.vertical }),
+    distinct(c, 'sku', {
+      vertical: selection.vertical,
+      ...(platformFirst ? { platform: selection.platform } : {}),
+    }),
     manifest.skus,
   )
   const platforms = map(
-    distinct(c, 'platform', { vertical: selection.vertical, sku: selection.sku }),
+    distinct(c, 'platform', {
+      vertical: selection.vertical,
+      ...(platformFirst ? {} : { sku: selection.sku }),
+    }),
     manifest.platforms,
   )
   const oses = map(
@@ -451,7 +548,11 @@ export function cascadingOptions(
     platform: selection.platform,
     os: selection.os,
   })
-  const kernelLabels: Record<string, string> = { standard: 'Standard', rt: 'Real-Time' }
+  const kernelLabels: Record<string, string> = {
+    standard: 'Standard',
+    rt: 'Real-Time',
+    ...Object.fromEntries((manifest.kernels ?? []).map((k) => [k.id, k.displayName])),
+  }
   const kernels = kernelIds.map(({ id, available }) => ({
     id,
     label: kernelLabels[id] ?? id,

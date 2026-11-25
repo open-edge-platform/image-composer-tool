@@ -12,6 +12,26 @@ export interface Option {
   displayName: string
 }
 
+// What the current user may do. The UI shows a feature only when its
+// capability is true.
+export interface Capabilities {
+  // The Advanced tab may offer Author mode, which edits a whole template.
+  authoring: boolean
+}
+
+export interface Session {
+  capabilities: Capabilities
+}
+
+// A use case. skuLabel renames the SKU dropdown for a use case whose second
+// choice is something else, such as a kernel version.
+export interface Vertical extends Option {
+  skuLabel?: string
+  // Ask for the platform before the SKU, for a use case whose SKU choices
+  // depend on the platform (such as kernel versions).
+  platformFirst?: boolean
+}
+
 export interface Target {
   id: string
   displayName: string
@@ -24,20 +44,28 @@ export interface Combination {
   sku?: string
   platform: string
   os: string
-  // Optional kernel variant (e.g. "standard" | "rt"). Present only when a
-  // vertical/platform/OS offers a real-time template variant; the UI gates the
-  // kernel selector on its presence rather than hardcoding RT support.
+  // Optional kernel choice: a variant ("standard" | "rt") or a version (a BKC
+  // type's kernel versions). Present only where the selection offers one; the
+  // UI shows the kernel selector only then.
   kernel?: string
   imageType: string
   template: string
 }
 
+// A SKU. kernelLabel names the kernel dropdown its combinations offer, such
+// as "Mainline Kernel Version".
+export interface Sku extends Option {
+  kernelLabel?: string
+}
+
 export interface Manifest {
   combinations: Combination[]
-  verticals: Option[]
-  skus: Option[]
+  verticals: Vertical[]
+  skus: Sku[]
   platforms: Option[]
   targets: Target[]
+  // Display names for the kernel ids combinations use.
+  kernels?: Option[]
 }
 
 export interface ComposeRequest {
@@ -47,6 +75,9 @@ export interface ComposeRequest {
   os: string
   kernel?: string
   imageType: string
+  // Overrides an overlay template's base image (baseline.source.path), as an
+  // absolute path on the server. Omitted means "not overridden".
+  baseImage?: string
   // Advanced-mode override for the matched template's image.name. Omitted (not
   // just empty) means "not overridden" — the backend resolves the curated
   // template directly rather than generating an override delta for it.
@@ -125,6 +156,8 @@ export interface ComposeSummary {
   platform: string
   os: string
   imageType: string
+  // The selection's kernel, when it offers one.
+  kernel?: string
   // Template-derived
   imageName: string
   imageVersion: string
@@ -137,6 +170,8 @@ export interface ComposeSummary {
   partitionTable: string
   hostname: string
   baseImage?: string
+  // True when baseImage is a local path that isn't a file on the server.
+  baseImageMissing?: boolean
   // What the Advanced tab changed relative to the matched template. Absent
   // when nothing was overridden.
   advanced?: AdvancedChanges
@@ -144,6 +179,7 @@ export interface ComposeSummary {
 
 export interface AdvancedChanges {
   imageName?: string
+  baseImage?: string
   // Added packages; a `name_version` entry is a pinned version.
   packages?: string[]
   repos?: string[]

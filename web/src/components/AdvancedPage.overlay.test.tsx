@@ -6,7 +6,7 @@
 // which turn DKMS on, are selected. Overlay mode has to be known even when the
 // overridden compose fails because of exactly those packages.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdvancedPage } from './AdvancedPage'
 import { useStore } from '../store'
@@ -53,7 +53,8 @@ function composeResponse(req: ComposeRequest): ComposeResponse {
       vertical: req.vertical, sku: req.sku ?? '', platform: req.platform, os: req.os, imageType: req.imageType,
       imageName: 'ubuntu26-nvl-bkc-overlay', imageVersion: '26.04', description: '', architecture: 'x86_64',
       kernelVersion: '', packageCount: 1, diskSize: '', partitionCount: 0, partitionTable: '', hostname: '',
-      baseImage: '/path/to/ubuntu-26.04-base.raw',
+      baseImage: req.baseImage ?? '/path/to/ubuntu-26.04-base.raw',
+      baseImageMissing: !req.baseImage,
     },
   }
 }
@@ -78,6 +79,8 @@ beforeEach(() => {
     imageNameEdited: true,
     disk: parseDiskFromYaml(minimalPtlPvRaw),
     diskEdited: false,
+    baseImage: '',
+    baseImageEdited: false,
   })
 })
 
@@ -93,5 +96,30 @@ describe('AdvancedPage for an overlay template', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(await screen.findByText(/keeps its partition\s+table and partitions/)).toBeTruthy()
     expect(screen.queryByText('Partition Table')).toBeNull()
+  })
+
+  it('asks for the base image under the selection, and again in the Compose dialog while it is wrong', async () => {
+    useStore.setState({ addedPackages: [] })
+    render(<AdvancedPage active onBuildStarted={() => {}} buildInProgress={false} />)
+
+    // On the Target step, seeded with the template's placeholder, which the
+    // server reports missing.
+    const input = (await screen.findByLabelText(/Base Image/)) as HTMLInputElement
+    await waitFor(() => expect(input.value).toBe('/path/to/ubuntu-26.04-base.raw'))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/placeholder/)
+
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false))
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Compose Image' }))
+
+    // The dialog asks for it too, and won't compose until it's right.
+    const dialog = await screen.findByRole('dialog')
+    const compose = () => within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Compose Image' })
+    expect(compose().disabled).toBe(true)
+    fireEvent.change(within(dialog).getByLabelText(/Base Image/), { target: { value: '/images/base.raw' } })
+    await waitFor(() =>
+      expect(mockApi.compose).toHaveBeenCalledWith(expect.objectContaining({ baseImage: '/images/base.raw' })),
+    )
+    await waitFor(() => expect(compose().disabled).toBe(false))
   })
 })

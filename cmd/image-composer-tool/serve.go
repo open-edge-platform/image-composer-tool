@@ -6,7 +6,9 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
@@ -24,7 +26,12 @@ var (
 	servePackageRepos string
 	serveEdgePack     string
 	servePrintSudoers bool
+	serveAuthoring    bool
 )
+
+// authoringEnv turns on --enable-authoring when set to true, for container
+// deployments that configure the server through the environment.
+const authoringEnv = "ICT_WEBUI_AUTHORING"
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
 func createServeCommand() *cobra.Command {
@@ -81,6 +88,11 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 			"rebuild). Backs the Advanced tab's Edge Pack tab, which groups a subset "+
 			"of the repository packages by capability domain. When empty, the catalog "+
 			"embedded at build time is used.")
+	authoringDefault, _ := strconv.ParseBool(os.Getenv(authoringEnv))
+	serveCmd.Flags().BoolVar(&serveAuthoring, "enable-authoring", authoringDefault,
+		"Offer the Advanced tab's Author mode, which edits a whole template and "+
+			"saves it to the user's machine. Off by default; "+authoringEnv+"=true "+
+			"turns it on too.")
 	serveCmd.Flags().BoolVar(&servePrintSudoers, "print-sudoers", false,
 		"Print the scoped sudoers drop-in required for `--sudo` cancellation and "+
 			"artifact reads, then exit. The rules are generated for the current user, "+
@@ -128,6 +140,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 
 		PackageReposPath: servePackageRepos,
 		EdgePackPath:     serveEdgePack,
+		Authoring:        serveAuthoring,
 	})
 	if err != nil {
 		return err

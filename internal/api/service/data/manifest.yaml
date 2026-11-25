@@ -134,6 +134,74 @@ combinations:
     imageType: iso
     template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
 
+  # BKC (Best Known Configuration) types under Platform Enablement. Each one
+  # offers kernel versions as `kernel`, named under `kernels` below; the SKU's
+  # `kernelLabel` (under `skus`) names that dropdown. A version with an empty
+  # template is listed but grayed out; give it a template to make it buildable.
+  #
+  # Upstream BKC for Nova Lake on Ubuntu 26.04 is an overlay build: it layers
+  # the BKC stack onto an installed Ubuntu 26.04 RAW image. The template here is
+  # a starter; the full BKC template replaces it under the same name where it
+  # is deployed.
+  - vertical: platform-enablement
+    sku: upstream-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: mainline-7.0.14
+    imageType: raw
+    template: ""
+
+  - vertical: platform-enablement
+    sku: upstream-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: mainline-7.1.13
+    imageType: raw
+    template: ""
+
+  - vertical: platform-enablement
+    sku: upstream-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: mainline-7.2.11
+    imageType: raw
+    template: ""
+
+  # The NVL cBKC template installs the Intel 7.3 kernel
+  # (linux-image-7.3-intel, build 261014t080608z-resolute1).
+  - vertical: platform-enablement
+    sku: upstream-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: mainline-7.3
+    imageType: raw
+    template: ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml
+
+  # Ubuntu LTS BKC (HWE kernels): planned, no templates yet.
+  - vertical: platform-enablement
+    sku: ubuntu-lts-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: hwe-7.0
+    imageType: raw
+    template: ""
+
+  - vertical: platform-enablement
+    sku: ubuntu-lts-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: hwe-7.1
+    imageType: raw
+    template: ""
+
+  - vertical: platform-enablement
+    sku: ubuntu-lts-bkc
+    platform: nvl
+    os: ubuntu26
+    kernel: hwe-7.2
+    imageType: raw
+    template: ""
+
   # Demo SKU: installs only the Standard base runtime, no Media or
   # Manageability add-ons — used to exercise the Web UI Advanced tab's Edge
   # Pack "already in template" pre-check against a selection that locks in a
@@ -152,17 +220,6 @@ combinations:
     imageType: iso
     template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
 
-  # Upstream BKC (Best Known Configuration) image for Nova Lake on Ubuntu
-  # 26.04. An overlay build: it layers the BKC stack onto an installed Ubuntu
-  # 26.04 RAW image. The template here is a starter; the full BKC template
-  # replaces it under the same name where it is deployed.
-  - vertical: platform-enablement
-    sku: upstream-bkc
-    platform: nvl
-    os: ubuntu26
-    imageType: raw
-    template: ubuntu26/ubuntu26-x86_64-nvl-bkc-overlay-raw.yml
-
 verticals:
   - id: retail
     displayName: Retail Edge
@@ -172,6 +229,7 @@ verticals:
     displayName: Fed Aero
   - id: platform-enablement
     displayName: Platform Enablement
+    skuLabel: BKC Type
 
 skus:
   - id: desktop-virtualization
@@ -183,13 +241,17 @@ skus:
   - id: generic-companion-os-server-blueprint
     displayName: Generic Companion OS Server Blueprint
   - id: edgepack
-    displayName: EdgePack Minimal Desktop
+    displayName: Base Platform Minimal Desktop
   - id: edgepack-server
-    displayName: EdgePack Minimal Server
+    displayName: Base Platform Minimal Server
   - id: edgepack-standard-only
     displayName: EdgePack Standard Base Only (Demo)
   - id: upstream-bkc
     displayName: Upstream BKC
+    kernelLabel: Mainline Kernel Version
+  - id: ubuntu-lts-bkc
+    displayName: Ubuntu LTS BKC
+    kernelLabel: HWE Kernel Version
 
 platforms:
   - id: arl
@@ -222,3 +284,20 @@ targets:
     displayName: Ubuntu 26.04
     os: ubuntu
     arch: x86_64
+
+# Display names for the kernel ids above.
+kernels:
+  - id: mainline-7.0.14
+    displayName: "7.0.14"
+  - id: mainline-7.1.13
+    displayName: "7.1.13"
+  - id: mainline-7.2.11
+    displayName: "7.2.11"
+  - id: mainline-7.3
+    displayName: "7.3"
+  - id: hwe-7.0
+    displayName: HWE-7.0
+  - id: hwe-7.1
+    displayName: HWE-7.1
+  - id: hwe-7.2
+    displayName: HWE-7.2

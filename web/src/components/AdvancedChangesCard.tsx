@@ -41,6 +41,7 @@ function advancedHeadline(c: AdvancedChanges): string {
     count ? `${count} ${count === 1 ? one : many}` : null
   const parts = [
     c.imageName ? 'image name' : null,
+    c.baseImage ? 'base image' : null,
     n(c.packages?.length, 'package'),
     n(c.repos?.length, 'repo'),
     c.disk ? 'disk layout' : null,
@@ -95,6 +96,7 @@ function AdvancedChangesList({ changes }: { changes: AdvancedChanges }) {
   const list = (items?: string[]) => (items?.length ? <ExpandableList items={items} /> : null)
   const rows: [string, ReactNode][] = [
     ['Image name', changes.imageName || null],
+    ['Base image', changes.baseImage ? <span className="break-all font-mono">{changes.baseImage}</span> : null],
     ['Packages', list(changes.packages)],
     ['Repositories', list(changes.repos)],
     [

@@ -6,6 +6,38 @@
 
 **New**:
 
+- **Undo last change** and **Redo**, at the top right of the step box in the Web
+  UI's Advanced tab, take back the last change to packages, repositories, the
+  disk layout, the image name or the base image, and put it back. One step
+  each way; changes made in quick succession (typing a name, **Reset to
+  template defaults**) count as one. Choosing another template clears both.
+- The Web UI's Advanced tab handles templates built on a base image (overlay
+  templates) better. For them only, a **Base Image** field appears under the
+  selection on the Basic tab and the Advanced Target step: the path of the
+  installed RAW image on the server, or an https URL the build downloads,
+  seeded from the template. It says when the path is empty, not absolute, or
+  not on the server, or the URL isn't https (naming the template's
+  `/path/to/…` placeholder when that's the one), and while it is wrong the
+  Compose dialog asks for it too and won't compose. The Disk step no longer
+  warns that an overlay defines no partitions. A changed
+  path is sent as the new `baseImage` compose and build field, and the build
+  server refuses any overlay build whose base image it can't find, instead of
+  failing partway in. The partition table stays as the base image has it. The
+  Packages step's repository browser now opens on a repository the template
+  itself uses, such as af01p for the NVL BKC template, rather than Ubuntu's
+  base repository with its thousands of packages.
+- **Fixed**: in the Web UI Advanced tab's Packages step, an unpinned template
+  package showed the version the Ubuntu base repository publishes, with no
+  repository named, even when a build installs another one. For example, the
+  NVL BKC template's `libnss-libvirt` read 12.0.0-1ubuntu5.6 while a build
+  installs 12.0.0-1ubuntu5.7~ppa… from the PPA, a newer version at the same
+  priority. It now shows what a build installs, worked out across every
+  repository in use by the build's rule (highest priority first, then the
+  newest version), with **via** and the repository when that isn't the one
+  being browsed. **Update to latest version** now leaves such a package
+  unpinned when a build takes it from another repository, since pinning it to
+  the browsed repository's version would change where it comes from, and says
+  so; it is not counted on the button either.
 - **Added**: Ubuntu 26.04 is now a supported build host, alongside Ubuntu 24.04. The `Ubuntu 26.04 Host` workflow runs on every pull request and merge, plus weekly, on a 26.04 runner: it runs the host-sensitive unit tests and builds the minimal raw image of Ubuntu 26.04, Ubuntu 24.04, Debian 13 and eLxr 12. It was previously experimental and did not run on pull requests. `scripts/install-ict.sh` and the Debian package install test already cover 26.04.
 - **Added**: `scripts/install-ict.sh` installs the ICT Debian package and the host tools a build uses on Ubuntu and Debian. `--tag TAG` downloads the package and `SHA256SUMS` from the GitHub release of the tag and verifies the checksum before installing; `--deb FILE` installs a package you already have. `--tag` also accepts a package named `image-composer-tool_<version>_amd64.deb`, and `ICT_GITHUB_REPOSITORY=OWNER/REPO` downloads from another repository's release.
 - **Added**: `build --replace-additional-file FINAL=FILE` replaces the host file of the `systemConfig.additionalFiles` entry installed at `FINAL` for one build, so an input that changes per build (for example a vendor tarball) can be supplied on the command line without editing the template. It does not add files: it fails if no entry has that `final` path or `FILE` is not an existing regular file. Repeatable.
@@ -15,6 +47,24 @@
   bypass dependency integrity, protected boot packages, or removal policy.
   Unpinned packages and dependencies are not automatically selected for
   downgrade; RPM overlay builds are not supported end-to-end.
+- The Web UI's Advanced tab works in **Author** mode, editing the whole
+  template, when the server allows it: turn it on with `image-composer-tool
+  serve --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose.
+  There is no switch to the earlier Customize mode, which the tab still uses
+  when authoring is off. The UI asks the new `GET /api/v1/session` endpoint
+  whether authoring is allowed.
+- The Web UI's **Platform Enablement** use case names its second dropdown
+  **BKC Type**: **Base Platform Minimal Desktop**, **Base Platform Minimal
+  Server**, **Upstream BKC** and **Ubuntu LTS BKC** (grayed out until its
+  templates exist). Upstream BKC then asks for a **Mainline Kernel Version** and
+  Ubuntu LTS BKC for an **HWE Kernel Version**, after the platform and OS.
+  Upstream BKC 7.3 builds the Nova Lake Ubuntu 26.04 overlay image with the
+  Intel 7.3 kernel; 7.0.14, 7.1.13 and 7.2.11 are listed but grayed out. In the
+  manifest, a combination's new optional `kernel` picks among combinations that
+  differ only by kernel (and the server now matches on it), a SKU's
+  `kernelLabel` names that dropdown, `kernels` gives the versions their display
+  names, and a use case's `skuLabel` names its SKU dropdown. Use cases can also
+  set `platformFirst` to ask for the platform before the SKU.
 - Overlay builds now print a planned package-change report after dependency
   resolution and preflight, before the build begins. It lists resolver-selected
   dependency upgrades along with additions and approved removals; install-time

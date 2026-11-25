@@ -287,10 +287,13 @@ export function DiskStep({ overlay = false }: { overlay?: boolean }) {
       )}
 
       {overlay ? (
-        <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          This image builds on an existing baseline image and keeps its partition
-          table and partitions, so they cannot be changed here.
-        </p>
+        <>
+          <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            This image builds on an existing baseline image and keeps its partition
+            table and partitions, so they cannot be changed here. The base image is
+            set on the Target step.
+          </p>
+        </>
       ) : (
         <>
           <div className="mb-4">

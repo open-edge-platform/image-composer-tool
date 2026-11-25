@@ -2,6 +2,7 @@
 
 import type {
   Manifest,
+  Session,
   ComposeRequest,
   ComposeResponse,
   ValidationResponse,
@@ -46,6 +47,8 @@ async function jsonFetchRaw(path: string, init?: RequestInit): Promise<Response>
 
 export const api = {
   getManifest: () => jsonFetch<Manifest>('/manifest'),
+
+  getSession: () => jsonFetch<Session>('/session'),
 
   compose: (req: ComposeRequest) =>
     jsonFetch<ComposeResponse>('/templates/compose', {

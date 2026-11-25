@@ -32,4 +32,12 @@ describe('DiskStep for an overlay template', () => {
     expect(screen.getByLabelText('Disk Size')).not.toBeNull()
     expect(screen.getByLabelText('Max Size')).not.toBeNull()
   })
+
+  it('leaves the base image to the Target step, and expects no partitions of its own', () => {
+    useStore.setState({ disk: { ...parseDiskFromYaml(minimalPtlPvRaw)!, partitions: [] } })
+    render(<DiskStep overlay />)
+    expect(screen.queryByLabelText(/Base Image/)).toBeNull()
+    expect(screen.getByText(/The base image is\s+set on the Target step/)).toBeTruthy()
+    expect(screen.queryByText('No partitions are defined.')).toBeNull()
+  })
 })

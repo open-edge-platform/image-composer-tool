@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, skuLabelFor } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
+import { SkuPlatformSelects } from './SkuPlatformSelects'
+import { BaseImageField } from './BaseImageField'
+import { baseImageProblem } from '../lib/baseImage'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 
 // Marks a dropdown the Compose button stays disabled without, matching Advanced.
+// The base image is typed, so it is sent after a pause, not per keystroke.
+const BASE_IMAGE_DEBOUNCE_MS = 500
+
 const REQUIRED = <span className="text-red-600"> *</span>
 
 interface BasicPageProps {
@@ -56,6 +62,28 @@ export function BasicPage({
 
   const complete = !!opts?.matched
 
+  // An overlay template's base image, shared with the Advanced tab. Sent once
+  // edited, after a typing pause, so the summary can say whether the server
+  // has it.
+  const baseImage = useStore((s) => s.baseImage)
+  const baseImageEdited = useStore((s) => s.baseImageEdited)
+  const seedBaseImage = useStore((s) => s.seedBaseImage)
+  const [debouncedBaseImage, setDebouncedBaseImage] = useState(baseImage)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBaseImage(baseImage), BASE_IMAGE_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [baseImage])
+  const baseImageOverride = baseImageEdited && debouncedBaseImage.trim() ? debouncedBaseImage.trim() : undefined
+  const [askBaseImage, setAskBaseImage] = useState(false)
+
+  // A different template asks for different accounts, so anything typed for
+  // the previous one is dropped rather than silently sent with the new build.
+  useEffect(() => {
+    setCredentials([])
+    setNewUsers([])
+    setOEPInstallerToken('')
+  }, [selection])
+
   // Auto-fetch the configuration summary whenever the selection is complete, so
   // it always reflects the current dropdowns (no manual "review" step). Guard
   // against out-of-order responses with a cancel flag.
@@ -65,18 +93,14 @@ export function BasicPage({
       setLoadingSummary(false)
       return
     }
-    // A different template asks for different accounts, so anything typed for
-    // the previous one is dropped rather than silently sent with the new build.
-    setCredentials([])
-    setNewUsers([])
-    setOEPInstallerToken('')
     let cancelled = false
     setLoadingSummary(true)
     api
-      .compose(selection)
+      .compose({ ...selection, baseImage: baseImageOverride })
       .then((r) => {
         if (cancelled) return
         setReview(r)
+        seedBaseImage(r.summary.baseImage ?? '')
         // A successful compose supersedes any earlier compose failure; without
         // this the banner from a transient error sat above a valid summary until
         // the user happened to touch a dropdown.
@@ -91,9 +115,12 @@ export function BasicPage({
     return () => {
       cancelled = true
     }
-  }, [active, complete, selection])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seedBaseImage is a stable store action
+  }, [active, complete, selection, baseImageOverride])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
+  const skuLabel = skuLabelFor(manifest, selection.vertical)
+  const platformFirst = cascadeOrder(manifest, selection.vertical)[1] === 'platform'
 
   const requirements = review?.credentials ?? []
   // The backend rejects a build whose template leaves an account without a
@@ -102,13 +129,23 @@ export function BasicPage({
   const credentialsReady =
     credentialsComplete(requirements, credentials) && newUsersValid(newUsers, requirements)
 
+  // What's wrong with an overlay template's base image; null when a build can
+  // use it, or the template has none.
+  const baseImageIssue = review?.summary.baseImage
+    ? baseImageProblem(
+        baseImage,
+        !!review.summary.baseImageMissing && review.summary.baseImage === baseImage.trim(),
+      )
+    : null
+
   const onBuild = async () => {
-    if (!complete || !credentialsReady) return
+    if (!complete || !credentialsReady || baseImageIssue) return
     try {
       setBusy(true)
       setError(null)
       const req = {
         ...selection,
+        baseImage: baseImageEdited && baseImage.trim() ? baseImage.trim() : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
         users: newUsers.length > 0 ? newUsers : undefined,
       }
@@ -143,14 +180,18 @@ export function BasicPage({
   // Composing always goes through the dialog: besides any missing logins, it is
   // where accounts are added, which a template with nothing to ask for still
   // needs to offer.
-  const onComposeClick = () => setCredentialsOpen(true)
+  // A base image still wrong at Compose time is asked for in the dialog too.
+  const onComposeClick = () => {
+    setAskBaseImage(!!baseImageIssue)
+    setCredentialsOpen(true)
+  }
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
-        Select a Use Case to load the default configuration. SKU, Platform, and
-        Operating System selections may be modified as needed. Fields marked{' '}
+        Select a Use Case to load the default configuration. The remaining
+        selections may be modified as needed. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required.
       </p>
 
@@ -168,24 +209,14 @@ export function BasicPage({
               options={opts.verticals}
               onChange={(v) => setSel('vertical', v)}
             />
-            <Select
-              label="SKU"
-              // SKU is optional where the manifest offers none for this use case.
-              labelSuffix={opts.skus.length > 0 ? REQUIRED : undefined}
-              placeholder="-- Select SKU --"
-              value={selection.sku}
-              options={opts.skus}
-              disabled={!selection.vertical}
-              onChange={(v) => setSel('sku', v)}
-            />
-            <Select
-              label="Platform"
-              labelSuffix={REQUIRED}
-              placeholder="-- Select Platform --"
-              value={selection.platform}
-              options={opts.platforms}
-              disabled={!selection.sku && opts.skus.length > 0}
-              onChange={(v) => setSel('platform', v)}
+            <SkuPlatformSelects
+              skus={opts.skus}
+              platforms={opts.platforms}
+              selection={selection}
+              setSel={setSel}
+              skuLabel={skuLabel}
+              platformFirst={platformFirst}
+              required={REQUIRED}
             />
             <Select
               label="Operating System"
@@ -200,9 +231,9 @@ export function BasicPage({
                 (e.g. standard vs real-time) for the current selection. */}
             {opts.kernels.length > 0 && (
               <Select
-                label="Kernel"
+                label={kernelLabelFor(manifest, selection.sku)}
                 labelSuffix={REQUIRED}
-                placeholder="-- Select Kernel --"
+                placeholder={`-- Select ${kernelLabelFor(manifest, selection.sku)} --`}
                 value={selection.kernel}
                 options={opts.kernels}
                 disabled={!selection.os}
@@ -211,6 +242,7 @@ export function BasicPage({
             )}
             {/* Image Type (raw/iso) is auto-selected from the manifest for the
                 chosen combination and not shown in Basic mode. */}
+            {review?.summary.baseImage && <BaseImageField issue={baseImageIssue} id="basic-base-image" />}
           </div>
 
           {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
@@ -297,6 +329,8 @@ export function BasicPage({
         oepInstallerToken={oepInstallerToken}
         onOEPInstallerTokenChange={setOEPInstallerToken}
         credentialsReady={credentialsReady}
+        askBaseImage={askBaseImage}
+        baseImageIssue={baseImageIssue}
         busy={busy}
         buildInProgress={buildInProgress}
         error={error}

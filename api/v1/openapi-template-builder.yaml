@@ -64,6 +64,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/Manifest"
 
+  /session:
+    get:
+      tags: [Manifest]
+      operationId: getSession
+      summary: Get what the current user may do
+      description: |
+        Returns the current user's capabilities. The UI shows a feature only
+        when its capability is true. Today a server setting decides them for
+        every user; later the user's role will.
+      responses:
+        "200":
+          description: The current user's capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
   # ─────────────────────────────────────────────────────────────────────
   # Packages (Advanced tab)
   # ─────────────────────────────────────────────────────────────────────
@@ -772,6 +789,61 @@ components:
         displayName:
           type: string
 
+    Session:
+      type: object
+      description: What the current user may do.
+      required: [capabilities]
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/Capabilities"
+
+    Capabilities:
+      type: object
+      required: [authoring]
+      properties:
+        authoring:
+          type: boolean
+          description: |
+            The Advanced tab may offer Author mode, which edits a whole
+            template. Set by `serve --enable-authoring`.
+
+    Sku:
+      type: object
+      description: A SKU option for the second dropdown.
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        kernelLabel:
+          type: string
+          description: |
+            Label for the kernel dropdown this SKU's combinations offer, such
+            as "Mainline Kernel Version". Omitted means "Kernel".
+
+    Vertical:
+      type: object
+      description: A use case (vertical) option for the Basic tab's first dropdown.
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        skuLabel:
+          type: string
+          description: |
+            Label for the SKU dropdown under this use case, for a use case whose
+            second choice is not a SKU (e.g. "Mainline Kernel Version"). Omitted
+            means the UI labels it "SKU".
+        platformFirst:
+          type: boolean
+          description: |
+            Ask for the platform before the SKU dropdown, for a use case whose
+            SKU choices depend on the platform (e.g. kernel versions). Omitted
+            means false.
+
     Target:
       type: object
       description: An OS option with its family and architecture.
@@ -799,6 +871,11 @@ components:
           type: string
         os:
           type: string
+        kernel:
+          type: string
+          description: |
+            Picks among combinations that differ only by kernel, such as the
+            kernel versions of a BKC type. Absent when the selection offers none.
         imageType:
           type: string
         template:
@@ -822,11 +899,11 @@ components:
         verticals:
           type: array
           items:
-            $ref: "#/components/schemas/Option"
+            $ref: "#/components/schemas/Vertical"
         skus:
           type: array
           items:
-            $ref: "#/components/schemas/Option"
+            $ref: "#/components/schemas/Sku"
         platforms:
           type: array
           items:
@@ -835,6 +912,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Target"
+        kernels:
+          type: array
+          description: Display names for the kernel ids combinations use.
+          items:
+            $ref: "#/components/schemas/Option"
 
     # ── Packages (Advanced tab) ──
 
@@ -1181,8 +1263,20 @@ components:
           type: string
         os:
           type: string
+        kernel:
+          type: string
+          description: |
+            The kernel of the chosen combination (see Combination.kernel).
+            Omitted when the selection offers none.
         imageType:
           type: string
+        baseImage:
+          type: string
+          description: |
+            Overrides an overlay template's base image: an absolute path on the
+            server (baseline.source.path) or an https URL the build downloads
+            (baseline.source.url). Omitted or empty means "not overridden".
+            Rejected for a template not built on a base image.
         imageName:
           type: string
           description: |
@@ -1601,6 +1695,10 @@ components:
           type: string
         os:
           type: string
+        kernel:
+          type: string
+          description: |
+            The kernel of the selection, when it offers one.
         imageType:
           type: string
         # Template-derived — info the user can't see from the dropdowns
@@ -1627,6 +1725,11 @@ components:
         baseImage:
           type: string
           description: Overlay-mode only — the baseline image packages are layered onto.
+        baseImageMissing:
+          type: boolean
+          description: |
+            True when `baseImage` is a local path that isn't a file on the
+            server, so a build would fail. Never set for a URL.
         advanced:
           $ref: "#/components/schemas/AdvancedChanges"
 
@@ -1640,6 +1743,9 @@ components:
         imageName:
           type: string
           description: The image name that overrode the template's.
+        baseImage:
+          type: string
+          description: The base image path that overrode the template's.
         packages:
           type: array
           description: Packages added (a `name_version` entry is a pinned version).
