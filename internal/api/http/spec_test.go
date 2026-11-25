@@ -41,6 +41,7 @@ func (stubServer) GetManifest(http.ResponseWriter, *http.Request)               
 func (stubServer) GetSession(http.ResponseWriter, *http.Request)                               {}
 func (stubServer) ComposeTemplate(http.ResponseWriter, *http.Request)                          {}
 func (stubServer) ValidateTemplate(http.ResponseWriter, *http.Request)                         {}
+func (stubServer) SuggestTemplateEdits(http.ResponseWriter, *http.Request)                     {}
 func (stubServer) ListPackageRepos(http.ResponseWriter, *http.Request, ListPackageReposParams) {}
 func (stubServer) GetEdgePack(http.ResponseWriter, *http.Request, GetEdgePackParams)           {}
 func (stubServer) SearchPackages(http.ResponseWriter, *http.Request, SearchPackagesParams)     {}

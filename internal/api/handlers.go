@@ -26,7 +26,36 @@ func (s *Server) GetManifest(w http.ResponseWriter, _ *http.Request) {
 // GetSession handles GET /session.
 func (s *Server) GetSession(w http.ResponseWriter, _ *http.Request) {
 	c := s.svc.Session()
-	writeJSON(w, http.StatusOK, httpapi.Session{Capabilities: httpapi.Capabilities{Authoring: c.Authoring}})
+	writeJSON(w, http.StatusOK, httpapi.Session{Capabilities: httpapi.Capabilities{Authoring: c.Authoring, Ai: c.AI}})
+}
+
+// SuggestTemplateEdits handles POST /ai/template-edits.
+func (s *Server) SuggestTemplateEdits(w http.ResponseWriter, r *http.Request) {
+	var req httpapi.TemplateEditsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
+		return
+	}
+	changes := ""
+	if req.Changes != nil {
+		changes = *req.Changes
+	}
+	browsing := ""
+	if req.Browsing != nil {
+		browsing = *req.Browsing
+	}
+	res, err := s.svc.SuggestTemplateEdits(r.Context(), req.TemplateYaml, req.Request, changes, browsing)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	edits := make([]httpapi.TemplateEdit, len(res.Edits))
+	for i, e := range res.Edits {
+		edits[i] = httpapi.TemplateEdit{
+			Op: httpapi.TemplateEditOp(e.Op), Package: e.Package, Version: e.Version, Value: e.Value,
+		}
+	}
+	writeJSON(w, http.StatusOK, httpapi.TemplateEditSuggestion{Note: res.Note, Edits: edits, Unsupported: res.Unsupported})
 }
 
 // ComposeTemplate handles POST /templates/compose.

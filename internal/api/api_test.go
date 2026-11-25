@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/provider"
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 )
@@ -173,10 +175,44 @@ func TestHandleGetSession(t *testing.T) {
 		if rr.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rr.Code)
 		}
-		want := fmt.Sprintf(`{"capabilities":{"authoring":%t}}`, authoring)
+		want := fmt.Sprintf(`{"capabilities":{"ai":false,"authoring":%t}}`, authoring)
 		if got := strings.TrimSpace(rr.Body.String()); got != want {
 			t.Errorf("authoring=%t: body = %s, want %s", authoring, got, want)
 		}
+	}
+}
+
+// aiAnswer is a fake AI service that always suggests adding docker.io.
+type aiAnswer struct{}
+
+func (aiAnswer) ChatJSON(context.Context, []provider.ChatMessage, string, map[string]any) (string, error) {
+	return `{"note":"Added docker.io.","unsupported":[],"edits":[{"op":"add","package":"docker.io","version":"","value":""}]}`, nil
+}
+
+func TestHandleSuggestTemplateEdits(t *testing.T) {
+	s, _ := newTestServerWithICT(t, fakeICT, func(c *Config) { c.Authoring = true; c.AI = aiAnswer{} })
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/session", nil))
+	if got := strings.TrimSpace(rr.Body.String()); got != `{"capabilities":{"ai":true,"authoring":true}}` {
+		t.Errorf("session = %s", got)
+	}
+
+	body := `{"templateYaml":"image:\n  name: x\n","request":"add docker"}`
+	rr = s.do(httptest.NewRequest(http.MethodPost, "/api/v1/ai/template-edits", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var got httpapi.TemplateEditSuggestion
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Note != "Added docker.io." || len(got.Edits) != 1 || got.Edits[0].Op != httpapi.Add || got.Edits[0].Package != "docker.io" {
+		t.Errorf("suggestion = %+v", got)
+	}
+
+	off, _ := newTestServer(t)
+	rr = off.do(httptest.NewRequest(http.MethodPost, "/api/v1/ai/template-edits", strings.NewReader(body)))
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("without the ai capability: status = %d, want 403", rr.Code)
 	}
 }
 

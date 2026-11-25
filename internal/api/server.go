@@ -67,6 +67,9 @@ type Config struct {
 	// Authoring grants every user the authoring capability; see
 	// service.Config.Authoring.
 	Authoring bool
+	// AI and AITokenURL turn on Ask AI; see service.Config.AI.
+	AI         service.TemplateEditor
+	AITokenURL string
 }
 
 // Server holds the HTTP server's dependencies: its listen address and the
@@ -90,6 +93,8 @@ func New(cfg Config) (*Server, error) {
 		PackageReposPath: cfg.PackageReposPath,
 		EdgePackPath:     cfg.EdgePackPath,
 		Authoring:        cfg.Authoring,
+		AI:               cfg.AI,
+		AITokenURL:       cfg.AITokenURL,
 	})
 	if err != nil {
 		return nil, err

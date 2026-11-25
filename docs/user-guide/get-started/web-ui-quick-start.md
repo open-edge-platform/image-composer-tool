@@ -221,6 +221,50 @@ the field is optional and an entered token takes precedence for that build.
 Without a token, a build of such a template fails while downloading, with a
 message that the file may be in a private repository.
 
+## Ask AI in Author Mode
+
+In Author mode, **Ask AI** changes the template from a sentence such as *add
+docker, remove snapd, make the disk 32 GiB*. It asks an OpenAI-compatible
+service, such as Intel's GNAI, for edits. Each package name and version is
+checked against the target's repositories before it is applied; a name that
+isn't found is listed instead, with similar names to pick from. Applied edits
+appear in the **Changes** rail tagged **AI**, where you can undo them. Nothing
+is saved or built until you do so.
+
+You can also ask for packages by name pattern, such as *add all gir\* packages
+from af01p*. The UI finds the matching packages in the repository you name;
+if you name none, in the repository you are browsing on the Packages step;
+and if you ask for *all repositories*, or browse none, in every repository in
+use. It then adds them. A pattern that matches more than
+50 packages is reported instead, so name a repository or narrow the pattern.
+
+The server sends the service the template with your changes so far. It
+removes passwords, SSH keys, tokens and secrets first.
+
+To turn it on with GNAI:
+
+1. Get a token at <https://gnai.intel.com/auth/oauth2/sso> and save it in
+   `ai-token` at the root of the checkout. Git ignores that file.
+
+   ```bash
+   (umask 077; printf '%s' '<GNAI token>' > ai-token)
+   ```
+
+2. In `docker-compose.yml`, uncomment `ICT_WEBUI_AUTHORING`, the four Ask AI
+   lines (`ICT_WEBUI_AI`, `OPENAI_BASE_URL`, `OPENAI_MODEL`,
+   `OPENAI_API_KEY_FILE`), and the `ai_token` lines in both `secrets` sections.
+3. GNAI's certificate is signed by an Intel CA. Uncomment `SSL_CERT_FILE` and
+   the CA bundle line under `volumes`, so the container trusts the host's CA
+   bundle.
+4. Run `docker compose down && docker compose up --build -d`.
+
+The token file is read for every request, so when the token expires, write
+the new one to `ai-token`; there is no need to restart. Until then, Ask AI
+says the token was rejected and links to the page above.
+
+For another OpenAI-compatible service, set `OPENAI_BASE_URL` to its URL
+(including `/v1`) and `OPENAI_MODEL` to one of its chat models.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -229,6 +273,8 @@ message that the file may be in a private repository.
 | `port is already allocated` or `address already in use` on start | Another service uses port 8080. Stop it, or change the host port in the `ports` entry of `docker-compose.yml`, keeping the `127.0.0.1:` prefix, for example `"127.0.0.1:9090:8080"`. |
 | Building the container image fails while downloading npm, Go, or apt packages | Set your proxy variables as shown in [Behind a Proxy](#behind-a-proxy), then run `docker compose up --build` again. |
 | A build in the UI fails while resolving or downloading packages | The build log in the UI names the repository it could not reach. Behind a proxy, check that `no_proxy` does not send that host around the proxy. |
+| Ask AI says the token was rejected | The token expired. Write a new one to `ai-token`. |
+| Ask AI fails with `certificate signed by unknown authority` | Uncomment `SSL_CERT_FILE` and the CA bundle volume in `docker-compose.yml`. |
 | The UI still behaves as before after `git pull` | Run `docker compose up --build`, then hard-refresh the browser (Ctrl+Shift+R). |
 
 ## Next Steps

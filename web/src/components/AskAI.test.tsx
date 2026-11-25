@@ -1,0 +1,228 @@
+// SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AskAI } from './AskAI'
+import { hasAIChanges, isAIChange, noAIChanges, useStore } from '../store'
+import type { TemplateEditSuggestion } from '../api/types'
+
+const mockApi = vi.hoisted(() => ({
+  suggestTemplateEdits: vi.fn(),
+  listPackageRepos: vi.fn(),
+  lookupPackages: vi.fn(),
+  searchPackages: vi.fn(),
+}))
+vi.mock('../api/client', () => ({ api: mockApi }))
+
+const suggestion: TemplateEditSuggestion = {
+  note: 'Added Docker and removed snapd.',
+  edits: [
+    { op: 'add', package: 'docker.io', version: '', value: '' },
+    { op: 'add', package: 'docker-ce', version: '', value: '' },
+    { op: 'remove', package: 'snapd', version: '', value: '' },
+    { op: 'set_disk_size', package: '', version: '', value: '32GiB' },
+  ],
+  unsupported: ['Partitions cannot be added.'],
+}
+
+const disk = {
+  layoutMode: 'size' as const,
+  name: 'disk',
+  size: '16GiB',
+  maxSize: '',
+  partitionTableType: 'gpt' as const,
+  extendLastPartitionToFillDisk: true,
+  artifacts: [],
+  partitions: [],
+  firstStartMiB: 1,
+  path: '',
+  selectionPolicy: null,
+}
+
+const renderAskAI = () =>
+  render(
+    <AskAI
+      os="ubuntu26"
+      templateText={'systemConfig:\n  packages:\n    - snapd\n'}
+      basePackages={['snapd']}
+      templateRepos={[]}
+      templateOnlyRepos={[]}
+      overlay={false}
+    />,
+  )
+
+const ask = (text: string) => {
+  fireEvent.change(screen.getByLabelText(/Ask AI/), { target: { value: text } })
+  fireEvent.click(screen.getByRole('button', { name: 'Suggest' }))
+}
+
+beforeEach(() => {
+  mockApi.suggestTemplateEdits.mockReset().mockResolvedValue(suggestion)
+  mockApi.listPackageRepos.mockReset().mockResolvedValue({
+    repos: [{ id: 'ubuntu', displayName: 'Ubuntu', url: '', enabledByDefault: true }],
+  })
+  mockApi.lookupPackages.mockReset().mockResolvedValue({
+    packages: [{ name: 'docker.io', version: '27.5.1', repository: 'ubuntu' }],
+    unavailableRepos: [],
+  })
+  mockApi.searchPackages.mockReset().mockResolvedValue({ query: '', total: 0, packages: [] })
+  useStore.setState({ addedPackages: [], removedPackages: [], enabledRepos: [], aiChanges: noAIChanges, disk, diskEdited: false })
+})
+
+describe('AskAI', () => {
+  it('applies the checked edits, tags them AI, and lists what it skipped', async () => {
+    renderAskAI()
+    ask('add docker, remove snapd, 32 GiB disk')
+
+    await screen.findByText(/^Applied:/)
+    expect(mockApi.suggestTemplateEdits).toHaveBeenCalledWith(
+      'systemConfig:\n  packages:\n    - snapd\n',
+      'add docker, remove snapd, 32 GiB disk',
+      '',
+      // Nothing is being browsed.
+      undefined,
+    )
+    expect(mockApi.lookupPackages).toHaveBeenCalledWith({
+      os: 'ubuntu26',
+      repos: ['ubuntu'],
+      names: ['docker.io', 'docker-ce', 'snapd'],
+    })
+
+    const s = useStore.getState()
+    expect(s.addedPackages).toEqual([{ name: 'docker.io', version: '', repo: 'ubuntu' }])
+    expect(s.removedPackages).toEqual(['snapd'])
+    expect(s.disk?.size).toBe('32GiB')
+    expect(s.diskEdited).toBe(true)
+    expect(isAIChange(s, 'docker.io')).toBe(true)
+    expect(isAIChange(s, 'snapd')).toBe(true)
+
+    expect(screen.getByText('AI: Added Docker and removed snapd.')).toBeTruthy()
+    expect(screen.getByText('Applied: added docker.io; removed snapd; disk size 32GiB.')).toBeTruthy()
+    // docker-ce isn't in any repository, so it was never added.
+    expect(screen.getByText('docker-ce: not found in the repositories for this target.')).toBeTruthy()
+    expect(screen.getByText('Partitions cannot be added.')).toBeTruthy()
+  })
+
+  it('offers similar names for a package no repository publishes, and adds the one picked', async () => {
+    mockApi.suggestTemplateEdits.mockResolvedValue({
+      note: 'Added Docker.',
+      edits: [{ op: 'add', package: 'docker', version: '', value: '' }],
+      unsupported: [],
+    })
+    mockApi.searchPackages.mockResolvedValue({
+      query: 'docker',
+      total: 2,
+      packages: [
+        { name: 'docker.io', version: '27.5.1', repository: 'ubuntu' },
+        { name: 'docker-buildx', version: '0.19', repository: 'ubuntu' },
+      ],
+    })
+    renderAskAI()
+    ask('add docker')
+
+    await screen.findByText('docker: not found in the repositories for this target.', { exact: false })
+    expect(useStore.getState().addedPackages).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'docker.io' }))
+
+    await screen.findByText('Applied: added docker.io.')
+    expect(useStore.getState().addedPackages).toEqual([{ name: 'docker.io', version: '', repo: 'ubuntu' }])
+    expect(isAIChange(useStore.getState(), 'docker.io')).toBe(true)
+    expect(screen.queryByText(/docker: not found/)).toBeNull()
+  })
+
+  it('sends the changes so far, and shows an answer without an edit summary', async () => {
+    useStore.getState().setPackage({ name: 'htop', version: '3.4', repo: 'ubuntu' })
+    useStore.getState().setPackageRemoved('snapd', true)
+    mockApi.suggestTemplateEdits.mockResolvedValue({
+      note: 'You added htop 3.4 and removed snapd.',
+      edits: [],
+      unsupported: [],
+    })
+    renderAskAI()
+    ask('summarize all changes')
+
+    await screen.findByText('AI: You added htop 3.4 and removed snapd.')
+    expect(mockApi.suggestTemplateEdits.mock.calls[0][2]).toBe(
+      'Added:\n- htop 3.4, from Ubuntu\nRemoved:\n- snapd',
+    )
+    expect(screen.queryByText('No changes were applied.')).toBeNull()
+  })
+
+  it('drops the AI tag once the change is undone or edited by hand', async () => {
+    renderAskAI()
+    ask('add docker')
+    await screen.findByText(/^Applied:/)
+
+    useStore.getState().setPackageRemoved('snapd', false)
+    useStore.getState().setPackage({ name: 'docker.io', version: '27.5.1', repo: 'ubuntu' })
+    const s = useStore.getState()
+    expect(isAIChange(s, 'snapd')).toBe(false)
+    expect(isAIChange(s, 'docker.io')).toBe(false)
+  })
+
+  it('does not tag the same change made by hand after undoing the AI one', async () => {
+    renderAskAI()
+    ask('add docker')
+    await screen.findByText(/^Applied:/)
+
+    // Undo in the rail, then make exactly the same changes by hand.
+    useStore.getState().removePackage('docker.io')
+    useStore.getState().setPackageRemoved('snapd', false)
+    useStore.getState().setPackage({ name: 'docker.io', version: '', repo: 'ubuntu' })
+    useStore.getState().setPackageRemoved('snapd', true)
+    useStore.getState().setDisk({ ...useStore.getState().disk!, size: '32GiB' })
+
+    const s = useStore.getState()
+    expect(isAIChange(s, 'docker.io')).toBe(false)
+    expect(isAIChange(s, 'snapd')).toBe(false)
+    expect(hasAIChanges(s.aiChanges)).toBe(false)
+  })
+
+  it('Undo AI changes puts back what was there and keeps the user\'s own changes', async () => {
+    // The user's own changes first: htop added and the image name.
+    useStore.getState().setPackage({ name: 'htop', version: '3.4', repo: 'ubuntu' })
+    useStore.getState().setImageName('mine')
+    mockApi.suggestTemplateEdits.mockResolvedValue({
+      note: '',
+      edits: [
+        { op: 'add', package: 'docker.io', version: '', value: '' },
+        { op: 'remove', package: 'snapd', version: '', value: '' },
+        { op: 'set_disk_size', package: '', version: '', value: '32GiB' },
+        { op: 'set_image_name', package: '', version: '', value: 'nvl-docker' },
+      ],
+      unsupported: [],
+    })
+    renderAskAI()
+    ask('add docker')
+    await screen.findByText(/^Applied:/)
+    expect(useStore.getState().imageName).toBe('nvl-docker')
+
+    useStore.getState().undoAIChanges()
+    const s = useStore.getState()
+    expect(s.addedPackages).toEqual([{ name: 'htop', version: '3.4', repo: 'ubuntu' }])
+    expect(s.removedPackages).toEqual([])
+    expect(s.disk?.size).toBe('16GiB')
+    expect(s.diskEdited).toBe(false)
+    expect(s.imageName).toBe('mine')
+    expect(hasAIChanges(s.aiChanges)).toBe(false)
+  })
+
+  it('links to where to get a new token when the service rejects it', async () => {
+    mockApi.suggestTemplateEdits.mockRejectedValue(
+      new Error('the AI service rejected the token; it may have expired. Get a new one at https://gnai.intel.com/auth/oauth2/sso'),
+    )
+    renderAskAI()
+    ask('add docker')
+
+    const link = await screen.findByRole('link', { name: 'https://gnai.intel.com/auth/oauth2/sso' })
+    expect(link.getAttribute('href')).toBe('https://gnai.intel.com/auth/oauth2/sso')
+    expect(useStore.getState().addedPackages).toEqual([])
+  })
+
+  it('does nothing for an empty request', async () => {
+    renderAskAI()
+    expect((screen.getByRole('button', { name: 'Suggest' }) as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect(mockApi.suggestTemplateEdits).not.toHaveBeenCalled())
+  })
+})

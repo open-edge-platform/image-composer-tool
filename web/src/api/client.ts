@@ -14,6 +14,7 @@ import type {
   CancelAccepted,
   HistoryItem,
   Artifact,
+  TemplateEditSuggestion,
 } from './types'
 
 const BASE = '/api/v1'
@@ -49,6 +50,16 @@ export const api = {
   getManifest: () => jsonFetch<Manifest>('/manifest'),
 
   getSession: () => jsonFetch<Session>('/session'),
+
+  // Ask AI: the edits the AI service suggests for templateYaml. They are
+  // unchecked; see lib/aiEdits.ts.
+  // changes is the user's changes so far as text (see describeChanges), so
+  // a question about them can be answered.
+  suggestTemplateEdits: (templateYaml: string, request: string, changes: string, browsing?: string) =>
+    jsonFetch<TemplateEditSuggestion>('/ai/template-edits', {
+      method: 'POST',
+      body: JSON.stringify({ templateYaml, request, changes, browsing }),
+    }),
 
   compose: (req: ComposeRequest) =>
     jsonFetch<ComposeResponse>('/templates/compose', {

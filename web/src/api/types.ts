@@ -17,6 +17,28 @@ export interface Option {
 export interface Capabilities {
   // The Advanced tab may offer Author mode, which edits a whole template.
   authoring: boolean
+  // Author mode may offer Ask AI. Absent from an older backend.
+  ai?: boolean
+}
+
+// One edit Ask AI suggests (POST /ai/template-edits). add, remove and
+// set_version use package (and version; empty unpins); set_disk_size and
+// set_image_name use value. pin_latest pins package to its newest version
+// or, with package empty, every package from the repository value names in
+// the user's words. Unused fields are empty.
+export interface TemplateEdit {
+  op: 'add' | 'remove' | 'set_version' | 'pin_latest' | 'add_matching' | 'set_disk_size' | 'set_image_name'
+  package: string
+  version: string
+  value: string
+}
+
+export interface TemplateEditSuggestion {
+  // A short summary for the user.
+  note: string
+  edits: TemplateEdit[]
+  // What was asked for that these edits can't express.
+  unsupported: string[]
 }
 
 export interface Session {

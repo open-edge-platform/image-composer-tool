@@ -8,7 +8,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SelectedPackages } from './SelectedPackages'
-import { useStore } from '../store'
+import { useStore, noAIChanges } from '../store'
 import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
@@ -44,12 +44,43 @@ const repos: PackageRepo[] = [
 ]
 
 beforeEach(() => {
-  useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [] })
+  useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [], aiChanges: noAIChanges })
   mockApi.searchPackages.mockReset()
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
 })
 
 describe('SelectedPackages', () => {
+  it('tags the changes Ask AI made, while they stay as it made them', () => {
+    const baseLock = {
+      info: (name: string) => ({ locked: name === 'snapd', currentIsFloating: true }),
+      ensureResolved: () => {},
+      concreteNames: ['snapd'],
+    } as unknown as BaseLock
+    const docker = { name: 'docker.io', version: '', repo: 'base' }
+    useStore.getState().setPackage(docker)
+    useStore.getState().setPackage({ name: 'htop', version: '3.3', repo: 'base' })
+    useStore.getState().setPackageRemoved('snapd', true)
+    useStore.getState().recordAIChanges({
+      packages: {
+        'docker.io': { after: docker, before: null, wasRemoved: false },
+        snapd: { after: 'removed', before: null, wasRemoved: false },
+      },
+      repos: [],
+    })
+
+    render(<Selected repos={repos} baseLock={baseLock} authoring />)
+    expect(screen.getAllByTitle('Suggested by Ask AI')).toHaveLength(2)
+
+    act(() => useStore.getState().setPackage({ name: 'docker.io', version: '27.5.1', repo: 'base' }))
+    expect(screen.getAllByTitle('Suggested by Ask AI')).toHaveLength(1)
+
+    // Undo AI changes puts snapd back and keeps the hand edits.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo AI changes' }))
+    expect(useStore.getState().removedPackages).toEqual([])
+    expect(useStore.getState().addedPackages.map((p) => p.name).sort()).toEqual(['docker.io', 'htop'])
+    expect(screen.queryByRole('button', { name: 'Undo AI changes' })).toBeNull()
+  })
+
   it('lists only added packages, with their count, and none of the template’s own', () => {
     useStore.getState().setPackage({ name: 'vim', version: '9.2', repo: 'base' })
     render(<Selected repos={repos} />)

@@ -264,6 +264,8 @@ ai:
 |----------------------|-------------|
 | `OPENAI_API_KEY` | Required when `provider: openai` |
 | `OPENAI_BASE_URL` | Overrides `openai.base_url` |
+| `OPENAI_MODEL` | Overrides `openai.chat_model` |
+| `OPENAI_API_KEY_FILE` | A file holding the key, used when `OPENAI_API_KEY` is not set. It is read for every request, so a short-lived token can be replaced without restarting. |
 
 `--provider` and `--templates-dir` override the file. The cache remembers the
 embedding model and service URL, and indexes again when either changes.

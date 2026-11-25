@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, encodePackage, skuLabelFor } from '../store'
+import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, encodePackage, noAIChanges, skuLabelFor } from '../store'
 import { UndoRedo } from './UndoRedo'
 import type { Selection } from '../store'
 import { api } from '../api/client'
@@ -28,6 +28,7 @@ import { baseImageProblem } from '../lib/baseImage'
 import { applyAuthorEdits, authoringProblem, basedOnOf } from '../lib/authorTemplate'
 import { openFile, type SavedFile } from '../lib/saveFile'
 import { AuthorReview } from './AuthorReview'
+import { AskAI } from './AskAI'
 import { parse as parseYaml } from 'yaml'
 import { useBaseLock } from '../lib/baseLock'
 import { overlayIncompatiblePackages, strandedPackages } from '../lib/edgepack'
@@ -81,6 +82,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
   const advancedMode = useStore((s) => s.advancedMode)
+  const capabilities = useStore((s) => s.capabilities)
   const removedPackages = useStore((s) => s.removedPackages)
 
   const [step, setStep] = useState(0)
@@ -543,6 +545,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const author = advancedMode === 'author'
   const authorProblem = author && composed ? authoringProblem(composed.templateYaml) : null
   const authoring = author && !!composed?.templateYaml && !authorProblem
+  // Author mode with a template it can edit, or one still loading.
+  const aiOffered = author && !authorProblem && !!capabilities.ai
   // The file saved last, kept while the same template stays selected.
   const [authorSaved, setAuthorSaved] = useState<{ template: string; file: SavedFile; text: string } | null>(null)
   const authorEdit = useMemo((): { text: string; baseline: string } | { error: string } | null => {
@@ -610,7 +614,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
     // A fresh start from the opened file: no changes carried over.
     selectCombination(combo)
-    useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [] })
+    useStore.setState({ addedPackages: [], enabledRepos: [], removedPackages: [], aiChanges: noAIChanges })
     setOpened({ template: combo.template, text: result.text, name: result.file.name })
     setAuthorSaved({ template: combo.template, file: result.file, text: result.text })
     setStep(0)
@@ -673,6 +677,18 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       {authorProblem && (
         <p className="mx-auto mb-4 max-w-3xl rounded bg-amber-50 p-3 text-sm text-amber-800">{authorProblem}</p>
+      )}
+      {/* Kept mounted while a recompose is in flight (composed is null then),
+          so the last answer stays on screen; Suggest waits for the template. */}
+      {aiOffered && (
+        <AskAI
+          os={selection.os}
+          templateText={authorEdit && 'text' in authorEdit ? authorEdit.text : undefined}
+          basePackages={lastBasePackages ?? []}
+          templateRepos={lastTemplateRepos}
+          templateOnlyRepos={lastTemplateOnlyRepos}
+          overlay={overlay}
+        />
       )}
 
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}

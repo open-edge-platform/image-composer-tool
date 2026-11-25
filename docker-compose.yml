@@ -33,9 +33,6 @@ services:
         - HTTP_PROXY
         - HTTPS_PROXY
         - NO_PROXY
-      # Offer the Advanced tab's Author mode, which edits a whole template and
-      # saves it to your machine. Off by default.
-      # - ICT_WEBUI_AUTHORING=true
     # `serve` runs the web UI and the API behind it. Inside the container it
     # must listen on every interface (0.0.0.0) for Docker's port forwarding to
     # reach it; the ports entry below still limits it to the host's loopback.
@@ -64,6 +61,24 @@ services:
       - HTTP_PROXY
       - HTTPS_PROXY
       - NO_PROXY
+      # Offer the Advanced tab's Author mode, which edits a whole template and
+      # saves it to your machine. Off by default.
+      # - ICT_WEBUI_AUTHORING=true
+      # Offer Ask AI in Author mode, which asks an OpenAI-compatible service
+      # for template edits. Uncomment these, the `ai_token` lines in both
+      # `secrets` sections below, and put the service's token in ./ai-token
+      # (mode 0600, not committed). The values shown are for Intel's GNAI;
+      # get a token at https://gnai.intel.com/auth/oauth2/sso. The file is
+      # read for every request, so replace it when the token expires; no
+      # restart is needed.
+      # - ICT_WEBUI_AI=true
+      # - OPENAI_BASE_URL=https://gnai.intel.com/api/providers/openai/v1
+      # - OPENAI_MODEL=gpt-5.4-mini
+      # - OPENAI_API_KEY_FILE=/run/secrets/ai_token
+      # For a service whose certificate is signed by a company CA (GNAI's is),
+      # trust the host's CA bundle, which has it. Uncomment this and the
+      # matching line under `volumes`.
+      # - SSL_CERT_FILE=/etc/ssl/host-ca-certificates.crt
       # For templates that download the OEP Installer from a private GitHub
       # repository: uncomment this and the two `secrets` sections below, and
       # put a GitHub token with read access in ./oep-installer-token (mode 0600,
@@ -71,11 +86,14 @@ services:
       # - ICT_OEP_INSTALLER_TOKEN_FILE=/run/secrets/oep_installer_token
     # secrets:
     #   - oep_installer_token
+    #   - ai_token
     volumes:
       # A privileged container gets a copy of /dev taken when it starts. The
       # loop devices a build creates later appear only in the host's /dev, so
       # mount that instead.
       - /dev:/dev
+      # The host's CA bundle, for SSL_CERT_FILE above.
+      # - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/host-ca-certificates.crt:ro
       # Named volumes keep their data when the container is removed, until
       # `docker compose down -v`.
       # Every build the UI starts: its history entry, log, work directory,
@@ -93,3 +111,5 @@ volumes:
 # secrets:
 #   oep_installer_token:
 #     file: ./oep-installer-token
+#   ai_token:
+#     file: ./ai-token

@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
-import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
+import { useStore, confirmRepoRelease, hasAIChanges, isAIChange, type AddedPackage } from '../store'
 import type { PackageRepo } from '../api/types'
 import type { VersionResolver } from '../lib/useVersionResolver'
 import type { BaseLock } from '../lib/baseLock'
@@ -60,6 +60,10 @@ export function SelectedPackages({
   const storedRemovals = useStore((s) => s.removedPackages)
   const setPackageRemoved = useStore((s) => s.setPackageRemoved)
   const clearRemovedPackages = useStore((s) => s.clearRemovedPackages)
+  // Which changes Ask AI made, for the AI tag (see isAIChange).
+  const aiChanges = useStore((s) => s.aiChanges)
+  const undoAIChanges = useStore((s) => s.undoAIChanges)
+  const fromAI = (name: string) => isAIChange({ aiChanges }, name)
   const inTemplate = (name: string) => !!baseLock?.info(name).locked
   const addedPackages = picks.filter((p) => !inTemplate(p.name))
   const modified = picks.filter((p) => inTemplate(p.name))
@@ -122,17 +126,29 @@ export function SelectedPackages({
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
         <span className="text-[13px] font-bold text-[#00285a]">Changes ({total})</span>
-        <button
-          type="button"
-          onClick={() => {
-            clearPackages(lockedRepoIds)
-            clearRemovedPackages()
-          }}
-          disabled={total === 0}
-          className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Reset to template defaults
-        </button>
+        <div className="flex items-center gap-1.5">
+          {hasAIChanges(aiChanges) && (
+            <button
+              type="button"
+              onClick={undoAIChanges}
+              title="Undo what Ask AI changed (packages, repositories, disk size and image name) and keep your own changes"
+              className="rounded-md border border-violet-300 px-3 py-1 text-xs font-medium text-violet-800 hover:border-violet-400 hover:bg-violet-50"
+            >
+              Undo AI changes
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              clearPackages(lockedRepoIds)
+              clearRemovedPackages()
+            }}
+            disabled={total === 0}
+            className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Reset to template defaults
+          </button>
+        </div>
       </div>
       {/* The list's cap tracks the viewport so the rail, which starts level
           with the search box, still ends above the Back/Next row (25rem is the
@@ -155,7 +171,8 @@ export function SelectedPackages({
                     <div key={p.name} className="flex items-start gap-2 px-3 py-1">
                       <div className="min-w-0 flex-1">
                         <span className={`block text-[12px] text-[#0071c5] ${WRAP}`}>{p.name}</span>
-                        <div className="mt-0.5">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                          {fromAI(p.name) && <AITag />}
                           {p.version === '' ? (
                             liveResolved[p.name] ? (
                               <VersionBadge
@@ -195,7 +212,7 @@ export function SelectedPackages({
           {modified.length > 0 && (
             <Section title={`Modified (${modified.length})`}>
               {modified.map((p) => (
-                <Item key={p.name} name={p.name} onUndo={() => undo(p.name)} undoLabel={`Undo change to ${p.name}`}>
+                <Item key={p.name} name={p.name} ai={fromAI(p.name)} onUndo={() => undo(p.name)} undoLabel={`Undo change to ${p.name}`}>
                   <span
                     className={`font-mono text-[10px] text-slate-500 ${WRAP}`}
                     title={`Template: ${templateVersion(p.name)} · Yours: ${p.version || 'unpinned'}`}
@@ -213,6 +230,7 @@ export function SelectedPackages({
                   key={name}
                   name={name}
                   struck
+                  ai={fromAI(name)}
                   onUndo={() => setPackageRemoved(name, false)}
                   undoLabel={`Put back ${name}`}
                 />
@@ -238,12 +256,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Item({
   name,
   struck = false,
+  ai = false,
   onUndo,
   undoLabel,
   children,
 }: {
   name: string
   struck?: boolean
+  ai?: boolean
   onUndo: () => void
   undoLabel: string
   children?: ReactNode
@@ -254,7 +274,12 @@ function Item({
         <span className={`block text-[12px] ${WRAP} ` + (struck ? 'text-slate-500 line-through' : 'text-[#0071c5]')}>
           {name}
         </span>
-        {children && <div className="mt-0.5">{children}</div>}
+        {(ai || children) && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-1">
+            {ai && <AITag />}
+            {children}
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -287,6 +312,18 @@ function VersionBadge({ version, floating, title }: { version: string; floating:
       >
         {version}
       </span>
+    </span>
+  )
+}
+
+// Marks a change Ask AI made.
+function AITag() {
+  return (
+    <span
+      title="Suggested by Ask AI"
+      className="shrink-0 rounded bg-violet-100 px-1 text-[9px] font-bold uppercase tracking-[0.5px] text-violet-800"
+    >
+      AI
     </span>
   )
 }

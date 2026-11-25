@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore, orphanedRepos, confirmRepoRelease } from './store'
+import { noAIChanges, useStore, orphanedRepos, confirmRepoRelease } from './store'
 import { parseDiskFromYaml } from './lib/disk'
 import { minimalPtlPvRaw, roboticsJazzyIso } from './lib/fixtures'
 
@@ -334,6 +334,16 @@ describe('undo and redo', () => {
     expect(useStore.getState().removedPackages).toEqual([])
     useStore.getState().redo()
     expect(useStore.getState().removedPackages).toEqual(['vim'])
+  })
+
+  it('undoes an Ask AI change, its AI tags with it', () => {
+    useStore.setState({ aiChanges: noAIChanges })
+    // Ask AI applies its edits and records them in one go.
+    useStore.getState().setPackage(pkg('htop'))
+    useStore.getState().recordAIChanges({ packages: { htop: { after: pkg('htop'), before: null, wasRemoved: false } }, repos: [] })
+    useStore.getState().undo()
+    expect(useStore.getState().addedPackages).toEqual([])
+    expect(useStore.getState().aiChanges).toEqual(noAIChanges)
   })
 
   it('forgets both when the template changes', () => {

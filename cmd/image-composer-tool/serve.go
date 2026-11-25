@@ -6,12 +6,16 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/ai"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
+	globalconfig "github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -27,11 +31,21 @@ var (
 	serveEdgePack     string
 	servePrintSudoers bool
 	serveAuthoring    bool
+	serveAI           bool
 )
 
 // authoringEnv turns on --enable-authoring when set to true, for container
 // deployments that configure the server through the environment.
 const authoringEnv = "ICT_WEBUI_AUTHORING"
+
+// aiEnv turns on --enable-ai the same way.
+const aiEnv = "ICT_WEBUI_AI"
+
+// aiTokenPages maps an AI service's host to the page where a user gets a new
+// token, which the UI points to when the service rejects the server's one.
+var aiTokenPages = map[string]string{
+	"gnai.intel.com": "https://gnai.intel.com/auth/oauth2/sso",
+}
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
 func createServeCommand() *cobra.Command {
@@ -93,6 +107,13 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 		"Offer the Advanced tab's Author mode, which edits a whole template and "+
 			"saves it to the user's machine. Off by default; "+authoringEnv+"=true "+
 			"turns it on too.")
+	aiDefault, _ := strconv.ParseBool(os.Getenv(aiEnv))
+	serveCmd.Flags().BoolVar(&serveAI, "enable-ai", aiDefault,
+		"Offer Ask AI in Author mode, which asks an OpenAI-compatible service "+
+			"(such as GNAI) for template edits. Needs --enable-authoring, and "+
+			"OPENAI_API_KEY or OPENAI_API_KEY_FILE. The service and model are "+
+			"ai.openai.base_url and ai.openai.chat_model in the configuration "+
+			"file, or OPENAI_BASE_URL and OPENAI_MODEL. Off by default; "+aiEnv+"=true turns it on too.")
 	serveCmd.Flags().BoolVar(&servePrintSudoers, "print-sudoers", false,
 		"Print the scoped sudoers drop-in required for `--sudo` cancellation and "+
 			"artifact reads, then exit. The rules are generated for the current user, "+
@@ -128,6 +149,15 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		configPath = abs
 	}
 
+	var aiEditor service.TemplateEditor
+	var aiTokenURL string
+	if serveAI {
+		var err error
+		if aiEditor, aiTokenURL, err = newAIEditor(); err != nil {
+			return err
+		}
+	}
+
 	srv, err := api.New(api.Config{
 		// net.JoinHostPort brackets IPv6 hosts correctly (e.g. [::1]:8080).
 		Addr:         net.JoinHostPort(serveHost, servePort),
@@ -141,9 +171,36 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		PackageReposPath: servePackageRepos,
 		EdgePackPath:     serveEdgePack,
 		Authoring:        serveAuthoring,
+		AI:               aiEditor,
+		AITokenURL:       aiTokenURL,
 	})
 	if err != nil {
 		return err
 	}
 	return srv.Start(cmd.Context())
+}
+
+// newAIEditor connects Ask AI to the OpenAI-compatible service the ai section
+// of the configuration file names, and finds where users get a new token.
+func newAIEditor() (service.TemplateEditor, string, error) {
+	if !serveAuthoring {
+		return nil, "", fmt.Errorf("--enable-ai needs --enable-authoring: Ask AI edits templates in Author mode")
+	}
+	cfg, err := aiConfigFromGlobal(globalconfig.Global().AI)
+	if err != nil {
+		return nil, "", err
+	}
+	// Ask AI speaks the OpenAI-compatible API whatever ai.provider says, so
+	// a container can be pointed at a service with OPENAI_BASE_URL and
+	// OPENAI_MODEL alone. Ollama serves the same API under /v1.
+	cfg = cfg.Merge(ai.DefaultConfig())
+	p, err := provider.NewOpenAIProvider(cfg.OpenAI.BaseURL, cfg.OpenAI.EmbeddingModel, cfg.OpenAI.Model, cfg.GetTimeout())
+	if err != nil {
+		return nil, "", fmt.Errorf("--enable-ai: %w", err)
+	}
+	tokenURL := ""
+	if u, err := url.Parse(p.BaseURL()); err == nil {
+		tokenURL = aiTokenPages[u.Hostname()]
+	}
+	return p, tokenURL, nil
 }
