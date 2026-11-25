@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useStore, cascadeOrder, cascadingOptions, kernelLabelFor, encodePackage, noAIChanges, skuLabelFor } from '../store'
-import { AdvancedModeSwitch } from './AdvancedModeSwitch'
 import { UndoRedo } from './UndoRedo'
 import type { Selection } from '../store'
 import { api } from '../api/client'
@@ -676,7 +675,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
-      <AdvancedModeSwitch />
       {authorProblem && (
         <p className="mx-auto mb-4 max-w-3xl rounded bg-amber-50 p-3 text-sm text-amber-800">{authorProblem}</p>
       )}
@@ -692,10 +690,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           overlay={overlay}
         />
       )}
-
-      <div className="mb-2 flex justify-end">
-        <UndoRedo />
-      </div>
 
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
@@ -862,14 +856,17 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
         {/* Back / Next navigation. */}
         <div className="mt-6 flex justify-between border-t border-slate-200 pt-4">
-          <button
-            type="button"
-            onClick={() => setStep((s) => Math.max(0, s - 1))}
-            disabled={step === 0}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Back
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setStep((s) => Math.max(0, s - 1))}
+              disabled={step === 0}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Back
+            </button>
+            <UndoRedo />
+          </div>
           {step < STEPS.length - 1 && (
             <div className="flex items-center gap-3">
               {!canLeaveStep && (

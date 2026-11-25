@@ -10,11 +10,11 @@
 - **Fixed**: in `docker-compose.yml`, the commented `ICT_WEBUI_AUTHORING=true` line is now under `environment`. It was under the image build's `args`, where uncommenting it did not turn on Author mode.
 - **Added**: `image-composer-tool ai` works with OpenAI-compatible services such as Intel's GNAI. Set `ai.openai.base_url` in `image-composer-tool.yml`, or `OPENAI_BASE_URL`, to the service URL including `/v1` (for GNAI, `https://gnai.intel.com/api/providers/openai/v1`). The embedding cache records the service URL and the vector size the service returns, so switching services re-indexes.
 - **Fixed**: `image-composer-tool ai` now reads the `ai:` section of `image-composer-tool.yml` (provider, models, timeouts, cache directory and scoring weights). It was parsed but ignored, so only `--provider` and `--templates-dir` took effect; they still override the file. The sample file's Ollama chat model is now `llama3.1:8b`, the default the guide tells you to pull. `--cache-stats` and `--clear-cache` no longer need an API key.
-- **Undo** and **Redo** at the top of the Web UI's Advanced tab take back the
-  last change to packages, repositories, the disk layout, the image name or
-  the base image, and put it back. One step each way; changes made in quick
-  succession (typing a name, **Reset to template defaults**) count as one.
-  Choosing another template clears both.
+- **Undo last change** and **Redo**, beside **Back** at the bottom of the Web
+  UI's Advanced tab, take back the last change to packages, repositories, the
+  disk layout, the image name or the base image, and put it back. One step
+  each way; changes made in quick succession (typing a name, **Reset to
+  template defaults**) count as one. Choosing another template clears both.
 - The Web UI's Advanced tab handles templates built on a base image (overlay
   templates) better. For them only, a **Base Image** field appears under the
   selection on the Basic tab and the Advanced Target step: the path of the
@@ -51,11 +51,12 @@
   bypass dependency integrity, protected boot packages, or removal policy.
   Unpinned packages and dependencies are not automatically selected for
   downgrade; RPM overlay builds are not supported end-to-end.
-- The Web UI's Advanced tab can offer an **Author** mode next to **Customize**.
-  It is off by default; turn it on with `image-composer-tool serve
-  --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose. The UI
-  asks the new `GET /api/v1/session` endpoint whether it is allowed. When it
-  is, Advanced starts in Author mode.
+- The Web UI's Advanced tab works in **Author** mode, editing the whole
+  template, when the server allows it: turn it on with `image-composer-tool
+  serve --enable-authoring`, or `ICT_WEBUI_AUTHORING=true` in Docker Compose.
+  There is no switch to the earlier Customize mode, which the tab still uses
+  when authoring is off. The UI asks the new `GET /api/v1/session` endpoint
+  whether authoring is allowed.
 - **Author mode edits the template itself.** Template packages can be removed
   (uncheck them in the repository browser), given another version, or
   unpinned (choose the selected version chip again; choosing the template's
