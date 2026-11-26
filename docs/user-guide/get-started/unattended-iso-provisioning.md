@@ -40,8 +40,14 @@ disk:
   selectionPolicy:
     strategy: largest      # first | largest | fastest
     excludeRemovable: true
-    requireEmpty: true     # only disks without partitions
+    requireEmpty: false    # true: only disks without partitions
 ```
+
+The shipped templates set `requireEmpty: false`, so the installer also considers
+disks that already hold partitions or an operating system. It selects among them
+by `strategy`, and **everything on the selected disk is erased without
+confirmation**. To install only onto blank disks, set `requireEmpty: true`; if no
+blank disk matches, the install fails instead of overwriting a used one.
 
 Set `path` to install onto a specific disk instead. The installer refuses disks too small for the partition layout.
 
