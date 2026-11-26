@@ -150,8 +150,6 @@ systemConfig:
     # to demo the Web UI's "already in template" pre-check against a selection
     # that locks in only the base runtime, leaving every domain unselected.
     - intel-edge-base-standard
-    # intel-edge-base-realtime is the alternative base profile but is currently
-    # disabled for all OS variants upstream, so it is intentionally omitted here.
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
