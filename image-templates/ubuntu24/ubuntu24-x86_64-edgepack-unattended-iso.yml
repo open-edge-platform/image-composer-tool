@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "24.04.5"
+  version: "24.04.6"
 
 target:
   os: ubuntu
@@ -35,7 +35,7 @@ disk:
   selectionPolicy:
     strategy: largest
     excludeRemovable: true
-    requireEmpty: true
+    requireEmpty: false # Also consider disks that already have partitions (they will be wiped).
   partitionTableType: gpt
   partitions:
     - id: boot

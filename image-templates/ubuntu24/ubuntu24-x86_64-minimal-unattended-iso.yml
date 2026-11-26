@@ -15,7 +15,7 @@ metadata:
 
 image:
   name: minimal-os-image-ubuntu-unattended
-  version: "24.04"
+  version: "24.04.1"
 
 target:
   os: ubuntu
@@ -30,7 +30,7 @@ disk:
   selectionPolicy:
     strategy: largest
     excludeRemovable: true
-    requireEmpty: true # Only consider disks that do not have existing partitions.
+    requireEmpty: false # Also consider disks that already have partitions (they will be wiped).
   partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
   partitions:
     - id: boot
