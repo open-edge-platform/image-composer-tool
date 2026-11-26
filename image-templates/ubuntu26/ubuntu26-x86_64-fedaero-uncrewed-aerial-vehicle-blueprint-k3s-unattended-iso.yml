@@ -1,0 +1,66 @@
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so this template declares its own.
+metadata:
+  description: Fed Aero Uncrewed Aerial Vehicle blueprint - Ubuntu 26.04 EdgePack minimal server unattended ISO with the OEP Installer uncrewed_aerial_vehicle_blueprint (K3s) composed in; ICT installs its packages at build time and openedge-cli completes the install on first boot
+  use_cases:
+    - Fed Aero uncrewed aerial vehicle (UAV) companion computer provisioned from the OEP Installer uncrewed_aerial_vehicle_blueprint with K3s
+  keywords:
+    - fedaero
+    - uncrewed-aerial-vehicle
+    - blueprint
+    - k3s
+    - oep-installer
+    - openedge-cli
+    - edgepack
+    - iso
+    - unattended
+    - extends
+    - ubuntu
+    - ubuntu26
+
+# Inherits the EdgePack minimal server platform template (Edge Pack 2026.3 public repository,
+# kernel pinned to 7.0.0-42). The parent's target must match this one's.
+extends: "ubuntu26-x86_64-edgepack-server-unattended-iso.yml"
+
+image:
+  name: fedaero-uncrewed-aerial-vehicle-blueprint-k3s-ubuntu-unattended
+  version: "26.04.3"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: iso
+
+systemConfig:
+  kernel:
+    # The parent's command line plus the parameters the OEP Installer's kernel
+    # handler sets (kernel-cmdline in the published output); ICT fails the build
+    # when one is missing. A child's cmdline replaces the parent's, so repeat it.
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192"
+
+  provisioning:
+    scripts:
+      # Trusts Intel's Root CA certificates when the build's proxy is under intel.com,
+      # whose TLS interception otherwise breaks the HTTPS downloads of the K3s and
+      # Docker steps; it does nothing on other networks. Runs before the OEP Installer.
+      - name: intel-root-ca
+        local: additionalfiles/base-platform/05-intel-root-ca.sh
+        final: /usr/local/sbin/intel-root-ca.sh
+        stage: first-boot
+        order: 5
+
+  oepInstaller:
+    # The package list the OEP Installer publishes for uncrewed_aerial_vehicle_blueprint with
+    # K3s on Ubuntu 26.04, from the public edge-ai-libraries repository and pinned to
+    # a commit; sbomSha256 checks the file. ICT installs the CLI the list was
+    # generated with (its cli-url header) and takes the modules and install
+    # arguments from the list. The list uses the public Edge Pack repository and
+    # names 7.0.0-42 headers and tools, matching the parent's kernel: a list
+    # for another kernel needs the parent's kernel to change with it. To follow a
+    # newer list, update sbomUrl and sbomSha256 together.
+    sbomUrl: https://raw.githubusercontent.com/open-edge-platform/edge-ai-libraries/5459966baf9ce2a3bbe6b5ab9c1b5434e7fa3320/frameworks/oep-installer-cli/rendered/sbom-uncrewed-aerial-vehicle-blueprint-k3s-ubuntu-26.04.yaml
+    sbomSha256: cbb63f6927515909ddbf47adb8af6e95205f3343c45394e3188e5b3456a3bbae
+    # An existing systemConfig.users entry: the parent's `admin` (its login key
+    # is passed at build time with --ssh-authorized-key admin=FILE).
+    user: admin
