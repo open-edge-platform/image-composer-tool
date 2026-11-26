@@ -20,7 +20,7 @@ metadata:
 
 image:
   name: edgepack-server-os-image-ubuntu-unattended
-  version: "26.04.4"
+  version: "26.04.5"
 
 target:
   os: ubuntu
@@ -36,7 +36,7 @@ disk:
   selectionPolicy:
     strategy: largest
     excludeRemovable: true
-    requireEmpty: true
+    requireEmpty: false # Also consider disks that already have partitions (they will be wiped).
   partitionTableType: gpt
   partitions:
     - id: boot
