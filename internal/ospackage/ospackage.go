@@ -8,6 +8,9 @@ type PackageInfo struct {
 	Origin           string // e.g. "Intel", the vendor or supplier of the package
 	License          string // e.g. "Apache-2.0"
 	Version          string // e.g. "7.88.1-10+deb12u5"
+	SourceName       string
+	SourceVersion    string
+	SourceRepository string
 	Arch             string // e.g. "x86_64", "noarch", "src"
 	MultiArch        string
 	URL              string // download URL

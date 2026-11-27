@@ -143,7 +143,7 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // v6: the cache now records the package filter (allowPackages) it was parsed
 // with; a v5 cache has no such record, so it could be reused under a different
 // filter and return the wrong set of packages.
-const parsedPackageCacheVersion = 7
+const parsedPackageCacheVersion = 8
 
 // inReleaseSentinel is passed as releaseSign to ParseRepositoryMetadata to
 // mean "releaseFile is a combined InRelease file, not a detached signature
@@ -722,6 +722,8 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	var pkgs []ospackage.PackageInfo
 	pkg := ospackage.PackageInfo{}
+	var sourceDeclaration string
+	var hasSourceDeclaration bool
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
@@ -733,11 +735,13 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		if line == "" {
 			// End of one package entry
 			if pkg.Name != "" {
+				pkg.SourceName, pkg.SourceVersion = parseBinarySourceIdentity(pkg.Name, pkg.Version, sourceDeclaration, hasSourceDeclaration)
 				if matchesPackageFilter(pkg.Name, packageFilter) {
 					pkgs = append(pkgs, pkg)
 				}
 				pkg = ospackage.PackageInfo{}
 			}
+			sourceDeclaration, hasSourceDeclaration = "", false
 			if err == io.EOF {
 				break
 			}
@@ -760,6 +764,8 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 			pkg.Type = "deb"
 		case "Version":
 			pkg.Version = val
+		case "Source":
+			sourceDeclaration, hasSourceDeclaration = val, true
 		case "Multi-Arch":
 			pkg.MultiArch = val
 		case "Pre-Depends":
@@ -864,6 +870,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	// Add the last package if file doesn't end with a blank line
 	if pkg.Name != "" {
+		pkg.SourceName, pkg.SourceVersion = parseBinarySourceIdentity(pkg.Name, pkg.Version, sourceDeclaration, hasSourceDeclaration)
 		if matchesPackageFilter(pkg.Name, packageFilter) {
 			pkgs = append(pkgs, pkg)
 		}
@@ -877,6 +884,23 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 
 	return pkgs, nil
+}
+
+func parseBinarySourceIdentity(name, version, declaration string, hasDeclaration bool) (string, string) {
+	if !hasDeclaration {
+		return name, version
+	}
+	fields := strings.Fields(declaration)
+	if len(fields) == 1 {
+		return fields[0], version
+	}
+	if len(fields) == 2 && strings.HasPrefix(fields[1], "(") && strings.HasSuffix(fields[1], ")") {
+		sourceVersion := strings.TrimSuffix(strings.TrimPrefix(fields[1], "("), ")")
+		if sourceVersion != "" {
+			return fields[0], sourceVersion
+		}
+	}
+	return "", ""
 }
 
 // getRepositoryPriority returns the priority for a given repository URL

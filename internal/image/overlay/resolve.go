@@ -65,11 +65,14 @@ type Repository struct {
 // Without these the overlay path would rebuild a bare PackageInfo and emit
 // degraded records (missing supplier/checksum/description).
 type ResolvedPackage struct {
-	MultiArch   string
-	ProvidesVer []string
-	Name        string
-	Version     string
-	Arch        string
+	MultiArch        string
+	ProvidesVer      []string
+	Name             string
+	Version          string
+	SourceName       string
+	SourceVersion    string
+	SourceRepository string
+	Arch             string
 	// URL is the artifact download URL, when known.
 	URL string
 	// Type is the package family ("deb", "rpm"), used as the SPDX package type.
@@ -903,7 +906,8 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		name := canonicalPackageName(p)
 		rp := ResolvedPackage{
 			MultiArch: p.MultiArch, ProvidesVer: p.ProvidesVer,
-			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
+			Name: name, Version: p.Version, SourceName: p.SourceName, SourceVersion: p.SourceVersion,
+			SourceRepository: p.SourceRepository, Arch: p.Arch, URL: p.URL,
 			Type: p.Type, Description: p.Description, Origin: p.Origin,
 			License: p.License, Checksums: p.Checksums, Provides: p.Provides,
 			InstalledSizeBytes: p.InstalledSizeBytes, HasInstalledSize: p.HasInstalledSize,
