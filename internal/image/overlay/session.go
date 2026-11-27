@@ -1136,6 +1136,9 @@ func pickBaselineSBOMName(entries []os.DirEntry) (string, bool) {
 			continue
 		}
 		name := entry.Name()
+		if name == provenanceEmbeddedFilename {
+			continue
+		}
 		lower := strings.ToLower(name)
 		if !strings.HasSuffix(lower, ".json") {
 			continue

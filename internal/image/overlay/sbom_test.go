@@ -30,6 +30,22 @@ func mkSBOMDir(t *testing.T, files map[string]string) string {
 	return root
 }
 
+func TestPickBaselineSBOMNameExcludesCanonicalProvenance(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, provenanceEmbeddedFilename), []byte(`{"schemaVersion":"ict.source-provenance/1.0"}`), 0644); err != nil {
+		t.Fatalf("write provenance fixture: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read fixture directory: %v", err)
+	}
+	if name, ok := pickBaselineSBOMName(entries); ok {
+		t.Fatalf("picked canonical provenance as SBOM: %q", name)
+	}
+}
+
 func TestReadBaselineSBOM_ReadsTimestampedInventory(t *testing.T) {
 	const wantName = "spdx_manifest_deb_ubuntu_20260101_120000.json"
 	const wantBody = `{"packages":[{"name":"libc6"}]}`

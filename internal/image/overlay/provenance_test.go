@@ -55,6 +55,23 @@ func TestStageOverlayProvenanceArtifacts(t *testing.T) {
 	if artifacts.embeddedPath == "" || artifacts.buildSidePath == "" {
 		t.Errorf("missing staged provenance paths: %+v", artifacts)
 	}
+
+	plan = &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "tree", Version: "2", Arch: "amd64", Type: "deb"}}}
+	spdxArtifacts, err := stageOverlaySBOMArtifacts(template, &BaselineInfo{PackageType: "deb"}, root, plan, nil)
+	if err != nil {
+		t.Fatalf("stageOverlaySBOMArtifacts after provenance: %v", err)
+	}
+	if filepath.Base(spdxArtifacts.completePath) == provenanceEmbeddedFilename {
+		t.Fatalf("SPDX complete document collided with canonical provenance filename")
+	}
+	if data, err := os.ReadFile(embeddedPath); err != nil {
+		t.Fatalf("read canonical provenance after SPDX staging: %v", err)
+	} else {
+		var check manifest.ProvenanceManifest
+		if err := json.Unmarshal(data, &check); err != nil || check.SchemaVersion != manifest.ProvenanceManifestSchema {
+			t.Fatalf("canonical provenance overwritten by SPDX: err=%v schema=%q", err, check.SchemaVersion)
+		}
+	}
 }
 
 func TestFinalizeOverlayProvenance(t *testing.T) {
