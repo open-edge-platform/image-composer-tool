@@ -2,27 +2,28 @@ package ospackage
 
 // PackageInfo holds everything you need to fetch + verify one artifact.
 type PackageInfo struct {
-	Name             string // e.g. file name "abseil-cpp.rpm"
-	Type             string // e.g. "rpm", "deb", "apk"
-	Description      string // e.g. "Abseil C++ Common Libraries"
-	Origin           string // e.g. "Intel", the vendor or supplier of the package
-	License          string // e.g. "Apache-2.0"
-	Version          string // e.g. "7.88.1-10+deb12u5"
-	SourceName       string
-	SourceVersion    string
-	SourceRepository string
-	Arch             string // e.g. "x86_64", "noarch", "src"
-	MultiArch        string
-	URL              string // download URL
-	Checksums        []Checksum
-	Provides         []string // capabilities this package provides (rpm:entry names)
-	ProvidesVer      []string // raw Provides: field terms (deb "name (op ver)" strings), mirrors Breaks
-	Requires         []string // capabilities this package requires
-	RequiresVer      []string // version constraints for the required capabilities
-	RequiresPkgNames []string // canonical package names of dependencies (extracted from Requires)
-	Files            []string // list of files in this package (rpm:files)
-	PkgName          string   // name of the package
-	Breaks           []string // deb Breaks: field terms (raw "name (op ver)" strings)
+	Name                string // e.g. file name "abseil-cpp.rpm"
+	Type                string // e.g. "rpm", "deb", "apk"
+	Description         string // e.g. "Abseil C++ Common Libraries"
+	Origin              string // e.g. "Intel", the vendor or supplier of the package
+	License             string // e.g. "Apache-2.0"
+	Version             string // e.g. "7.88.1-10+deb12u5"
+	SourceName          string
+	SourceVersion       string
+	SourceRepository    string
+	SourceMappingStatus string
+	Arch                string // e.g. "x86_64", "noarch", "src"
+	MultiArch           string
+	URL                 string // download URL
+	Checksums           []Checksum
+	Provides            []string // capabilities this package provides (rpm:entry names)
+	ProvidesVer         []string // raw Provides: field terms (deb "name (op ver)" strings), mirrors Breaks
+	Requires            []string // capabilities this package requires
+	RequiresVer         []string // version constraints for the required capabilities
+	RequiresPkgNames    []string // canonical package names of dependencies (extracted from Requires)
+	Files               []string // list of files in this package (rpm:files)
+	PkgName             string   // name of the package
+	Breaks              []string // deb Breaks: field terms (raw "name (op ver)" strings)
 	// InstalledSizeBytes is the estimated on-disk footprint of the package once
 	// unpacked, in bytes (deb Installed-Size × 1024, rpm <size installed=…>).
 	// Meaningful only when HasInstalledSize is true — the repository metadata may

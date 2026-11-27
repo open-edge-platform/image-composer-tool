@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -186,6 +188,17 @@ func WriteSPDXToFile(pkgs []ospackage.PackageInfo, outFile string) error {
 // replacing one of them (which would silently drop a baseline entry and produce a
 // misleading inventory).
 func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, removedNames []string, outFile string) error {
+	return writeMergedSPDXToFile(baselineSPDX, overlayPkgs, removedNames, nil, outFile)
+}
+
+// WriteMergedSPDXWithSources extends the normal overlay merge with provenance-
+// qualified source package projections. Source entries are emitted once per
+// exact repository snapshot/name/version identity.
+func WriteMergedSPDXWithSources(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, removedNames []string, sources []ProvenanceSource, outFile string) error {
+	return writeMergedSPDXToFile(baselineSPDX, overlayPkgs, removedNames, sources, outFile)
+}
+
+func writeMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, removedNames []string, sources []ProvenanceSource, outFile string) error {
 	var doc SPDXDocument
 	if err := json.Unmarshal(baselineSPDX, &doc); err != nil {
 		return fmt.Errorf("failed to parse baseline SBOM for merge: %w", err)
@@ -198,6 +211,11 @@ func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageI
 	// external -> inherited -> delta-only fallback instead.
 	if err := validateSPDXBase(doc); err != nil {
 		return fmt.Errorf("baseline SBOM is not a usable SPDX document: %w", err)
+	}
+	baselineRelationships := append([]SPDXRelationship(nil), doc.Relationships...)
+	baselineNamesByID := make(map[string]string, len(doc.Packages))
+	for _, pkg := range doc.Packages {
+		baselineNamesByID[pkg.SPDXID] = pkg.Name
 	}
 
 	// Drop packages the overlay removed (conflict-driven removal) so the merged
@@ -250,7 +268,128 @@ func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageI
 	log.Infof("Merged overlay SBOM into baseline: %d added, %d upgraded, %d total packages",
 		added, upgraded, len(doc.Packages))
 
-	return writeSPDXDocument(doc, outFile)
+	extraRelationships := remapPreservedRelationships(baselineRelationships, doc.Packages, baselineNamesByID)
+	extraRelationships = append(extraRelationships, sourceRelationships(doc.Packages, overlayPkgs, sources)...)
+	for _, source := range dedupeSPDXSources(sources) {
+		doc.Packages = append(doc.Packages, buildSourceSPDXPackage(source))
+	}
+	return writeSPDXDocumentWithRelations(doc, extraRelationships, outFile)
+}
+
+func spdxRelationshipExists(relationships []SPDXRelationship, candidate SPDXRelationship) bool {
+	for _, relationship := range relationships {
+		if relationship.SPDXElementID == candidate.SPDXElementID &&
+			relationship.RelationshipType == candidate.RelationshipType &&
+			relationship.RelatedSPDXElement == candidate.RelatedSPDXElement {
+			return true
+		}
+	}
+	return false
+}
+
+func remapPreservedRelationships(relationships []SPDXRelationship, finalPackages []SPDXPackage, namesByID map[string]string) []SPDXRelationship {
+	out := make([]SPDXRelationship, 0, len(relationships))
+	idsByName := make(map[string][]string)
+	for _, pkg := range finalPackages {
+		idsByName[pkg.Name] = append(idsByName[pkg.Name], pkg.SPDXID)
+	}
+	for _, relationship := range relationships {
+		if relationship.RelationshipType == "DESCRIBES" {
+			continue
+		}
+		remap := func(id string) string {
+			name, found := namesByID[id]
+			if !found {
+				return id
+			}
+			ids := idsByName[name]
+			if len(ids) == 1 {
+				return ids[0]
+			}
+			return ""
+		}
+		element := remap(relationship.SPDXElementID)
+		related := remap(relationship.RelatedSPDXElement)
+		if element == "" || related == "" {
+			continue
+		}
+		packageIDs := make(map[string]bool)
+		for _, pkg := range finalPackages {
+			packageIDs[pkg.SPDXID] = true
+		}
+		if element != SPDXDocumentID && !packageIDs[element] {
+			continue
+		}
+		if related != SPDXDocumentID && !packageIDs[related] {
+			continue
+		}
+		out = append(out, SPDXRelationship{SPDXElementID: element, RelationshipType: relationship.RelationshipType, RelatedSPDXElement: related})
+	}
+	return out
+}
+
+func sourceSPDXID(repository, name, version string) string {
+	identity := strings.Join([]string{repository, name, version}, "\x00")
+	digest := sha256.Sum256([]byte(identity))
+	return "SPDXRef-Source-" + hex.EncodeToString(digest[:])[:16]
+}
+
+func dedupeSPDXSources(sources []ProvenanceSource) []ProvenanceSource {
+	seen := make(map[string]bool)
+	out := make([]ProvenanceSource, 0, len(sources))
+	for _, source := range sources {
+		key := strings.Join([]string{source.RepositoryID, source.Name, source.Version}, "\x00")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, source)
+	}
+	return out
+}
+
+func buildSourceSPDXPackage(source ProvenanceSource) SPDXPackage {
+	downloadLocation := "NOASSERTION"
+	var checksums []SPDXChecksum
+	for _, artifact := range source.Artifacts {
+		if strings.HasSuffix(strings.ToLower(artifact.Filename), ".dsc") && artifact.URL != "" {
+			downloadLocation = artifact.URL
+		}
+		if len(artifact.SHA256) == 64 {
+			checksums = append(checksums, SPDXChecksum{Algorithm: "SHA256", ChecksumValue: artifact.SHA256})
+		}
+	}
+	return SPDXPackage{
+		SPDXID: sourceSPDXID(source.RepositoryID, source.Name, source.Version),
+		Name:   source.Name, Type: "source", VersionInfo: source.Version,
+		DownloadLocation: downloadLocation, FilesAnalyzed: false,
+		LicenseDeclared: "NOASSERTION", LicenseConcluded: "NOASSERTION", Supplier: DefaultSupplier,
+		Checksum: checksums,
+	}
+}
+
+func sourceRelationships(packages []SPDXPackage, overlayPackages []ospackage.PackageInfo, sources []ProvenanceSource) []SPDXRelationship {
+	sourceIDs := make(map[string]string)
+	for _, source := range dedupeSPDXSources(sources) {
+		sourceIDs[strings.Join([]string{source.RepositoryID, source.Name, source.Version}, "\x00")] = sourceSPDXID(source.RepositoryID, source.Name, source.Version)
+	}
+	packageIDs := make(map[string]string)
+	for _, pkg := range packages {
+		packageIDs[pkg.Name] = pkg.SPDXID
+	}
+	out := make([]SPDXRelationship, 0)
+	for _, pkg := range overlayPackages {
+		if pkg.SourceMappingStatus != ProvenanceStatusResolved || pkg.SourceName == "" || pkg.SourceVersion == "" {
+			continue
+		}
+		binaryID := packageIDs[pkg.Name]
+		sourceID := sourceIDs[strings.Join([]string{pkg.SourceRepository, pkg.SourceName, pkg.SourceVersion}, "\x00")]
+		if binaryID == "" || sourceID == "" {
+			continue
+		}
+		out = append(out, SPDXRelationship{SPDXElementID: sourceID, RelationshipType: "GENERATED_FROM", RelatedSPDXElement: binaryID})
+	}
+	return out
 }
 
 // validateSPDXBase reports whether a decoded document is a usable SPDX base to
@@ -504,6 +643,10 @@ func normalizeSPDXPackages(pkgs []SPDXPackage) {
 // writeSPDXDocument marshals an SPDX document and writes it with symlink
 // protection, creating the parent directory as needed.
 func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
+	return writeSPDXDocumentWithRelations(spdx, nil, outFile)
+}
+
+func writeSPDXDocumentWithRelations(spdx SPDXDocument, extraRelationships []SPDXRelationship, outFile string) error {
 	// Backfill any missing required document-header field before writing, so a
 	// document merged from a header-light base SBOM is emitted as valid SPDX 2.3
 	// rather than with an empty spdxVersion/dataLicense/SPDXID/namespace/creationInfo.
@@ -531,7 +674,13 @@ func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
 	// choke point covers both the from-scratch and merge writers; a baseline
 	// document's own relationships (if any) are replaced with a set regenerated
 	// from the merged package list so no relationship dangles to a renamed ID.
-	spdx.Relationships = describesRelationships(spdx)
+	describes := describesRelationships(spdx)
+	for _, relationship := range extraRelationships {
+		if !spdxRelationshipExists(describes, relationship) {
+			describes = append(describes, relationship)
+		}
+	}
+	spdx.Relationships = describes
 
 	if err := os.MkdirAll(filepath.Dir(outFile), 0700); err != nil {
 		log.Errorf("Failed to create SPDX output directory: %v", err)
