@@ -16,6 +16,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageprovision"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	utilsfile "github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -72,7 +73,8 @@ type Builder struct {
 	// once the Emit stage moves the image into place. It is retained so a failure
 	// in a LATER Postprocess stage (inspect, convert) can remove the partial output
 	// — nothing from an unsuccessful build must be left in the output directory.
-	emittedArtifact string
+	emittedArtifact     string
+	provenanceArtifacts *overlayProvenanceArtifacts
 	// preprocessed and built track how far the pipeline got, so Postprocess only
 	// finalizes artifacts on a fully successful build and always runs cleanup.
 	preprocessed bool
@@ -132,6 +134,7 @@ var (
 	builderExtractPackagesFn = extractPackages
 	builderResizeFn          = ResizeBaseline
 	builderSBOMFn            = generateOverlaySBOM
+	builderProvenanceFn      = stageOverlayProvenanceArtifacts
 	builderEmitFn            = emitOverlayArtifact
 	builderInspectFn         = inspectOverlayArtifact
 	builderConvertFn         = func(path string, template *config.ImageTemplate) error {
@@ -515,12 +518,25 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	// complete inventory into the image and stages both the delta and complete SBOM
 	// documents in the temp dir for the emit stage to place beside the artifact.
 	var sbomArtifacts *overlaySBOMArtifacts
+	if err := b.timeStage("Generate Provenance", func() error {
+		artifacts, perr := builderProvenanceFn(b.template, b.info, b.layout.RootMount, b.plan, b.finalInventoryReport)
+		if perr != nil {
+			return fmt.Errorf("overlay postprocess: provenance generation failed: %w", perr)
+		}
+		b.provenanceArtifacts = artifacts
+		return nil
+	}); err != nil {
+		return err
+	}
 	if err := b.timeStage("Generate SBOM", func() error {
 		staged, serr := builderSBOMFn(b.template, b.info, b.layout.RootMount, b.plan, b.report)
 		if serr != nil {
 			return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", serr)
 		}
 		sbomArtifacts = staged
+		if sbomArtifacts != nil {
+			sbomArtifacts.provenance = b.provenanceArtifacts
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -846,6 +862,7 @@ func safeChrootDest(rootMount, relPath string) (string, error) {
 type overlaySBOMArtifacts struct {
 	deltaPath    string
 	completePath string
+	provenance   *overlayProvenanceArtifacts
 	// completeIsDeltaOnly is true when no base SBOM was available, so the complete
 	// document degraded to exactly the delta contents. In that case the build-dir
 	// ".complete.spdx.json" sidecar is NOT emitted (it would be byte-identical to
@@ -1119,6 +1136,9 @@ func pickBaselineSBOMName(entries []os.DirEntry) (string, bool) {
 			continue
 		}
 		name := entry.Name()
+		if name == provenanceEmbeddedFilename {
+			continue
+		}
 		lower := strings.ToLower(name)
 		if !strings.HasSuffix(lower, ".json") {
 			continue
@@ -1149,6 +1169,7 @@ func pickBaselineSBOMName(entries []os.DirEntry) (string, bool) {
 const (
 	overlayDeltaSBOMSuffix    = ".delta.spdx.json"
 	overlayCompleteSBOMSuffix = ".complete.spdx.json"
+	overlayProvenanceSuffix   = ".provenance.json"
 )
 
 // emitOverlayArtifact moves the modified baseline copy into the image build
@@ -1177,12 +1198,28 @@ func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version strin
 
 	base := fmt.Sprintf("%s-%s", template.GetImageName(), version)
 	finalPath := filepath.Join(buildDir, base+".raw")
+	provenanceDst := filepath.Join(buildDir, base+overlayProvenanceSuffix)
+	if sbom == nil || sbom.provenance == nil {
+		removeStaleArtifact(provenanceDst)
+	}
 	// Move the finished baseline into place without a shell (same rationale as the
 	// mkdir above). os.Rename covers the common same-filesystem case; fall back to
 	// a copy+remove when the workspace and build directory are on different mounts
 	// (os.Rename returns EXDEV), which a cross-device `mv` would otherwise handle.
 	if err := moveFile(copyPath, finalPath); err != nil {
 		return "", fmt.Errorf("overlay emit: failed to move %s to %s: %w", copyPath, finalPath, err)
+	}
+
+	if sbom != nil && sbom.provenance != nil {
+		imageSHA256, err := utilsfile.SHA256(finalPath)
+		if err != nil {
+			removeEmittedOutputs(finalPath)
+			return "", fmt.Errorf("overlay emit: failed to hash final image: %w", err)
+		}
+		if err := finalizeOverlayProvenance(sbom.provenance.buildSidePath, provenanceDst, imageSHA256); err != nil {
+			removeEmittedOutputs(finalPath, provenanceDst)
+			return "", fmt.Errorf("overlay emit: failed to write provenance sidecar: %w", err)
+		}
 	}
 
 	if sbom != nil {
@@ -1260,7 +1297,7 @@ func removeEmittedArtifacts(rawPath string, template *config.ImageTemplate) {
 	base := strings.TrimSuffix(filepath.Base(rawPath), filepath.Ext(rawPath)) // "<name>-<version>"
 	suffixes := []string{
 		".raw", ".qcow2", ".vhd", ".vhdx", ".vmdk", ".vdi",
-		overlayDeltaSBOMSuffix, overlayCompleteSBOMSuffix, overlayInspectReportSuffix,
+		overlayDeltaSBOMSuffix, overlayCompleteSBOMSuffix, overlayProvenanceSuffix, overlayInspectReportSuffix,
 	}
 	// Add each configured artifact's format and, when compressed, its
 	// "<type>.<compression>" form so a partial/leftover compressed output is removed.
