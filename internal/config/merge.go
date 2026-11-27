@@ -165,6 +165,9 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	// no OS-default package can enter an overlay build in the first place.
 
 	// Package repositories - merge intelligently
+	if userTemplate.SourceProvenancePolicy != nil {
+		mergedTemplate.SourceProvenancePolicy = userTemplate.SourceProvenancePolicy
+	}
 	mergedTemplate.PackageRepositories = mergePackageRepositories(
 		defaultTemplate.PackageRepositories,
 		userTemplate.PackageRepositories,
@@ -714,6 +717,35 @@ func mergeKernelConfig(defaultKernel, userKernel KernelConfig) KernelConfig {
 	return merged
 }
 
+func mergeSourceProvenance(defaultConfig, userConfig *SourceProvenanceConfig) *SourceProvenanceConfig {
+	if defaultConfig == nil {
+		return userConfig
+	}
+	if userConfig == nil {
+		copyConfig := *defaultConfig
+		copyConfig.PKeys = append([]string(nil), defaultConfig.PKeys...)
+		return &copyConfig
+	}
+	merged := *defaultConfig
+	merged.Enabled = userConfig.Enabled
+	if userConfig.URL != "" {
+		merged.URL = userConfig.URL
+	}
+	if userConfig.Codename != "" {
+		merged.Codename = userConfig.Codename
+	}
+	if userConfig.Component != "" {
+		merged.Component = userConfig.Component
+	}
+	if userConfig.PKey != "" {
+		merged.PKey = userConfig.PKey
+	}
+	if len(userConfig.PKeys) > 0 {
+		merged.PKeys = append([]string(nil), userConfig.PKeys...)
+	}
+	return &merged
+}
+
 func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []PackageRepository {
 	if len(userRepos) == 0 {
 		return defaultRepos
@@ -738,6 +770,7 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 			if defRepo.Codename == userRepo.Codename &&
 				defRepo.URL == userRepo.URL &&
 				defRepo.Path == userRepo.Path {
+				userRepo.SourceProvenance = mergeSourceProvenance(defRepo.SourceProvenance, userRepo.SourceProvenance)
 				merged[i] = userRepo
 				found = true
 				break

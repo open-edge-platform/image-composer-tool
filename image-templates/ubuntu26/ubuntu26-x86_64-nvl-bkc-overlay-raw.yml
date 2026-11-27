@@ -45,6 +45,13 @@ overlayPolicy:
   packageOperation: additive-only
   conflictPolicy: fail
 
+sourceProvenancePolicy:
+  mode: advisory
+  criticalPackages:
+    - linux-image-*
+    - linux-headers-*
+    - mesa-*
+
 disk:
   name: nvl-bkc-overlay
   artifacts:

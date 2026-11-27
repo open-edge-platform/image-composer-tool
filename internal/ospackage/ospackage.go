@@ -12,6 +12,7 @@ type PackageInfo struct {
 	SourceVersion       string
 	SourceRepository    string
 	SourceMappingStatus string
+	SourceArtifacts     []string
 	Arch                string // e.g. "x86_64", "noarch", "src"
 	MultiArch           string
 	URL                 string // download URL
