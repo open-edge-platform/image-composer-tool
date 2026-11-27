@@ -898,6 +898,8 @@ func contributedPackages(info *BaselineInfo, plan *ResolutionPlan) []ospackage.P
 			Origin:      rp.Origin,
 			License:     rp.License,
 			Checksums:   rp.Checksums,
+			SourceName:  rp.SourceName, SourceVersion: rp.SourceVersion,
+			SourceRepository: rp.SourceRepository, SourceMappingStatus: rp.SourceMappingStatus,
 		})
 	}
 	return pkgs
