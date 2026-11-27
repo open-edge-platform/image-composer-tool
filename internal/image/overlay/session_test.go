@@ -12,37 +12,48 @@ import (
 
 // builderSeams snapshots every Builder-stage seam so a test can restore them.
 type builderSeams struct {
-	acquire       func(*Ingestor) (*Context, error)
-	mountLayout   func(*Inspector, string) (*Layout, func() error, error)
-	detach        func(*Ingestor, *Context) error
-	removeCopy    func(*Ingestor, *Context)
-	detect        func(string, config.TargetInfo) (*BaselineInfo, []BaselinePackage, error)
-	validateUsers func(*config.ImageTemplate, string) error
-	resolve       func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
-	preflight     func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
-	printPlan     func(*PackageStats)
-	install       func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
-	createUsers   func(*config.ImageTemplate, string) error
-	proxy         func(string, config.ProxyConfig) error
-	configure     func(*config.ImageTemplate, string) error
-	regenBoot     func(*config.ImageTemplate, *BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
-	grubRegen     func(*config.ImageTemplate, *BaselineInfo, string) error
-	addFiles      func(*config.ImageTemplate, string, string) error
-	resize        func(*config.ImageTemplate, *Context, *Layout, *ResolutionPlan) error
-	sbom          func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
-	emit          func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
-	inspect       func(string) error
-	convert       func(string, *config.ImageTemplate) error
+	acquire         func(*Ingestor) (*Context, error)
+	mountLayout     func(*Inspector, string) (*Layout, func() error, error)
+	detach          func(*Ingestor, *Context) error
+	removeCopy      func(*Ingestor, *Context)
+	detect          func(string, config.TargetInfo) (*BaselineInfo, []BaselinePackage, error)
+	validateUsers   func(*config.ImageTemplate, string) error
+	resolve         func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
+	preflight       func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
+	printPlan       func(*PackageStats)
+	install         func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
+	createUsers     func(*config.ImageTemplate, string) error
+	proxy           func(string, config.ProxyConfig) error
+	configure       func(*config.ImageTemplate, string) error
+	regenBoot       func(*config.ImageTemplate, *BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
+	grubRegen       func(*config.ImageTemplate, *BaselineInfo, string) error
+	addFiles        func(*config.ImageTemplate, string, string) error
+	extractPackages func(string, string) ([]BaselinePackage, error)
+	resize          func(*config.ImageTemplate, *Context, *Layout, *ResolutionPlan) error
+	sbom            func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
+	emit            func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
+	inspect         func(string) error
+	convert         func(string, *config.ImageTemplate) error
 }
 
 func saveBuilderSeams() builderSeams {
+	builderExtractPackagesFn = func(root string, packageType string) ([]BaselinePackage, error) {
+		pkgs, err := extractPackages(root, packageType)
+		if err != nil {
+			if _, statusErr := os.Stat(filepath.Join(root, "var", "lib", "dpkg", "status")); os.IsNotExist(statusErr) {
+				return nil, nil
+			}
+		}
+		return pkgs, err
+	}
 	return builderSeams{
 		acquire: builderAcquire, mountLayout: builderMountLayout, detach: builderDetach,
 		removeCopy: builderRemoveCopy,
 		detect:     builderDetectFn, validateUsers: builderValidateUsersFn, resolve: builderResolveFn, preflight: builderPreflightFn,
 		printPlan: builderPrintPlanFn,
 		install:   builderInstallFn, createUsers: builderCreateUsersFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
-		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn, resize: builderResizeFn,
+		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn,
+		extractPackages: builderExtractPackagesFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 		convert: builderConvertFn,
 		proxy:   builderProxyFn,
@@ -58,6 +69,7 @@ func (s builderSeams) restore() {
 	builderInstallFn, builderConfigureFn, builderRegenBootFn, builderResizeFn = s.install, s.configure, s.regenBoot, s.resize
 	builderGrubRegenFn = s.grubRegen
 	builderAddFilesFn = s.addFiles
+	builderExtractPackagesFn = s.extractPackages
 	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
 	builderConvertFn = s.convert
 	builderProxyFn = s.proxy
@@ -394,7 +406,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Validate Users", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Users", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
+		"Resize", "Install Packages", "Users", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Final Inventory", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -402,6 +414,9 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	}
 	if !equalStrings(gotStages, wantStages) {
 		t.Errorf("timing stages = %v, want %v", gotStages, wantStages)
+	}
+	if b.finalInventoryReport == nil {
+		t.Error("successful Build must retain a final inventory reconciliation report")
 	}
 }
 

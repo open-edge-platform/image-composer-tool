@@ -56,12 +56,14 @@ type Builder struct {
 	// State populated as the phases run; each is nil until its phase produces it.
 	// Only the cross-phase state is retained: the inspected inventory and install
 	// result are consumed within the phase that produces them, so they are local.
-	ctx      *Context          // loop device + workspace baseline copy
-	layout   *Layout           // mounted partition layout
-	info     *BaselineInfo     // detected baseline OS/arch/package manager
-	baseline []BaselinePackage // baseline package inventory for stats
-	plan     *ResolutionPlan   // resolved additive package plan
-	report   *PreflightReport  // preflight policy gate result
+	ctx                  *Context          // loop device + workspace baseline copy
+	layout               *Layout           // mounted partition layout
+	info                 *BaselineInfo     // detected baseline OS/arch/package manager
+	baseline             []BaselinePackage // baseline package inventory for stats
+	plan                 *ResolutionPlan   // resolved additive package plan
+	report               *PreflightReport  // preflight policy gate result
+	finalInventory       []BaselinePackage
+	finalInventoryReport *FinalInventoryReport
 
 	// mountTeardown unmounts the layout (reverse order). It is set by Preprocess
 	// and run once by Postprocess; nil before mounts exist or after teardown.
@@ -113,25 +115,26 @@ var (
 	builderMountLayout = func(insp *Inspector, loopDev string) (*Layout, func() error, error) {
 		return insp.MountLayout(loopDev)
 	}
-	builderDetach          = func(ing *Ingestor, ctx *Context) error { return ing.detach(ctx) }
-	builderRemoveCopy      = func(ing *Ingestor, ctx *Context) { ing.removeCopy(ctx, true) }
-	builderDetectFn        = DetectBaseline
-	builderValidateUsersFn = ValidateOverlayUsers
-	builderResolveFn       = ResolveOverlayPackages
-	builderPreflightFn     = Preflight
-	builderPrintPlanFn     = PrintPackagePlan
-	builderInstallFn       = InstallOverlayPackages
-	builderCreateUsersFn   = RunOverlayUsers
-	builderProxyFn         = imageprovision.WriteProxyConfig
-	builderConfigureFn     = RunOverlayConfigurations
-	builderRegenBootFn     = RegenerateBoot
-	builderGrubRegenFn     = RegenerateGrub
-	builderAddFilesFn      = RunOverlayAdditionalFiles
-	builderResizeFn        = ResizeBaseline
-	builderSBOMFn          = generateOverlaySBOM
-	builderEmitFn          = emitOverlayArtifact
-	builderInspectFn       = inspectOverlayArtifact
-	builderConvertFn       = func(path string, template *config.ImageTemplate) error {
+	builderDetach            = func(ing *Ingestor, ctx *Context) error { return ing.detach(ctx) }
+	builderRemoveCopy        = func(ing *Ingestor, ctx *Context) { ing.removeCopy(ctx, true) }
+	builderDetectFn          = DetectBaseline
+	builderValidateUsersFn   = ValidateOverlayUsers
+	builderResolveFn         = ResolveOverlayPackages
+	builderPreflightFn       = Preflight
+	builderPrintPlanFn       = PrintPackagePlan
+	builderInstallFn         = InstallOverlayPackages
+	builderCreateUsersFn     = RunOverlayUsers
+	builderProxyFn           = imageprovision.WriteProxyConfig
+	builderConfigureFn       = RunOverlayConfigurations
+	builderRegenBootFn       = RegenerateBoot
+	builderGrubRegenFn       = RegenerateGrub
+	builderAddFilesFn        = RunOverlayAdditionalFiles
+	builderExtractPackagesFn = extractPackages
+	builderResizeFn          = ResizeBaseline
+	builderSBOMFn            = generateOverlaySBOM
+	builderEmitFn            = emitOverlayArtifact
+	builderInspectFn         = inspectOverlayArtifact
+	builderConvertFn         = func(path string, template *config.ImageTemplate) error {
 		return imageconvert.NewImageConvert().ConvertImageFile(path, template)
 	}
 )
@@ -387,6 +390,21 @@ func (b *Builder) Build() error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if b.info.PackageType == pkgTypeDeb {
+		if err := b.timeStage("Final Inventory", func() error {
+			final, err := builderExtractPackagesFn(b.layout.RootMount, pkgTypeDeb)
+			if err != nil {
+				return fmt.Errorf("overlay build: final package inventory failed: %w", err)
+			}
+			b.finalInventory = final
+			report := ReconcileFinalInventory(b.baseline, final, b.plan)
+			b.finalInventoryReport = &report
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 
 	b.built = true
