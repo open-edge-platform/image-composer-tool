@@ -31,12 +31,16 @@ type builderSeams struct {
 	extractPackages func(string, string) ([]BaselinePackage, error)
 	resize          func(*config.ImageTemplate, *Context, *Layout, *ResolutionPlan) error
 	sbom            func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
+	provenance      func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *FinalInventoryReport) (*overlayProvenanceArtifacts, error)
 	emit            func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
 	inspect         func(string) error
 	convert         func(string, *config.ImageTemplate) error
 }
 
 func saveBuilderSeams() builderSeams {
+	builderProvenanceFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *FinalInventoryReport) (*overlayProvenanceArtifacts, error) {
+		return nil, nil
+	}
 	builderExtractPackagesFn = func(root string, packageType string) ([]BaselinePackage, error) {
 		pkgs, err := extractPackages(root, packageType)
 		if err != nil {
@@ -54,7 +58,7 @@ func saveBuilderSeams() builderSeams {
 		install:   builderInstallFn, createUsers: builderCreateUsersFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
 		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn,
 		extractPackages: builderExtractPackagesFn, resize: builderResizeFn,
-		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
+		sbom: builderSBOMFn, provenance: builderProvenanceFn, emit: builderEmitFn, inspect: builderInspectFn,
 		convert: builderConvertFn,
 		proxy:   builderProxyFn,
 	}
@@ -70,7 +74,7 @@ func (s builderSeams) restore() {
 	builderGrubRegenFn = s.grubRegen
 	builderAddFilesFn = s.addFiles
 	builderExtractPackagesFn = s.extractPackages
-	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
+	builderSBOMFn, builderProvenanceFn, builderEmitFn, builderInspectFn = s.sbom, s.provenance, s.emit, s.inspect
 	builderConvertFn = s.convert
 	builderProxyFn = s.proxy
 }
@@ -406,7 +410,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Validate Users", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Users", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Final Inventory", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
+		"Resize", "Install Packages", "Users", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Final Inventory", "Generate Provenance", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
