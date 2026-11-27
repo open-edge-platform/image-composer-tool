@@ -1,7 +1,11 @@
 package overlay
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +15,8 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -73,6 +79,7 @@ type ResolvedPackage struct {
 	SourceVersion       string
 	SourceRepository    string
 	SourceMappingStatus string
+	SourceArtifacts     []string
 	Arch                string
 	// URL is the artifact download URL, when known.
 	URL string
@@ -908,7 +915,8 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		rp := ResolvedPackage{
 			MultiArch: p.MultiArch, ProvidesVer: p.ProvidesVer,
 			Name: name, Version: p.Version, SourceName: p.SourceName, SourceVersion: p.SourceVersion,
-			SourceRepository: p.SourceRepository, SourceMappingStatus: p.SourceMappingStatus, Arch: p.Arch, URL: p.URL,
+			SourceRepository: p.SourceRepository, SourceMappingStatus: p.SourceMappingStatus,
+			SourceArtifacts: append([]string(nil), p.SourceArtifacts...), Arch: p.Arch, URL: p.URL,
 			Type: p.Type, Description: p.Description, Origin: p.Origin,
 			License: p.License, Checksums: p.Checksums, Provides: p.Provides,
 			InstalledSizeBytes: p.InstalledSizeBytes, HasInstalledSize: p.HasInstalledSize,
@@ -1215,6 +1223,94 @@ type debResolverBackend struct{}
 
 func (b *debResolverBackend) family() PackageManager { return PackageManagerAPT }
 
+func readSourceSigningKey(ctx context.Context, keyReference string) ([]byte, error) {
+	if strings.TrimSpace(keyReference) == "" {
+		return nil, fmt.Errorf("missing source signing key")
+	}
+	if strings.HasPrefix(keyReference, "/") {
+		data, err := os.ReadFile(filepath.Clean(keyReference))
+		if err != nil {
+			return nil, fmt.Errorf("reading source signing key: %w", err)
+		}
+		return data, nil
+	}
+	parsed, err := url.Parse(keyReference)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("invalid source signing key URL")
+	}
+	client := network.NewSecureHTTPClient()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating source signing key request: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("fetching source signing key: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("source signing key HTTP status %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, (16<<20)+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading source signing key: %w", err)
+	}
+	if len(data) > 16<<20 {
+		return nil, fmt.Errorf("source signing key exceeds size limit")
+	}
+	return data, nil
+}
+
+func enrichResolvedSourceProvenance(req resolveRequest, closure []ospackage.PackageInfo) {
+	for _, repo := range req.userRepos {
+		if repo.SourceProvenance == nil || !repo.SourceProvenance.Enabled {
+			continue
+		}
+		effective := repo.EffectiveSourceRepository()
+		keyReference := effective.PKey
+		if keyReference == "" && len(effective.PKeys) > 0 {
+			keyReference = effective.PKeys[0]
+		}
+		key, err := readSourceSigningKey(runctx.Context(), keyReference)
+		if err != nil {
+			continue
+		}
+		components := strings.Fields(effective.Component)
+		if len(components) == 0 {
+			components = []string{"main"}
+		}
+		for _, component := range components {
+			cacheDir := filepath.Join(config.TempDir(), "source-provenance", repo.Codename, component)
+			result, err := debutils.ReadSourceRepository(runctx.Context(), debutils.SourceRepositoryOptions{
+				BaseURL: effective.URL, Suite: effective.Codename, Component: component, Key: key, CacheDir: cacheDir,
+			})
+			if err != nil {
+				continue
+			}
+			for index := range closure {
+				if closure[index].SourceName == "" || closure[index].SourceVersion == "" {
+					continue
+				}
+				source, err := result.FindPackage(closure[index].SourceName, closure[index].SourceVersion)
+				if err != nil {
+					continue
+				}
+				closure[index].SourceRepository = effective.URL
+				closure[index].SourceMappingStatus = "resolved"
+				for _, artifact := range source.Artifacts {
+					closure[index].SourceArtifacts = append(closure[index].SourceArtifacts, artifact.URL)
+				}
+			}
+		}
+	}
+	for index := range closure {
+		if closure[index].SourceName != "" && closure[index].SourceMappingStatus == "" {
+			closure[index].SourceMappingStatus = "unavailable"
+		}
+	}
+}
+
 func (b *debResolverBackend) resolveAndDownload(req resolveRequest) ([]ospackage.PackageInfo, []string, error) {
 	repoList := make([]debutils.Repository, 0, len(req.repos))
 	for _, r := range req.repos {
@@ -1262,6 +1358,7 @@ func (b *debResolverBackend) resolveAndDownload(req resolveRequest) ([]ospackage
 	if err != nil {
 		return nil, nil, err
 	}
+	enrichResolvedSourceProvenance(req, closure)
 	return closure, artifacts, nil
 }
 

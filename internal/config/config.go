@@ -69,18 +69,33 @@ type DiskConfig struct {
 	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
 }
 
+type SourceProvenancePolicy struct {
+	Mode             string   `yaml:"mode,omitempty"`
+	CriticalPackages []string `yaml:"criticalPackages,omitempty"`
+}
+
+type SourceProvenanceConfig struct {
+	Enabled   bool     `yaml:"enabled,omitempty"`
+	URL       string   `yaml:"url,omitempty"`
+	Codename  string   `yaml:"codename,omitempty"`
+	Component string   `yaml:"component,omitempty"`
+	PKey      string   `yaml:"pkey,omitempty"`
+	PKeys     []string `yaml:"pkeys,omitempty"`
+}
+
 type PackageRepository struct {
-	ID                 string   `yaml:"id,omitempty"`                 // Auto-assigned
-	Codename           string   `yaml:"codename"`                     // Repository identifier/codename
-	URL                string   `yaml:"url,omitempty"`                // Repository base URL
-	Path               string   `yaml:"path,omitempty"`               // Local directory path for file-based repositories
-	Packages           []string `yaml:"packages,omitempty"`           // Files to copy/download into Path for local repositories (HTTPS URLs or local file paths)
-	InsecureSkipVerify bool     `yaml:"insecureSkipVerify,omitempty"` // Skip TLS certificate verification for packages URL downloads (insecure, use with caution)
-	PKey               string   `yaml:"pkey"`                         // Public GPG key URL for verification
-	PKeys              []string `yaml:"pkeys,omitempty"`              // Multiple public GPG key URLs for verification
-	Component          string   `yaml:"component,omitempty"`          // Repository component (e.g., "main", "restricted")
-	Priority           int      `yaml:"priority,omitempty"`           // Repository priority (higher numbers = higher priority)
-	AllowPackages      []string `yaml:"allowPackages,omitempty"`      // Optional: specific packages to include from this repo (pinning)
+	ID                 string                  `yaml:"id,omitempty"`                 // Auto-assigned
+	Codename           string                  `yaml:"codename"`                     // Repository identifier/codename
+	URL                string                  `yaml:"url,omitempty"`                // Repository base URL
+	Path               string                  `yaml:"path,omitempty"`               // Local directory path for file-based repositories
+	Packages           []string                `yaml:"packages,omitempty"`           // Files to copy/download into Path for local repositories (HTTPS URLs or local file paths)
+	InsecureSkipVerify bool                    `yaml:"insecureSkipVerify,omitempty"` // Skip TLS certificate verification for packages URL downloads (insecure, use with caution)
+	PKey               string                  `yaml:"pkey"`                         // Public GPG key URL for verification
+	PKeys              []string                `yaml:"pkeys,omitempty"`              // Multiple public GPG key URLs for verification
+	Component          string                  `yaml:"component,omitempty"`          // Repository component (e.g., "main", "restricted")
+	Priority           int                     `yaml:"priority,omitempty"`           // Repository priority (higher numbers = higher priority)
+	AllowPackages      []string                `yaml:"allowPackages,omitempty"`      // Optional: specific packages to include from this repo (pinning)
+	SourceProvenance   *SourceProvenanceConfig `yaml:"sourceProvenance,omitempty"`
 
 	// The OEP Installer integration sets these for the repositories it
 	// imports: ICT writes the repository's sources list, keyring, and
@@ -96,6 +111,35 @@ type PackageRepository struct {
 
 // hasOwnFiles reports whether the repository's apt files are written at
 // paths it names rather than ICT's generated locations.
+func (r PackageRepository) EffectiveSourceRepository() SourceProvenanceConfig {
+	if r.SourceProvenance == nil {
+		return SourceProvenanceConfig{}
+	}
+	effective := *r.SourceProvenance
+	if effective.URL == "" {
+		effective.URL = r.URL
+	}
+	if effective.Codename == "" {
+		effective.Codename = r.Codename
+	}
+	if effective.Component == "" {
+		effective.Component = r.Component
+	}
+	if effective.PKey == "" && len(effective.PKeys) == 0 {
+		inheritKeys := effective.URL == "" || effective.URL == r.URL
+		if !inheritKeys {
+			baseURL, baseErr := url.Parse(r.URL)
+			sourceURL, sourceErr := url.Parse(effective.URL)
+			inheritKeys = baseErr == nil && sourceErr == nil && baseURL.Scheme == sourceURL.Scheme && baseURL.Host == sourceURL.Host
+		}
+		if inheritKeys {
+			effective.PKey = r.PKey
+			effective.PKeys = append([]string(nil), r.PKeys...)
+		}
+	}
+	return effective
+}
+
 func (r PackageRepository) hasOwnFiles() bool {
 	return r.ListFile != ""
 }
@@ -287,15 +331,16 @@ type TemplateMetadata struct {
 // (metadata → image → target → … → systemConfig) so a resolved or generated
 // template reads like a hand-written one.
 type ImageTemplate struct {
-	Metadata            *TemplateMetadata   `yaml:"metadata,omitempty"`
-	Extends             string              `yaml:"extends,omitempty"`
-	Image               ImageInfo           `yaml:"image"`
-	Target              TargetInfo          `yaml:"target"`
-	Baseline            *Baseline           `yaml:"baseline,omitempty"`
-	OverlayPolicy       *OverlayPolicy      `yaml:"overlayPolicy,omitempty"`
-	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
-	Disk                DiskConfig          `yaml:"disk,omitempty"`
-	SystemConfig        SystemConfig        `yaml:"systemConfig"`
+	Metadata               *TemplateMetadata       `yaml:"metadata,omitempty"`
+	Extends                string                  `yaml:"extends,omitempty"`
+	Image                  ImageInfo               `yaml:"image"`
+	Target                 TargetInfo              `yaml:"target"`
+	Baseline               *Baseline               `yaml:"baseline,omitempty"`
+	OverlayPolicy          *OverlayPolicy          `yaml:"overlayPolicy,omitempty"`
+	PackageRepositories    []PackageRepository     `yaml:"packageRepositories,omitempty"`
+	SourceProvenancePolicy *SourceProvenancePolicy `yaml:"sourceProvenancePolicy,omitempty"`
+	Disk                   DiskConfig              `yaml:"disk,omitempty"`
+	SystemConfig           SystemConfig            `yaml:"systemConfig"`
 
 	// Explicitly excluded from YAML serialization/deserialization
 	PathList            []string                `yaml:"-"`
@@ -609,6 +654,12 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validatePackageRepositories(); err != nil {
+		return nil, err
+	}
+	if err := template.validateSourceProvenancePolicy(); err != nil {
+		return nil, err
+	}
+	if err := template.validateSourceProvenanceTarget(); err != nil {
 		return nil, err
 	}
 
@@ -1506,6 +1557,42 @@ func (sb *DkmsSecureBoot) WasProvided() bool {
 	return sb.wasProvided
 }
 
+func (t *ImageTemplate) validateSourceProvenanceTarget() error {
+	rpmTargets := map[string]bool{
+		"azure-linux":              true,
+		"edge-microvisor-toolkit":  true,
+		"redhat-compatible-distro": true,
+	}
+	if !rpmTargets[t.Target.OS] {
+		return nil
+	}
+	for _, repo := range t.PackageRepositories {
+		if repo.SourceProvenance != nil && repo.SourceProvenance.Enabled {
+			return fmt.Errorf("source provenance is unsupported for RPM target %q", t.Target.OS)
+		}
+	}
+	return nil
+}
+
+func (t *ImageTemplate) validateSourceProvenancePolicy() error {
+	policy := t.SourceProvenancePolicy
+	if policy == nil {
+		return nil
+	}
+	if policy.Mode != "advisory" && policy.Mode != "strict-all" && policy.Mode != "strict-critical" {
+		return fmt.Errorf("sourceProvenancePolicy.mode must be advisory, strict-all, or strict-critical")
+	}
+	if policy.Mode == "strict-critical" && len(policy.CriticalPackages) == 0 {
+		return fmt.Errorf("sourceProvenancePolicy.criticalPackages must not be empty for strict-critical")
+	}
+	for _, selector := range policy.CriticalPackages {
+		if strings.TrimSpace(selector) == "" {
+			return fmt.Errorf("sourceProvenancePolicy.criticalPackages entries must not be empty")
+		}
+	}
+	return nil
+}
+
 func (t *ImageTemplate) validatePackageRepositories() error {
 	for _, repo := range t.PackageRepositories {
 		if err := repo.ValidatePackageRepository(); err != nil {
@@ -1518,6 +1605,25 @@ func (t *ImageTemplate) validatePackageRepositories() error {
 
 // ValidatePackageRepository validates that either URL or Path is provided
 func (pr *PackageRepository) ValidatePackageRepository() error {
+	if pr.SourceProvenance != nil && pr.SourceProvenance.Enabled {
+		if pr.Path != "" || len(pr.Packages) > 0 {
+			return fmt.Errorf("repository '%s': source provenance is unsupported for local/path/package repositories", pr.Codename)
+		}
+		effective := pr.EffectiveSourceRepository()
+		if effective.URL == "" {
+			return fmt.Errorf("repository '%s': source provenance requires a source repository URL", pr.Codename)
+		}
+		parsed, err := url.Parse(effective.URL)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
+			return fmt.Errorf("repository '%s': source provenance URL must use https", pr.Codename)
+		}
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("repository '%s': source provenance URL must not contain credentials or query/fragment data", pr.Codename)
+		}
+		if effective.PKey == "" && len(effective.PKeys) == 0 {
+			return fmt.Errorf("repository '%s': source provenance requires signing trust configuration", pr.Codename)
+		}
+	}
 	if len(pr.Packages) > 0 {
 		// path is optional when packages is set — a temp dir is auto-created at runtime
 		for _, entry := range pr.Packages {

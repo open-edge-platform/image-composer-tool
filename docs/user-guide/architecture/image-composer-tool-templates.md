@@ -806,6 +806,39 @@ published by `aptly`-based repositories that don't also serve a separate
 See [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
 for detailed configuration guidance.
 
+#### Opt-in source provenance
+
+For Debian repositories, add `sourceProvenance` to request exact source-package
+locations and checksums without downloading source artifacts:
+
+```yaml
+packageRepositories:
+  - codename: resolute
+    url: https://packages.example.org/ubuntu/snapshot/
+    pkey: https://packages.example.org/key.gpg
+    component: main
+    sourceProvenance:
+      enabled: true
+      url: https://sources.example.org/ubuntu/snapshot/
+      codename: resolute
+      component: main
+      pkey: https://sources.example.org/key.gpg
+
+sourceProvenancePolicy:
+  mode: advisory # advisory | strict-all | strict-critical
+  criticalPackages:
+    - linux-image-*
+    - mesa-*
+```
+
+Omitting `sourceProvenance` or setting `enabled: false` makes no source-index
+requests. Source repository URL, suite/codename, component, and signing keys can
+be independently overridden. Local repositories and RPM targets do not support
+source provenance. Advisory mode reports gaps; strict-all fails unresolved final
+installed packages; strict-critical fails unresolved packages matching the
+critical selector list. A selector with no installed match is reported as absent,
+not as a failure.
+
 ---
 
 ### `systemConfig`

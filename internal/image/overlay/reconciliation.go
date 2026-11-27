@@ -1,6 +1,13 @@
 package overlay
 
-import "sort"
+import (
+	"fmt"
+	"path"
+	"sort"
+	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+)
 
 // ReconciliationClass describes the evidence for a package in the final inventory.
 type ReconciliationClass string
@@ -112,6 +119,83 @@ func ReconcileFinalInventory(baseline, final []BaselinePackage, plan *Resolution
 }
 
 // OriginUnknownGap returns a class explicitly for coverage-gap reporting.
+type SourceProvenancePolicyReport struct {
+	Mode       string
+	Failures   []string
+	Absent     []string
+	Unresolved []string
+}
+
+func EvaluateSourceProvenancePolicy(policy *config.SourceProvenancePolicy, report FinalInventoryReport) (SourceProvenancePolicyReport, error) {
+	result := SourceProvenancePolicyReport{Mode: "advisory"}
+	if policy == nil {
+		return result, nil
+	}
+	result.Mode = policy.Mode
+
+	for _, pkg := range report.Packages {
+		if pkg.Class == ReconciliationRemoved {
+			continue
+		}
+		resolved := pkg.Class == ReconciliationResolvedAndInstalled && pkg.SourceName != "" && pkg.SourceVersion != "" && pkg.RepositoryID != ""
+		if !resolved {
+			result.Unresolved = append(result.Unresolved, pkg.Name+"@"+pkg.Version+":"+pkg.Arch)
+		}
+	}
+
+	switch policy.Mode {
+	case "advisory":
+		return result, nil
+	case "strict-all":
+		if len(result.Unresolved) > 0 {
+			result.Failures = append(result.Failures, result.Unresolved...)
+			return result, fmt.Errorf("strict-all source provenance unresolved for %d package(s)", len(result.Failures))
+		}
+		return result, nil
+	case "strict-critical":
+		for _, pkg := range report.Packages {
+			if pkg.Class == ReconciliationRemoved {
+				continue
+			}
+			matched := false
+			for _, selector := range policy.CriticalPackages {
+				matchedName, err := path.Match(strings.TrimSpace(selector), pkg.Name)
+				if err == nil && matchedName {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+			resolved := pkg.Class == ReconciliationResolvedAndInstalled && pkg.SourceName != "" && pkg.SourceVersion != "" && pkg.RepositoryID != ""
+			if !resolved {
+				result.Failures = append(result.Failures, pkg.Name+"@"+pkg.Version+":"+pkg.Arch)
+			}
+		}
+		for _, selector := range policy.CriticalPackages {
+			found := false
+			for _, pkg := range report.Packages {
+				if pkg.Class != ReconciliationRemoved {
+					if match, err := path.Match(strings.TrimSpace(selector), pkg.Name); err == nil && match {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				result.Absent = append(result.Absent, selector)
+			}
+		}
+		if len(result.Failures) > 0 {
+			return result, fmt.Errorf("strict-critical source provenance unresolved for %d package(s)", len(result.Failures))
+		}
+		return result, nil
+	default:
+		return result, fmt.Errorf("unsupported source provenance policy mode %q", policy.Mode)
+	}
+}
+
 func (report FinalInventoryReport) OriginUnknownGap() bool {
 	for _, pkg := range report.Packages {
 		if pkg.CoverageGap && pkg.Class == ReconciliationScriptInstalled {

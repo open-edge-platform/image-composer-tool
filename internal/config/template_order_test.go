@@ -202,8 +202,8 @@ func TestTemplateKeyOrderMatchesCuratedTemplates(t *testing.T) {
 // the shipped templates and asserts the order above is really how they are
 // written, so the expectation cannot drift away from the files it describes.
 //
-// Only the keys the corpus agrees on are ordered here. `packageRepositories` and
-// `overlayPolicy` are deliberately left out: the shipped templates genuinely
+// Only the keys the corpus agrees on are ordered here. `packageRepositories`,
+// `overlayPolicy`, and `sourceProvenancePolicy` are deliberately left out: the shipped templates genuinely
 // disagree about where those two go (packageRepositories sits before `disk` in 9
 // of them and after it — in two cases after `systemConfig` — in 7), so there is
 // no order to assert. The emitted position of both is fixed by struct order and
@@ -217,7 +217,7 @@ func TestCuratedTemplatesShareKeyOrder(t *testing.T) {
 	}
 	// Known keys whose position varies across the corpus — checked for validity,
 	// skipped for ordering.
-	unordered := map[string]bool{"packageRepositories": true, "overlayPolicy": true}
+	unordered := map[string]bool{"packageRepositories": true, "overlayPolicy": true, "sourceProvenancePolicy": true}
 
 	roots := []string{
 		filepath.Join("..", "..", "image-templates"),

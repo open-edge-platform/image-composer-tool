@@ -404,6 +404,10 @@ func (b *Builder) Build() error {
 			b.finalInventory = final
 			report := ReconcileFinalInventory(b.baseline, final, b.plan)
 			b.finalInventoryReport = &report
+			_, policyErr := EvaluateSourceProvenancePolicy(b.template.SourceProvenancePolicy, report)
+			if policyErr != nil {
+				return policyErr
+			}
 			return nil
 		}); err != nil {
 			return err
@@ -900,6 +904,7 @@ func contributedPackages(info *BaselineInfo, plan *ResolutionPlan) []ospackage.P
 			Checksums:   rp.Checksums,
 			SourceName:  rp.SourceName, SourceVersion: rp.SourceVersion,
 			SourceRepository: rp.SourceRepository, SourceMappingStatus: rp.SourceMappingStatus,
+			SourceArtifacts: append([]string(nil), rp.SourceArtifacts...),
 		})
 	}
 	return pkgs
